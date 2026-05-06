@@ -1,0 +1,83 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color: #172033;
+  background: #f8fafc;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+}
+
+.dark {
+  color: #eef2ff;
+  background: #181825;
+}
+
+body {
+  margin: 0;
+  min-width: 960px;
+  min-height: 640px;
+  overflow: hidden;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.glass {
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.62);
+  box-shadow: 0 18px 60px rgba(15, 23, 42, 0.12);
+  backdrop-filter: blur(24px);
+}
+
+.dark .glass {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(30, 30, 46, 0.68);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.24);
+}
+
+.task-done {
+  text-decoration: line-through;
+  opacity: 0.58;
+  transition:
+    opacity 200ms ease,
+    text-decoration-color 200ms ease;
+}
+
+.markdown a {
+  color: #2563eb;
+  text-decoration: underline;
+}
+
+.markdown ul {
+  list-style: disc;
+  margin-left: 1.25rem;
+}
+
+.markdown strong {
+  font-weight: 700;
+}
+
+@layer components {
+  .field {
+    @apply rounded-lg border border-white/40 bg-white/70 px-3 py-2 text-sm outline-none transition placeholder:text-slate-400 focus:ring-2 focus:ring-blue-500 dark:border-white/10 dark:bg-slate-950/35 dark:placeholder:text-slate-500;
+  }
+
+  .btn-primary {
+    @apply inline-flex items-center justify-center rounded-lg bg-slate-950 px-4 py-2 text-sm font-medium text-white transition hover:scale-[1.02] active:scale-95 dark:bg-white dark:text-slate-950;
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center rounded-lg bg-white/70 px-4 py-2 text-sm font-medium transition hover:bg-white active:scale-95 dark:bg-white/10 dark:hover:bg-white/15;
+  }
+
+  .icon-btn {
+    @apply inline-grid h-8 w-8 place-items-center rounded-lg bg-white/60 transition hover:bg-white active:scale-95 dark:bg-white/10 dark:hover:bg-white/15;
+  }
+}
