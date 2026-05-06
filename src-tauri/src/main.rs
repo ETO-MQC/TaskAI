@@ -683,6 +683,10 @@ async fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
 
 #[tauri::command]
 async fn create_task(state: State<'_, AppState>, input: TaskInput) -> Result<Task, String> {
+    create_task_in_db(&state.db, input).await
+}
+
+async fn create_task_in_db(db: &SqlitePool, input: TaskInput) -> Result<Task, String> {
     let now = now_iso();
     let id = Uuid::new_v4().to_string();
     let priority = input.priority.unwrap_or_else(|| "medium".to_string());
@@ -716,11 +720,11 @@ async fn create_task(state: State<'_, AppState>, input: TaskInput) -> Result<Tas
     .bind(input.sort_order.unwrap_or(0))
     .bind(&now)
     .bind(&now)
-    .execute(&state.db)
+    .execute(db)
     .await
     .map_err(|e| e.to_string())?;
 
-    get_task_by_id(&state.db, &id).await
+    get_task_by_id(db, &id).await
 }
 
 async fn get_task_by_id(db: &SqlitePool, id: &str) -> Result<Task, String> {
@@ -801,6 +805,14 @@ async fn start_timer(
     state: State<'_, AppState>,
     input: StartTimerInput,
 ) -> Result<TimerSnapshot, String> {
+    start_timer_internal(&app, &state, input).await
+}
+
+async fn start_timer_internal(
+    app: &AppHandle,
+    state: &AppState,
+    input: StartTimerInput,
+) -> Result<TimerSnapshot, String> {
     let active = ActiveTimer {
         id: Uuid::new_v4().to_string(),
         task_id: input.task_id,
@@ -814,7 +826,7 @@ async fn start_timer(
     };
     let snapshot = timer_snapshot(&active);
     *state.timer.lock().await = Some(active);
-    update_tray_for_snapshot(&app, &snapshot).await;
+    update_tray_for_snapshot(app, &snapshot).await;
     app.emit("timer_tick", &snapshot).map_err(|e| e.to_string())?;
     Ok(snapshot)
 }
@@ -1267,6 +1279,236 @@ async fn build_tomorrow_schedule_advice(db: &SqlitePool) -> Result<Value, String
     }))
 }
 
+fn sse_content_from_raw(raw: &str) -> String {
+    let mut content = String::new();
+    for line in raw.lines() {
+        let Some(data) = line.strip_prefix("data:") else {
+            continue;
+        };
+        let data = data.trim();
+        if data.is_empty() || data == "[DONE]" {
+            continue;
+        }
+        match serde_json::from_str::<Value>(data) {
+            Ok(value) => {
+                if let Some(delta) = value["choices"][0]["delta"]["content"].as_str() {
+                    content.push_str(delta);
+                } else if let Some(message) = value["choices"][0]["message"]["content"].as_str() {
+                    content.push_str(message);
+                }
+            }
+            Err(_) => content.push_str(data),
+        }
+    }
+    content
+}
+
+fn parse_ai_json_content(content: &str) -> Result<Value, String> {
+    let trimmed = content.trim();
+    let without_fence = if trimmed.starts_with("```") {
+        let body = trimmed
+            .lines()
+            .skip(1)
+            .collect::<Vec<_>>()
+            .join("\n");
+        body.trim_end_matches("```").trim().to_string()
+    } else {
+        trimmed.to_string()
+    };
+    serde_json::from_str::<Value>(&without_fence).or_else(|_| {
+        let start = without_fence
+            .find(|ch| ch == '{' || ch == '[')
+            .ok_or_else(|| "AI response did not contain JSON".to_string())?;
+        let mut stream = serde_json::Deserializer::from_str(&without_fence[start..]).into_iter::<Value>();
+        stream
+            .next()
+            .transpose()
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "AI response did not contain JSON".to_string())
+    })
+}
+
+fn value_string(data: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| data.get(*key)?.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn normalize_priority(value: Option<String>) -> Option<String> {
+    match value.as_deref() {
+        Some("high" | "medium" | "low") => value,
+        Some(_) | None => None,
+    }
+}
+
+fn normalize_urgency(value: Option<String>) -> Option<String> {
+    match value.as_deref() {
+        Some("urgent" | "not_urgent") => value,
+        Some(_) | None => None,
+    }
+}
+
+fn normalize_importance(value: Option<String>) -> Option<String> {
+    match value.as_deref() {
+        Some("important" | "not_important") => value,
+        Some(_) | None => None,
+    }
+}
+
+fn urgency_importance_from_quadrant(quadrant: i64) -> (&'static str, &'static str) {
+    match quadrant {
+        1 => ("urgent", "important"),
+        2 => ("not_urgent", "important"),
+        3 => ("urgent", "not_important"),
+        _ => ("not_urgent", "not_important"),
+    }
+}
+
+fn number_value(data: &Value, keys: &[&str]) -> Option<f64> {
+    keys.iter().find_map(|key| data.get(*key)?.as_f64())
+}
+
+fn string_array(data: &Value, key: &str) -> Option<Vec<String>> {
+    data.get(key)?.as_array().map(|items| {
+        items
+            .iter()
+            .filter_map(|item| item.as_str())
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(ToString::to_string)
+            .collect()
+    })
+}
+
+fn task_input_from_ai_data(data: &Value) -> Result<TaskInput, String> {
+    let title = value_string(data, &["title", "topic", "name"])
+        .ok_or_else(|| "AI create_task intent missing data.title".to_string())?;
+    let quadrant = data.get("quadrant").and_then(Value::as_i64);
+    let (quadrant_urgency, quadrant_importance) = quadrant
+        .map(urgency_importance_from_quadrant)
+        .unwrap_or(("not_urgent", "not_important"));
+    let urgency = normalize_urgency(value_string(data, &["urgency"]))
+        .unwrap_or_else(|| quadrant_urgency.to_string());
+    let importance = normalize_importance(value_string(data, &["importance"]))
+        .unwrap_or_else(|| quadrant_importance.to_string());
+
+    Ok(TaskInput {
+        title,
+        description: value_string(data, &["description", "note"]),
+        priority: normalize_priority(value_string(data, &["priority"])),
+        urgency: Some(urgency),
+        importance: Some(importance),
+        status: None,
+        deadline: value_string(data, &["deadline"]),
+        estimated_duration: number_value(data, &["estimated_duration", "estimated_minutes", "duration"]),
+        parent_id: value_string(data, &["parent_id"]),
+        planned_date: value_string(data, &["planned_date"]),
+        tags: string_array(data, "tags"),
+        sort_order: data.get("sort_order").and_then(Value::as_i64),
+    })
+}
+
+fn timer_input_from_ai_data(data: &Value) -> Result<StartTimerInput, String> {
+    let topic = value_string(data, &["topic", "title", "task_title"])
+        .unwrap_or_else(|| "AI Focus".to_string());
+    let mode = match value_string(data, &["mode"]).as_deref() {
+        Some("pomodoro") => TimerMode::Pomodoro,
+        Some("countdown") => TimerMode::Countdown,
+        _ => TimerMode::Positive,
+    };
+    let target_seconds = data
+        .get("target_seconds")
+        .and_then(Value::as_u64)
+        .or_else(|| data.get("minutes").and_then(Value::as_u64).map(|minutes| minutes * 60))
+        .or_else(|| {
+            data.get("estimated_duration")
+                .and_then(Value::as_u64)
+                .map(|minutes| minutes * 60)
+        });
+
+    Ok(StartTimerInput {
+        task_id: value_string(data, &["task_id"]),
+        topic,
+        mode,
+        target_seconds,
+    })
+}
+
+async fn execute_single_ai_intent(
+    app: &AppHandle,
+    state: &AppState,
+    response: &mut Value,
+) -> Result<(), String> {
+    let intent = response
+        .get("intent")
+        .and_then(Value::as_str)
+        .unwrap_or("general_chat")
+        .to_string();
+    let action = response
+        .get("action")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let data = response.get("data").cloned().unwrap_or_else(|| json!({}));
+    println!("AI intent recognized: intent={intent}, action={action}, data={data}");
+
+    if response
+        .get("needs_clarification")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        println!("AI intent action skipped: clarification required for intent={intent}");
+        return Ok(());
+    }
+
+    match intent.as_str() {
+        "create_task" => {
+            let items = data
+                .as_array()
+                .cloned()
+                .unwrap_or_else(|| vec![data.clone()]);
+            let mut created = Vec::new();
+            for item in items {
+                let input = task_input_from_ai_data(&item)?;
+                let task = create_task_in_db(&state.db, input).await?;
+                println!("AI intent action executed: create_task task_id={}", task.id);
+                app.emit("task_created", &task).map_err(|e| e.to_string())?;
+                created.push(serde_json::to_value(task).map_err(|e| e.to_string())?);
+            }
+            response["executed"] = json!(true);
+            response["created_tasks"] = Value::Array(created);
+        }
+        "start_timer" => {
+            let input = timer_input_from_ai_data(&data)?;
+            let snapshot = start_timer_internal(app, state, input).await?;
+            println!("AI intent action executed: start_timer timer_id={:?}", snapshot.id);
+            response["executed"] = json!(true);
+            response["timer"] = serde_json::to_value(snapshot).map_err(|e| e.to_string())?;
+        }
+        _ => {
+            println!("AI intent action skipped: no executor for intent={intent}, action={action}");
+        }
+    }
+    Ok(())
+}
+
+async fn execute_ai_intents(
+    app: &AppHandle,
+    state: &AppState,
+    parsed: &mut Value,
+) -> Result<(), String> {
+    if let Some(items) = parsed.as_array_mut() {
+        for item in items {
+            execute_single_ai_intent(app, state, item).await?;
+        }
+    } else {
+        execute_single_ai_intent(app, state, parsed).await?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn send_ai_message(app: AppHandle, state: State<'_, AppState>, message: String) -> Result<Value, String> {
     let key = sqlx::query_scalar::<_, String>("SELECT value FROM user_settings WHERE key = ?")
@@ -1359,23 +1601,29 @@ async fn send_ai_message(app: AppHandle, state: State<'_, AppState>, message: St
         let _ = app.emit("ai_stream", json!({"delta": text, "done": false}));
     }
     let _ = app.emit("ai_stream", json!({"delta": "", "done": true}));
+    let assistant_content = sse_content_from_raw(&full);
 
     sqlx::query("INSERT INTO ai_conversations (id, role, content, created_at) VALUES (?, 'assistant', ?, ?)")
         .bind(Uuid::new_v4().to_string())
-        .bind(&full)
+        .bind(&assistant_content)
         .bind(now_iso())
         .execute(&state.db)
         .await
         .map_err(|e| e.to_string())?;
 
-    Ok(json!({
-        "intent": "general_chat",
-        "action": "stream",
-        "data": {"raw_sse": full},
-        "needs_clarification": false,
-        "clarification": null,
-        "reply": full
-    }))
+    let mut parsed = parse_ai_json_content(&assistant_content).unwrap_or_else(|error| {
+        println!("AI intent parse failed: {error}");
+        json!({
+            "intent": "general_chat",
+            "action": "stream",
+            "data": {"raw_sse": full},
+            "needs_clarification": false,
+            "clarification": null,
+            "reply": assistant_content
+        })
+    });
+    execute_ai_intents(&app, &state, &mut parsed).await?;
+    Ok(parsed)
 }
 
 fn spawn_timer_tick_loop(app: AppHandle, state: AppState) {

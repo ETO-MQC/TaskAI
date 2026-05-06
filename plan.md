@@ -133,6 +133,7 @@ Acceptance：
 Implementation：
 - 后端代理 DeepSeek Chat Completions，请求不从前端直连。
 - `send_ai_message` 命令需支持 Server-Sent Events 流式传输，前端用 `EventSource` 或 `fetch ReadableStream` 处理，实时更新 `reply` 字段。
+- API endpoint 和模型从 `user_settings` 读取：`api_base_url` 默认 `https://api.deepseek.com/v1`，`api_model` 默认 `deepseek-chat`，允许设置为 SiliconFlow 等 OpenAI-compatible 中转站。
 - 将 PRD 的 System Prompt 完整代码块放入后端配置，作为 AI 对话的初始消息。
 - 实现统一 JSON intent 协议：`intent`、`action`、`data`、`needs_clarification`、`clarification`、`reply`。
 - 对话面板支持 `needs_clarification`，展示追问并延续上下文。
@@ -143,18 +144,27 @@ Implementation：
 
 判断依据：
 - Rust 后端 `send_ai_message` 代理 DeepSeek，并使用 `stream: true` 请求。
+- Rust 后端 `send_ai_message` 已改为从 `user_settings` 读取 `api_base_url` 和 `api_model`，并输出当前生效 endpoint/model 到 Rust 日志。
 - Rust 后端包含 `SYSTEM_PROMPT` 常量，作为 system message。
 - 前端 `AiPanel` 支持文本输入、语音按钮、`needs_clarification` 显示，并监听 `ai_stream` 实时拼接流式回复。
+- 前端 `SettingsView` 支持保存 DeepSeek API Key、API Base URL、Model。
 - 前端 fallback 模式能模拟 clarification。
 
 验收结果：
 - `npm run build` 通过。
-- `cargo build --release` 通过。
+- `cargo test` 通过。
+- 使用用户提供的 SiliconFlow 配置测试通过，生效 endpoint：`https://api.siliconflow.cn/v1/chat/completions`，model：`deepseek-ai/DeepSeek-V4-Flash`，已返回流式 SSE 数据。
 
 遗留 TODO：
 - 当前没有解析 DeepSeek SSE 中的 delta JSON，只保存/返回 raw SSE 文本。
-- 已尝试使用用户提供的 SiliconFlow 中转站 DeepSeek API Key 做联网验收，请求 `https://api.siliconflow.cn/v1/chat/completions` 超时，错误信息：`操作超时`。
-- 后端 `send_ai_message` 当前仍硬编码官方 DeepSeek endpoint 与 `deepseek-chat` 模型，尚未支持配置中转站 base_url/model。
+- AI 返回的结构化 JSON 仍未自动落库创建任务，需要后续接通 intent/action 到任务命令。
+
+补充验收：
+- 已接通 `send_ai_message` 的 DeepSeek SSE 完整内容解析：后端从 `choices[].delta.content` 拼接 AI 返回 JSON，提取 `intent`、`action`、`data`。
+- 已接通 `create_task` intent 到 Rust 数据库创建逻辑，写入 `title`、`priority`、`deadline`、`estimated_duration`、`planned_date`、`tags` 等字段；`quadrant` 仍由 Rust 根据 `urgency`/`importance` 计算，若 AI 只给出 `quadrant` 则先映射为对应紧急/重要状态。
+- 已接通 `start_timer` intent 到后端计时器启动逻辑，并继续由 Rust `tokio::time::Instant` 管理计时状态。
+- 后端日志已输出每次 AI intent 的识别结果、跳过原因或执行动作；`task_created` 事件触发后前端自动刷新任务列表。
+- 验收命令：`npm run build` 通过；`cargo test` 通过。
 
 ## Sprint 6：统计仪表盘
 
@@ -266,6 +276,6 @@ Tauri commands:
 - `docs/PRD.md` 保存唯一完整 PRD，根目录 `PRD.md` 仅作为指向 `docs/PRD.md` 的入口说明。
 - UI 采用 shadcn 风格组件。
 - 数据库迁移使用 SQLx `migrate!`，禁止启动时删表重建。
-- DeepSeek API Key 通过设置页保存。
+- DeepSeek API Key、API Base URL、Model 通过设置页保存。
 - 首版核心功能必须离线可用，AI 功能联网时才启用。
 - 不执行任何批量删除或递归删除；如需批量清理文件，停止并让用户手动处理。

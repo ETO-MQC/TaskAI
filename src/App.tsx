@@ -69,6 +69,7 @@ function App() {
     store.load();
     let unlistenTimer: (() => void) | undefined;
     let unlistenAi: (() => void) | undefined;
+    let unlistenTaskCreated: (() => void) | undefined;
     import("@tauri-apps/api/event")
       .then(async ({ listen }) => {
         unlistenTimer = await listen("timer_tick", (event) => {
@@ -77,11 +78,15 @@ function App() {
         unlistenAi = await listen("shortcut_toggle_ai", () => {
           useAppStore.setState((state) => ({ aiOpen: !state.aiOpen }));
         });
+        unlistenTaskCreated = await listen("task_created", () => {
+          useAppStore.getState().load();
+        });
       })
       .catch(() => undefined);
     return () => {
       unlistenTimer?.();
       unlistenAi?.();
+      unlistenTaskCreated?.();
     };
   }, []);
 
