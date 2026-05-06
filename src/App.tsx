@@ -780,6 +780,8 @@ function parseAiStreamDelta(raw: string) {
 function SettingsView() {
   const { theme, setTheme } = useAppStore();
   const [apiKey, setApiKey] = useState("");
+  const [apiBaseUrl, setApiBaseUrl] = useState("https://api.deepseek.com/v1");
+  const [apiModel, setApiModel] = useState("deepseek-chat");
   const [saved, setSaved] = useState(false);
   const [shortcuts, setShortcuts] = useState({
     toggle_ai: "Ctrl+Shift+A",
@@ -791,8 +793,16 @@ function SettingsView() {
 
   useEffect(() => {
     import("./lib/api")
-      .then(({ api }) => api<typeof shortcuts>("get_shortcut_settings"))
-      .then((settings) => setShortcuts(settings))
+      .then(async ({ api }) => {
+        const [settings, baseUrl, model] = await Promise.all([
+          api<typeof shortcuts>("get_shortcut_settings"),
+          api<string | null>("get_setting", { key: "api_base_url" }),
+          api<string | null>("get_setting", { key: "api_model" }),
+        ]);
+        setShortcuts(settings);
+        setApiBaseUrl(baseUrl || "https://api.deepseek.com/v1");
+        setApiModel(model || "deepseek-chat");
+      })
       .catch(() => undefined);
   }, []);
 
@@ -810,14 +820,28 @@ function SettingsView() {
           <span className="mb-1 block text-sm font-medium">DeepSeek API Key</span>
           <input className="field w-full" value={apiKey} onChange={(e) => setApiKey(e.target.value)} type="password" placeholder="sk-..." />
         </label>
+        <label className="block">
+          <span className="mb-1 block text-sm font-medium">API Base URL</span>
+          <input className="field w-full" value={apiBaseUrl} onChange={(e) => setApiBaseUrl(e.target.value)} placeholder="https://api.deepseek.com/v1" />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-sm font-medium">Model</span>
+          <input className="field w-full" value={apiModel} onChange={(e) => setApiModel(e.target.value)} placeholder="deepseek-chat" />
+        </label>
         <button
           className="btn-primary"
           onClick={async () => {
-            await import("./lib/api").then(({ api }) => api("save_setting", { key: "deepseek_api_key", value: apiKey }));
+            await import("./lib/api").then(async ({ api }) => {
+              await Promise.all([
+                api("save_setting", { key: "deepseek_api_key", value: apiKey }),
+                api("save_setting", { key: "api_base_url", value: apiBaseUrl }),
+                api("save_setting", { key: "api_model", value: apiModel }),
+              ]);
+            });
             setSaved(true);
           }}
         >
-          保存 API Key
+          保存 API 设置
         </button>
         {saved && <p className="text-sm text-emerald-600">已保存到本地设置。</p>}
         <div>

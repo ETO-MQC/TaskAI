@@ -572,7 +572,7 @@ async fn save_shortcut_settings(db: &SqlitePool, settings: &ShortcutSettings) ->
             r#"INSERT INTO user_settings (key, value, updated_at) VALUES (?, ?, ?)
             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"#,
         )
-        .bind(key)
+        .bind(&key)
         .bind(value)
         .bind(now_iso())
         .execute(db)
@@ -1005,11 +1005,16 @@ async fn save_setting(state: State<'_, AppState>, key: String, value: String) ->
 
 #[tauri::command]
 async fn get_setting(state: State<'_, AppState>, key: String) -> Result<Option<String>, String> {
-    sqlx::query_scalar::<_, String>("SELECT value FROM user_settings WHERE key = ?")
-        .bind(key)
+    let value = sqlx::query_scalar::<_, String>("SELECT value FROM user_settings WHERE key = ?")
+        .bind(&key)
         .fetch_optional(&state.db)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    Ok(value.or_else(|| match key.as_str() {
+        "api_base_url" => Some("https://api.deepseek.com/v1".to_string()),
+        "api_model" => Some("deepseek-chat".to_string()),
+        _ => None,
+    }))
 }
 
 #[tauri::command]
@@ -1270,6 +1275,25 @@ async fn send_ai_message(app: AppHandle, state: State<'_, AppState>, message: St
         .await
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
+    let base_url = sqlx::query_scalar::<_, String>("SELECT value FROM user_settings WHERE key = ?")
+        .bind("api_base_url")
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| e.to_string())?
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "https://api.deepseek.com/v1".to_string());
+    let model = sqlx::query_scalar::<_, String>("SELECT value FROM user_settings WHERE key = ?")
+        .bind("api_model")
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| e.to_string())?
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "deepseek-chat".to_string());
+    let endpoint = format!(
+        "{}/chat/completions",
+        base_url.trim().trim_end_matches('/')
+    );
+    println!("AI request endpoint: {endpoint}, model: {}", model.trim());
     sqlx::query("INSERT INTO ai_conversations (id, role, content, created_at) VALUES (?, 'user', ?, ?)")
         .bind(Uuid::new_v4().to_string())
         .bind(&message)
@@ -1307,7 +1331,7 @@ async fn send_ai_message(app: AppHandle, state: State<'_, AppState>, message: St
 
     let client = reqwest::Client::new();
     let body = json!({
-        "model": "deepseek-chat",
+        "model": model.trim(),
         "stream": true,
         "temperature": 0.2,
         "messages": [
@@ -1317,7 +1341,7 @@ async fn send_ai_message(app: AppHandle, state: State<'_, AppState>, message: St
     });
 
     let response = client
-        .post("https://api.deepseek.com/v1/chat/completions")
+        .post(&endpoint)
         .bearer_auth(key.trim())
         .json(&body)
         .send()
