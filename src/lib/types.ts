@@ -77,6 +77,8 @@ export interface DashboardStats {
   completed_today: number;
   open_tasks: number;
   total_tasks: number;
+  weekly_completion_rate: number;
+  monthly_completion_rate: number;
   quadrant_counts: Array<{ quadrant: number; count: number }>;
   trend: Array<{ day: string; minutes: number }>;
   ring_segments: Array<{ label: string; minutes: number; color: string }>;

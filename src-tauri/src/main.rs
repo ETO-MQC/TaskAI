@@ -213,6 +213,8 @@ struct DashboardStats {
     completed_today: i64,
     open_tasks: i64,
     total_tasks: i64,
+    weekly_completion_rate: f64,
+    monthly_completion_rate: f64,
     quadrant_counts: Vec<QuadrantCount>,
     trend: Vec<TrendPoint>,
     ring_segments: Vec<RingSegment>,
@@ -269,6 +271,14 @@ fn quadrant_color(quadrant: i64) -> &'static str {
         2 => "#F59E0B",
         3 => "#3B82F6",
         _ => "#9CA3AF",
+    }
+}
+
+fn completion_rate(completed: i64, total: i64) -> f64 {
+    if total <= 0 {
+        0.0
+    } else {
+        (completed as f64 / total as f64) * 100.0
     }
 }
 
@@ -1059,6 +1069,44 @@ async fn get_dashboard_stats(state: State<'_, AppState>) -> Result<DashboardStat
     .fetch_one(&state.db)
     .await
     .map_err(|e| e.to_string())?;
+    let weekly_planned_total = sqlx::query_scalar::<_, i64>(
+        r#"SELECT COUNT(*) FROM tasks
+        WHERE status != 'archived'
+          AND date(COALESCE(planned_date, deadline)) >= date('now', '-' || ((CAST(strftime('%w', 'now') AS INTEGER) + 6) % 7) || ' days')
+          AND date(COALESCE(planned_date, deadline)) < date('now', '-' || ((CAST(strftime('%w', 'now') AS INTEGER) + 6) % 7) || ' days', '+7 days')"#,
+    )
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+    let weekly_completed = sqlx::query_scalar::<_, i64>(
+        r#"SELECT COUNT(*) FROM tasks
+        WHERE status = 'done'
+          AND date(COALESCE(planned_date, deadline)) >= date('now', '-' || ((CAST(strftime('%w', 'now') AS INTEGER) + 6) % 7) || ' days')
+          AND date(COALESCE(planned_date, deadline)) < date('now', '-' || ((CAST(strftime('%w', 'now') AS INTEGER) + 6) % 7) || ' days', '+7 days')"#,
+    )
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+    let monthly_planned_total = sqlx::query_scalar::<_, i64>(
+        r#"SELECT COUNT(*) FROM tasks
+        WHERE status != 'archived'
+          AND date(COALESCE(planned_date, deadline)) >= date('now', 'start of month')
+          AND date(COALESCE(planned_date, deadline)) < date('now', 'start of month', '+1 month')"#,
+    )
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+    let monthly_completed = sqlx::query_scalar::<_, i64>(
+        r#"SELECT COUNT(*) FROM tasks
+        WHERE status = 'done'
+          AND date(COALESCE(planned_date, deadline)) >= date('now', 'start of month')
+          AND date(COALESCE(planned_date, deadline)) < date('now', 'start of month', '+1 month')"#,
+    )
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+    let weekly_completion_rate = completion_rate(weekly_completed, weekly_planned_total);
+    let monthly_completion_rate = completion_rate(monthly_completed, monthly_planned_total);
     let quadrant_counts = sqlx::query_as::<_, QuadrantCount>(
         "SELECT quadrant, COUNT(*) as count FROM tasks WHERE status != 'archived' GROUP BY quadrant",
     )
@@ -1096,6 +1144,8 @@ async fn get_dashboard_stats(state: State<'_, AppState>) -> Result<DashboardStat
         completed_today,
         open_tasks,
         total_tasks,
+        weekly_completion_rate,
+        monthly_completion_rate,
         quadrant_counts,
         trend,
         ring_segments,

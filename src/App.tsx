@@ -520,6 +520,8 @@ function StatsView() {
           </div>
         </div>
         <div className="grid grid-cols-3 gap-3">
+          <StatCard label="本周完成率" value={`${Math.round(stats?.weekly_completion_rate ?? 0)}%`} />
+          <StatCard label="本月完成率" value={`${Math.round(stats?.monthly_completion_rate ?? 0)}%`} />
           <StatCard label="未完成任务" value={stats?.open_tasks ?? 0} />
           <StatCard label="今日完成" value={stats?.completed_today ?? 0} />
           <StatCard label="总任务" value={stats?.total_tasks ?? 0} />
@@ -890,7 +892,7 @@ function Info({ label, value }: { label: string; value: string }) {
   );
 }
 
-function StatCard({ label, value }: { label: string; value: number }) {
+function StatCard({ label, value }: { label: string; value: number | string }) {
   return (
     <div className="rounded-xl bg-white/50 p-4 dark:bg-white/5">
       <div className="text-sm opacity-70">{label}</div>

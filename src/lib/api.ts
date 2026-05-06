@@ -272,11 +272,29 @@ class FallbackApi {
     const records = await this.list_timer_records();
     const today = new Date().toISOString().slice(0, 10);
     const todayRecords = records.filter((record) => record.started_at.startsWith(today));
+    const startOfWeek = new Date();
+    startOfWeek.setHours(0, 0, 0, 0);
+    startOfWeek.setDate(startOfWeek.getDate() - ((startOfWeek.getDay() + 6) % 7));
+    const nextWeek = new Date(startOfWeek);
+    nextWeek.setDate(nextWeek.getDate() + 7);
+    const startOfMonth = new Date(startOfWeek.getFullYear(), startOfWeek.getMonth(), 1);
+    const nextMonth = new Date(startOfMonth.getFullYear(), startOfMonth.getMonth() + 1, 1);
+    const plannedDate = (task: Task) => task.planned_date ?? task.deadline;
+    const inRange = (value: string | null | undefined, start: Date, end: Date) => {
+      if (!value) return false;
+      const date = new Date(value);
+      return date >= start && date < end;
+    };
+    const weeklyTasks = tasks.filter((task) => task.status !== "archived" && inRange(plannedDate(task), startOfWeek, nextWeek));
+    const monthlyTasks = tasks.filter((task) => task.status !== "archived" && inRange(plannedDate(task), startOfMonth, nextMonth));
+    const rate = (items: Task[]) => items.length === 0 ? 0 : (items.filter((task) => task.status === "done").length / items.length) * 100;
     return {
       today_minutes: todayRecords.reduce((sum, record) => sum + record.duration, 0),
       completed_today: tasks.filter((task) => task.status === "done" && task.updated_at.startsWith(today)).length,
       open_tasks: tasks.filter((task) => task.status === "todo").length,
       total_tasks: tasks.length,
+      weekly_completion_rate: rate(weeklyTasks),
+      monthly_completion_rate: rate(monthlyTasks),
       quadrant_counts: [1, 2, 3, 4].map((quadrant) => ({
         quadrant,
         count: tasks.filter((task) => task.quadrant === quadrant).length,

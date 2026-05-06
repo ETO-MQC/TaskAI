@@ -1,15 +1,16 @@
 # SmartFocus MVP 开发计划
 
-本计划执行过程中需严格参照项目根目录下的 `PRD.md`，所有 Sprint 的功能细节、交互、UI 规范均以该文档为准。
+本计划执行过程中需严格参照 `docs/PRD.md`，所有 Sprint 的功能细节、交互、UI 规范均以该文档为准；根目录 `PRD.md` 仅作为指向 `docs/PRD.md` 的入口说明。
 
 ## 当前验收状态
 
 - 前端构建：已通过，命令 `npm run build`。
-- Rust 单元测试：已通过，命令 `cargo test`，当前覆盖 `calculate_quadrant` 象限计算。
+- Rust 测试：已通过，命令 `cargo test`，当前覆盖 `calculate_quadrant` 象限计算、计时记录持久化与 SQLx 迁移集成测试。
 - Rust release 构建：已通过，命令 `cargo build --release`，产物 `src-tauri/target/release/smartfocus.exe`。
 - Tauri 应用本体构建：已通过，`npm run tauri:build` 已生成 release exe。
 - Windows MSI/NSIS 打包：已通过，产物位于 `src-tauri/target/release/bundle/`。
 - Rust 工具链说明：当前 shell 默认 PATH 不含 `C:\Users\mqcin\.cargo\bin`，构建命令需临时追加 PATH 或修复系统环境变量。
+- Rust 格式化说明：当前工具链未安装 `rustfmt`，`cargo fmt --check` 无法执行。
 
 ## Global Rules
 
@@ -35,7 +36,7 @@ Implementation：
 判断依据：
 - 项目配置：`package.json`、`vite.config.ts`、`tailwind.config.js`、`tsconfig.json`。
 - Tauri 配置：`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`、`src-tauri/src/main.rs`。
-- 文档：`PRD.md`、`docs/PRD.md`、`AGENTS.md`、`CLAUDE.md`。
+- 文档：`docs/PRD.md` 为唯一完整 PRD，根目录 `PRD.md` 已改为入口说明；另有 `AGENTS.md`、`CLAUDE.md`。
 - 数据库迁移：`migrations/20260505123000_initial.sql`。
 - SQLx `migrate!("../migrations")` 已写入 Rust 启动流程。
 - 前端布局和玻璃拟态样式在 `src/App.tsx`、`src/styles.css`。
@@ -152,7 +153,8 @@ Implementation：
 
 遗留 TODO：
 - 当前没有解析 DeepSeek SSE 中的 delta JSON，只保存/返回 raw SSE 文本。
-- 需要用真实 DeepSeek API Key 做联网验收。
+- 已尝试使用用户提供的 SiliconFlow 中转站 DeepSeek API Key 做联网验收，请求 `https://api.siliconflow.cn/v1/chat/completions` 超时，错误信息：`操作超时`。
+- 后端 `send_ai_message` 当前仍硬编码官方 DeepSeek endpoint 与 `deepseek-chat` 模型，尚未支持配置中转站 base_url/model。
 
 ## Sprint 6：统计仪表盘
 
@@ -163,20 +165,23 @@ Implementation：
 - 实现今日、本周、本月完成率和专注时长聚合查询。
 - 参照 `docs/PRD.md` 中对应章节，确保交互与视觉符合设计。
 
-状态：部分实现。
+状态：实现了。
 
 判断依据：
 - `StatsView` 包含日环进度圈、统计卡片、四象限饼图、趋势面积图。
 - 图表使用 `recharts`。
 - 颜色使用 `quadrantColors`：Q1 红、Q2 黄、Q3 蓝、Q4 灰。
-- Rust `get_dashboard_stats` 提供今日时长、完成数、未完成数、象限数量、趋势数据。
+- Rust `get_dashboard_stats` 提供今日时长、完成数、未完成数、象限数量、趋势数据，以及本周/本月完成率。
+- 前端 `StatsView` 统计卡片展示本周完成率、本月完成率。
+- 前端 fallback 统计逻辑同步计算本周/本月完成率。
 
 验收结果：
 - `npm run build` 通过。
+- `cargo test` 通过。
 - `cargo build --release` 通过。
 
 遗留 TODO：
-- 本周、本月完成率聚合未完整实现。
+- 暂无。
 
 ## Sprint 7：日程与增强功能
 
@@ -215,8 +220,9 @@ Implementation：
 
 判断依据：
 - 已有 Rust 单元测试：`quadrant_is_calculated_from_urgency_and_importance`。
+- 已新增 Rust 集成测试：`src-tauri/tests/migrations.rs`，验证 SQLx `migrate!` 可无错运行、四张表存在、索引有效、初始设置正确写入。
 - SQLite 索引已在 migration 中为任务状态、象限、计划日期、计时记录时间等字段创建。
-- `docs/PRD.md` 已保留。
+- `docs/PRD.md` 已保留为唯一完整 PRD，根目录 `PRD.md` 已改为入口说明。
 - Tauri release exe 已构建成功。
 - `src-tauri/icons/icon.ico` 已补齐，解决 Windows resource 构建缺失问题。
 - 托盘动态进度环已接入 Tauri tray-icon：计时运行时生成 32x32 base64 PNG 环形进度图标，暂停/停止/重置恢复默认图标；Linux 兼容性受桌面托盘实现限制并记录日志。
@@ -232,7 +238,7 @@ Implementation：
 
 遗留 TODO：
 - 补充前端测试框架和交互测试。
-- 补充数据库迁移测试、AI JSON/SSE 测试。
+- 补充 AI JSON/SSE 测试。
 
 ## Public Interfaces
 
@@ -257,7 +263,7 @@ Tauri commands:
 
 ## Assumptions
 
-- `docs/PRD.md` 保存完整 PRD，根目录 `PRD.md` 作为规范入口或同步副本。
+- `docs/PRD.md` 保存唯一完整 PRD，根目录 `PRD.md` 仅作为指向 `docs/PRD.md` 的入口说明。
 - UI 采用 shadcn 风格组件。
 - 数据库迁移使用 SQLx `migrate!`，禁止启动时删表重建。
 - DeepSeek API Key 通过设置页保存。
