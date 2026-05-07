@@ -74,6 +74,7 @@ export interface AiResponse {
 
 export interface DashboardStats {
   today_minutes: number;
+  today_timer_count: number;
   completed_today: number;
   open_tasks: number;
   total_tasks: number;

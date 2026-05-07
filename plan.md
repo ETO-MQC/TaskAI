@@ -9,6 +9,9 @@
 - Rust release 构建：已通过，命令 `cargo build --release`，产物 `src-tauri/target/release/smartfocus.exe`。
 - Tauri 应用本体构建：已通过，`npm run tauri:build` 已生成 release exe。
 - Windows MSI/NSIS 打包：已通过，产物位于 `src-tauri/target/release/bundle/`。
+- 2026-05-06 白屏回归修复：已通过，`npm run dev` 在 `http://127.0.0.1:1420/` 可正常渲染任务列表与四象限页面。
+- 2026-05-06 前端构建资源路径：已修复，Vite `base` 为 `./`，`dist/index.html` 使用 `./assets/...` 相对路径，适配 Tauri 本地资源加载。
+- 2026-05-06 浏览器运行态 Console：React 无限更新白屏已修复；浏览器直跑时无 Tauri IPC 会走本地 fallback API；剩余 `favicon.ico 404` 不影响页面运行。
 - Rust 工具链说明：当前 shell 默认 PATH 不含 `C:\Users\mqcin\.cargo\bin`，构建命令需临时追加 PATH 或修复系统环境变量。
 - Rust 格式化说明：当前工具链未安装 `rustfmt`，`cargo fmt --check` 无法执行。
 
@@ -245,6 +248,15 @@ Implementation：
 - `npm run tauri:build` 通过，产物：
   - `src-tauri/target/release/bundle/msi/SmartFocus_0.1.0_x64_en-US.msi`
   - `src-tauri/target/release/bundle/nsis/SmartFocus_0.1.0_x64-setup.exe`
+- 2026-05-06 白屏修复验收通过：
+  - `npm run build` 通过。
+  - `dist/index.html` 存在且完整，脚本和样式均指向 `./assets/...`。
+  - `vite.config.ts` 已配置 `base: "./"`。
+  - `src/App.tsx` 中 `TaskDetail` 不再在 Zustand selector 内返回新数组，修复 React 19 `Maximum update depth exceeded` 白屏。
+  - `src/lib/api.ts` 在非 Tauri 浏览器环境下自动使用 fallback API，修复 `Cannot read properties of undefined (reading 'invoke')`。
+  - `src/styles.css` 与 `tailwind.config.js` 构建通过，无 CSS/Tailwind 语法错误。
+  - `src-tauri/tauri.conf.json` 当前使用 Tauri v2 配置：`devUrl` 为 `http://localhost:1420`，`frontendDist` 为 `../dist`。
+  - 已清理占用 1420 的旧 `vite preview` 进程，并重新启动 `npm run dev`；浏览器验证 `#root` 已渲染，页面显示任务列表与四象限。
 
 遗留 TODO：
 - 补充前端测试框架和交互测试。
@@ -270,6 +282,19 @@ Tauri commands:
   - `$env:PATH = "C:\Users\mqcin\.cargo\bin;$env:PATH"; cargo build --release` in `src-tauri`
   - `npm run build`
   - `npm run tauri:build`
+
+## 2026-05-06 集中修复记录
+
+状态：已实现，`npm run build` 已通过。
+
+修复范围：
+- 前端 fallback 模式恢复 `setInterval` 轮询 `get_timer_snapshot`，确保无 Tauri 后端时计时器 UI 会走动。
+- 四象限视图补充低饱和渐变背景、12px 间距、加粗象限标签和任务卡片阴影；空任务提示移到象限区上方 AI 引导横幅。
+- 统计数据补充 `today_timer_count`，并让今日计时与今日完成按本地日期查询；fallback 统计同步返回同字段。
+- 日历月视图在每月 1 号显示灰色月份标识，任务圆点继续按优先级显示红/黄/蓝。
+- 统计页数据区域改为 `overflow-y-auto`，避免近日数据无法滚动。
+- 侧边栏展开宽度限制为 220px 且参与 flex 布局，右侧内容区随宽度变化；新增「AI 助手」导航页，复用悬浮弹窗同一个 AI 面板组件。
+- 全局背景增加极淡网格纹理，玻璃面板与卡片阴影加深。
 
 ## Assumptions
 

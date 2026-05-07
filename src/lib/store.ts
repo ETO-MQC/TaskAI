@@ -13,7 +13,7 @@ import type {
   Urgency,
 } from "./types";
 
-type View = "tasks" | "timer" | "calendar" | "stats" | "settings";
+type View = "tasks" | "timer" | "calendar" | "stats" | "settings" | "ai";
 
 interface AiMessage {
   role: "user" | "assistant";

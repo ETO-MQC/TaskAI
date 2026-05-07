@@ -15,6 +15,7 @@ let tauriInvoke: Invoke | null = null;
 
 async function getInvoke(): Promise<Invoke | null> {
   if (tauriInvoke) return tauriInvoke;
+  if (!("__TAURI_INTERNALS__" in window)) return null;
   try {
     const mod = await import("@tauri-apps/api/core");
     tauriInvoke = mod.invoke as Invoke;
@@ -36,6 +37,14 @@ const defaultShortcutSettings = {
 
 function now() {
   return new Date().toISOString();
+}
+
+function localDateKey(value: string | Date = new Date()) {
+  const date = typeof value === "string" ? new Date(value) : value;
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function readJson<T>(key: string, fallback: T): T {
@@ -80,6 +89,8 @@ class FallbackApi {
   private timer: {
     snapshot: TimerSnapshot;
     startedAt: number;
+    pausedAt?: number | null;
+    accumulatedPausedMs: number;
     taskId?: string | null;
     topic: string;
     mode: TimerMode;
@@ -141,6 +152,8 @@ class FallbackApi {
     this.timer = {
       snapshot,
       startedAt: Date.now(),
+      pausedAt: null,
+      accumulatedPausedMs: 0,
       taskId: input.task_id,
       topic: input.topic,
       mode: input.mode,
@@ -150,7 +163,8 @@ class FallbackApi {
 
   async get_timer_snapshot(): Promise<TimerSnapshot> {
     if (!this.timer) return { active: false, elapsed_seconds: 0, paused: false };
-    const elapsed = Math.floor((Date.now() - this.timer.startedAt) / 1000);
+    const end = this.timer.pausedAt ?? Date.now();
+    const elapsed = Math.floor((end - this.timer.startedAt - this.timer.accumulatedPausedMs) / 1000);
     const target = this.timer.snapshot.target_seconds ?? null;
     return {
       ...this.timer.snapshot,
@@ -161,7 +175,14 @@ class FallbackApi {
 
   async pause_timer(): Promise<TimerSnapshot> {
     if (!this.timer) throw new Error("No active timer");
-    this.timer.snapshot.paused = !this.timer.snapshot.paused;
+    if (this.timer.snapshot.paused) {
+      this.timer.accumulatedPausedMs += Date.now() - (this.timer.pausedAt ?? Date.now());
+      this.timer.pausedAt = null;
+      this.timer.snapshot.paused = false;
+    } else {
+      this.timer.pausedAt = Date.now();
+      this.timer.snapshot.paused = true;
+    }
     return this.get_timer_snapshot();
   }
 
@@ -270,8 +291,8 @@ class FallbackApi {
   async get_dashboard_stats(): Promise<DashboardStats> {
     const tasks = await this.list_tasks();
     const records = await this.list_timer_records();
-    const today = new Date().toISOString().slice(0, 10);
-    const todayRecords = records.filter((record) => record.started_at.startsWith(today));
+    const today = localDateKey();
+    const todayRecords = records.filter((record) => localDateKey(record.started_at) === today);
     const startOfWeek = new Date();
     startOfWeek.setHours(0, 0, 0, 0);
     startOfWeek.setDate(startOfWeek.getDate() - ((startOfWeek.getDay() + 6) % 7));
@@ -290,7 +311,8 @@ class FallbackApi {
     const rate = (items: Task[]) => items.length === 0 ? 0 : (items.filter((task) => task.status === "done").length / items.length) * 100;
     return {
       today_minutes: todayRecords.reduce((sum, record) => sum + record.duration, 0),
-      completed_today: tasks.filter((task) => task.status === "done" && task.updated_at.startsWith(today)).length,
+      today_timer_count: todayRecords.length,
+      completed_today: tasks.filter((task) => task.status === "done" && localDateKey(task.updated_at) === today).length,
       open_tasks: tasks.filter((task) => task.status === "todo").length,
       total_tasks: tasks.length,
       weekly_completion_rate: rate(weeklyTasks),
@@ -302,11 +324,11 @@ class FallbackApi {
       trend: Array.from({ length: 7 }).map((_, index) => {
         const date = new Date();
         date.setDate(date.getDate() - (6 - index));
-        const day = date.toISOString().slice(0, 10);
+        const day = localDateKey(date);
         return {
           day,
           minutes: records
-            .filter((record) => record.started_at.startsWith(day))
+            .filter((record) => localDateKey(record.started_at) === day)
             .reduce((sum, record) => sum + record.duration, 0),
         };
       }),

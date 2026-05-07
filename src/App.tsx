@@ -30,7 +30,7 @@ import {
 } from "recharts";
 import dayjs from "dayjs";
 import { useAppStore } from "./lib/store";
-import type { Importance, Priority, Task, TimerMode, Urgency } from "./lib/types";
+import type { Importance, Priority, Task, TimerMode, TimerSnapshot, Urgency } from "./lib/types";
 import {
   formatMinutes,
   formatSeconds,
@@ -41,6 +41,7 @@ import {
   quadrantLabels,
   timerColors,
 } from "./lib/domain";
+import { api } from "./lib/api";
 
 const navItems = [
   { id: "tasks", label: "任务", icon: ListTodo },
@@ -48,6 +49,7 @@ const navItems = [
   { id: "calendar", label: "日程", icon: CalendarDays },
   { id: "stats", label: "统计", icon: BarChart3 },
   { id: "settings", label: "设置", icon: Settings },
+  { id: "ai", label: "AI 助手", icon: Bot },
 ] as const;
 
 const emptyDraft = {
@@ -90,8 +92,21 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if ("__TAURI_INTERNALS__" in window) return;
+    // Frontend fallback only: Vite/browser mode has no Rust timer_tick event,
+    // so setInterval polls the fallback snapshot to keep the timer UI moving.
+    const intervalId = window.setInterval(async () => {
+      const current = useAppStore.getState().timer;
+      if (!current.active || current.paused) return;
+      const timer = await api<TimerSnapshot>("get_timer_snapshot").catch(() => null);
+      if (timer) useAppStore.setState({ timer });
+    }, 1000);
+    return () => window.clearInterval(intervalId);
+  }, []);
+
   return (
-    <div className="h-screen bg-[radial-gradient(circle_at_top_left,#dbeafe,transparent_34%),linear-gradient(135deg,#f8fafc,#eef2ff_50%,#fefce8)] p-4 text-slate-900 dark:bg-[radial-gradient(circle_at_top_left,#1e3a8a,transparent_32%),linear-gradient(135deg,#181825,#111827_52%,#27272a)] dark:text-slate-100">
+    <div className="app-shell h-screen bg-[radial-gradient(circle_at_top_left,#dbeafe,transparent_34%),linear-gradient(135deg,#f8fafc,#eef2ff_50%,#fefce8)] p-4 text-slate-900 dark:bg-[radial-gradient(circle_at_top_left,#1e3a8a,transparent_32%),linear-gradient(135deg,#181825,#111827_52%,#27272a)] dark:text-slate-100">
       <div className="flex h-full gap-4">
         <Sidebar />
         <main className="glass flex min-w-0 flex-1 flex-col rounded-xl p-5">
@@ -100,6 +115,7 @@ function App() {
           {store.view === "calendar" && <CalendarView />}
           {store.view === "stats" && <StatsView />}
           {store.view === "settings" && <SettingsView />}
+          {store.view === "ai" && <AiPanel embedded />}
         </main>
       </div>
       <button
@@ -118,7 +134,7 @@ function App() {
 function Sidebar() {
   const { view, setView } = useAppStore();
   return (
-    <aside className="glass flex w-16 flex-col items-center gap-3 rounded-xl py-4 transition-all duration-300 hover:w-[220px]">
+    <aside className="glass flex w-16 min-w-16 max-w-[220px] shrink-0 flex-col items-center gap-3 rounded-xl py-4 transition-all duration-300 hover:w-[220px] hover:min-w-[220px]">
       <div className="mb-2 grid h-10 w-10 place-items-center rounded-lg bg-slate-950 text-sm font-bold text-white dark:bg-white dark:text-slate-950">
         SF
       </div>
@@ -147,18 +163,25 @@ function Sidebar() {
 
 function TasksView() {
   const { tasks, selectedTaskId, selectTask } = useAppStore();
-  const selected = tasks.find((task) => task.id === selectedTaskId) ?? tasks[0] ?? null;
+  const activeTasks = tasks.filter((task) => task.status !== "archived");
+  const selected = activeTasks.find((task) => task.id === selectedTaskId) ?? activeTasks[0] ?? null;
   return (
     <section className="flex min-h-0 flex-1 gap-5">
       <div className="flex min-w-0 flex-1 flex-col">
         <Header title="任务列表" subtitle="未完成 / 已完成 / 四象限" />
         <TaskForm />
+        {activeTasks.length === 0 && (
+          <div className="mt-4 flex items-center justify-center gap-3 rounded-xl border border-white/50 bg-blue-50/70 px-4 py-3 text-sm font-medium text-slate-700 shadow-md dark:border-white/10 dark:bg-blue-500/10 dark:text-slate-100">
+            <Bot size={18} />
+            <span>还没有任务，对 AI 说一句话试试吧~</span>
+          </div>
+        )}
         <div className="mt-4 grid min-h-0 flex-1 grid-cols-2 gap-3 overflow-auto pr-1">
           {[1, 2, 3, 4].map((quadrant) => (
             <QuadrantColumn
               key={quadrant}
               quadrant={quadrant}
-              tasks={tasks.filter((task) => task.quadrant === quadrant && task.status !== "archived")}
+              tasks={activeTasks.filter((task) => task.quadrant === quadrant)}
               onSelect={selectTask}
             />
           ))}
@@ -215,11 +238,18 @@ function TaskForm() {
 }
 
 function QuadrantColumn({ quadrant, tasks, onSelect }: { quadrant: number; tasks: Task[]; onSelect: (id: string) => void }) {
+  const quadrantMeta: Record<number, { label: string; className: string }> = {
+    1: { label: "🔴 重要且紧急", className: "from-red-50/95 to-red-100/45 dark:from-red-500/14 dark:to-red-400/5" },
+    2: { label: "🟡 重要不紧急", className: "from-amber-50/95 to-yellow-100/45 dark:from-amber-500/14 dark:to-yellow-400/5" },
+    3: { label: "🔵 紧急不重要", className: "from-blue-50/95 to-sky-100/45 dark:from-blue-500/14 dark:to-sky-400/5" },
+    4: { label: "⚪ 不重要不紧急", className: "from-slate-50/95 to-slate-100/60 dark:from-slate-500/14 dark:to-slate-400/5" },
+  };
+  const meta = quadrantMeta[quadrant];
   return (
-    <div className="rounded-lg border border-white/30 bg-white/44 p-3 dark:border-white/10 dark:bg-white/5">
+    <div className={`rounded-lg border border-white/60 bg-gradient-to-br p-3 shadow-md dark:border-white/10 ${meta.className}`}>
       <div className="mb-3 flex items-center justify-between">
-        <h3 className="font-semibold" style={{ color: quadrantColors[quadrant] }}>
-          Q{quadrant} {quadrantLabels[quadrant]}
+        <h3 className="font-bold" style={{ color: quadrantColors[quadrant] }}>
+          {meta.label}
         </h3>
         <span className="text-xs opacity-70">{tasks.length}</span>
       </div>
@@ -237,7 +267,7 @@ function TaskRow({ task, onSelect }: { task: Task; onSelect: () => void }) {
   const { updateTask, deleteTask, startFocus } = useAppStore();
   const done = task.status === "done";
   return (
-    <div className="group rounded-lg bg-white/70 p-3 text-sm shadow-sm transition hover:-translate-y-0.5 dark:bg-slate-950/30" onClick={onSelect}>
+    <div className="group rounded-md bg-white p-3 text-sm shadow-md transition hover:-translate-y-0.5 dark:bg-slate-950/70" onClick={onSelect}>
       <div className="flex items-center gap-2">
         <button
           className="icon-btn"
@@ -282,9 +312,13 @@ function TaskRow({ task, onSelect }: { task: Task; onSelect: () => void }) {
 }
 
 function TaskDetail({ task }: { task: Task | null }) {
-  const records = useAppStore((state) => state.records.filter((record) => record.task_id === task?.id));
+  const allRecords = useAppStore((state) => state.records);
+  const records = useMemo(
+    () => allRecords.filter((record) => record.task_id === task?.id),
+    [allRecords, task?.id],
+  );
   if (!task) {
-    return <aside className="w-[360px] rounded-xl border border-dashed border-slate-300 p-5 opacity-70">还没有任务，对 AI 说一句话试试看。</aside>;
+    return <aside className="w-[360px] rounded-xl border border-dashed border-slate-300 p-5 opacity-70">选择任务后在这里查看详情。</aside>;
   }
   return (
     <aside className="flex w-[380px] flex-col overflow-auto rounded-xl border border-white/30 bg-white/46 p-5 dark:border-white/10 dark:bg-white/5">
@@ -346,7 +380,7 @@ function TimerView() {
   const displaySeconds = timer.mode === "positive" || !timer.remaining_seconds ? elapsed : timer.remaining_seconds;
 
   return (
-    <section className="flex flex-1 flex-col">
+    <section className="flex min-h-0 flex-1 flex-col">
       <Header title="专注计时" subtitle="Rust 后端 Instant 管理起止时间，前端消费后端秒级状态" />
       <div className="grid flex-1 place-items-center">
         <div className="flex w-full max-w-4xl flex-col items-center gap-6">
@@ -471,10 +505,10 @@ function StatsView() {
   const hasRingData = ringSegments.some((item) => item.minutes > 0);
   let offset = 0;
   return (
-    <section className="flex flex-1 flex-col">
+    <section className="flex min-h-0 flex-1 flex-col">
       <Header title="今日数据" subtitle="日环进度圈、四象限饼图、趋势折线图、统计卡片" />
-      <div className="grid flex-1 grid-cols-2 gap-5 overflow-auto">
-        <div className="rounded-xl bg-white/50 p-5 dark:bg-white/5">
+      <div className="grid min-h-0 flex-1 grid-cols-2 gap-5 overflow-y-auto pr-1">
+        <div className="rounded-xl bg-white/60 p-5 shadow-md dark:bg-white/5">
           <div className="grid place-items-center">
             <svg width="260" height="260" viewBox="0 0 260 260">
               <circle cx="130" cy="130" r="94" fill="none" stroke="#e5e7eb" strokeWidth="22" />
@@ -528,7 +562,8 @@ function StatsView() {
           <StatCard label="本周完成率" value={`${Math.round(stats?.weekly_completion_rate ?? 0)}%`} />
           <StatCard label="本月完成率" value={`${Math.round(stats?.monthly_completion_rate ?? 0)}%`} />
           <StatCard label="未完成任务" value={stats?.open_tasks ?? 0} />
-          <StatCard label="今日完成" value={stats?.completed_today ?? 0} />
+          <StatCard label="今日完成任务数" value={stats?.completed_today ?? 0} />
+          <StatCard label="今日计时次数" value={stats?.today_timer_count ?? 0} />
           <StatCard label="总任务" value={stats?.total_tasks ?? 0} />
           <div className="col-span-3 h-64 rounded-xl bg-white/50 p-4 dark:bg-white/5">
             <ResponsiveContainer>
@@ -599,13 +634,18 @@ function CalendarView() {
     return (
       <button
         key={key}
-        className={`${dense ? "min-h-20" : "min-h-24"} rounded-lg bg-white/50 p-2 text-left dark:bg-white/5 ${selected === key ? "ring-2 ring-blue-500" : ""}`}
+        className={`${dense ? "min-h-20" : "min-h-24"} rounded-lg bg-white/60 p-2 text-left shadow-sm dark:bg-white/5 ${selected === key ? "ring-2 ring-blue-500" : ""}`}
         onClick={() => setSelected(key)}
         onDragOver={(event) => event.preventDefault()}
         onDrop={dropToDate(key)}
       >
         <div className="flex items-center justify-between text-sm font-medium">
           <span>{calendarMode === "month" ? day.date() : day.format("MM-DD")}</span>
+          {calendarMode === "month" && day.date() === 1 && (
+            <span className="rounded bg-slate-200/80 px-1.5 py-0.5 text-[11px] font-semibold text-slate-500 dark:bg-white/10 dark:text-slate-300">
+              {day.month() + 1}月
+            </span>
+          )}
           <span className="text-xs opacity-60">{items.length}</span>
         </div>
         {renderDots(items)}
@@ -679,7 +719,7 @@ function CalendarView() {
   );
 }
 
-function AiPanel() {
+function AiPanel({ embedded = false }: { embedded?: boolean }) {
   const { aiMessages, setAiOpen, sendAi } = useAppStore();
   const [input, setInput] = useState("");
   const [listening, setListening] = useState(false);
@@ -727,11 +767,11 @@ function AiPanel() {
   }
 
   return (
-    <div className="fixed inset-0 z-30 bg-slate-950/25" onClick={() => setAiOpen(false)}>
-      <aside className="glass absolute bottom-6 right-6 flex h-[620px] w-[420px] flex-col rounded-xl p-4" onClick={(event) => event.stopPropagation()}>
+    <div className={embedded ? "h-full min-h-0" : "fixed inset-0 z-30 bg-slate-950/25"} onClick={() => !embedded && setAiOpen(false)}>
+      <aside className={`glass flex flex-col rounded-xl p-4 ${embedded ? "h-full w-full" : "absolute bottom-6 right-6 h-[620px] w-[420px]"}`} onClick={(event) => event.stopPropagation()}>
         <div className="mb-3 flex items-center justify-between">
           <h2 className="font-semibold">AI助手</h2>
-          <button className="icon-btn" onClick={() => setAiOpen(false)}>×</button>
+          {!embedded && <button className="icon-btn" onClick={() => setAiOpen(false)}>×</button>}
         </div>
         <div className="min-h-0 flex-1 space-y-3 overflow-auto">
           {aiMessages.map((message, index) => (
@@ -923,7 +963,7 @@ function Info({ label, value }: { label: string; value: string }) {
 
 function StatCard({ label, value }: { label: string; value: number | string }) {
   return (
-    <div className="rounded-xl bg-white/50 p-4 dark:bg-white/5">
+    <div className="rounded-xl bg-white/60 p-4 shadow-md dark:bg-white/5">
       <div className="text-sm opacity-70">{label}</div>
       <div className="mt-2 text-3xl font-semibold">{value}</div>
     </div>

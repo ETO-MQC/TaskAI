@@ -210,6 +210,7 @@ struct TimerSnapshot {
 #[derive(Debug, Serialize)]
 struct DashboardStats {
     today_minutes: f64,
+    today_timer_count: i64,
     completed_today: i64,
     open_tasks: i64,
     total_tasks: i64,
@@ -1062,14 +1063,20 @@ async fn update_shortcut_settings(
 #[tauri::command]
 async fn get_dashboard_stats(state: State<'_, AppState>) -> Result<DashboardStats, String> {
     let today_minutes = sqlx::query_scalar::<_, Option<f64>>(
-        "SELECT SUM(duration) FROM timer_records WHERE date(started_at) = date('now')",
+        "SELECT SUM(duration) FROM timer_records WHERE date(started_at, 'localtime') = date('now', 'localtime')",
     )
     .fetch_one(&state.db)
     .await
     .map_err(|e| e.to_string())?
     .unwrap_or(0.0);
+    let today_timer_count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM timer_records WHERE date(started_at, 'localtime') = date('now', 'localtime')",
+    )
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
     let completed_today = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM tasks WHERE status = 'done' AND date(updated_at) = date('now')",
+        "SELECT COUNT(*) FROM tasks WHERE status = 'done' AND date(updated_at, 'localtime') = date('now', 'localtime')",
     )
     .fetch_one(&state.db)
     .await
@@ -1140,7 +1147,7 @@ async fn get_dashboard_stats(state: State<'_, AppState>) -> Result<DashboardStat
         r#"SELECT COALESCE(tasks.quadrant, 4) as quadrant, SUM(timer_records.duration) as minutes
         FROM timer_records
         LEFT JOIN tasks ON tasks.id = timer_records.task_id
-        WHERE date(timer_records.started_at) = date('now')
+        WHERE date(timer_records.started_at, 'localtime') = date('now', 'localtime')
         GROUP BY COALESCE(tasks.quadrant, 4)
         ORDER BY quadrant ASC"#,
     )
@@ -1158,6 +1165,7 @@ async fn get_dashboard_stats(state: State<'_, AppState>) -> Result<DashboardStat
 
     Ok(DashboardStats {
         today_minutes,
+        today_timer_count,
         completed_today,
         open_tasks,
         total_tasks,
