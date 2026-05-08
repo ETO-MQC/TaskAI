@@ -39,6 +39,11 @@ Thumbs.db
 # Test and coverage output
 coverage/
 .nyc_output/
+validation-screenshots/*.tmp.png
+
+# Local browser validation profiles
+.edge-validation-profile/
+.edge-validation-sprint9*/
 
 # Temporary files
 tmp/

@@ -8,14 +8,18 @@ import {
   Check,
   CirclePlay,
   Clock3,
+  LayoutDashboard,
   ListTodo,
   Mic,
   Pause,
   Play,
+  Plus,
   RotateCcw,
   Settings,
+  Sprout,
   Square,
   Trash2,
+  Trophy,
 } from "lucide-react";
 import {
   Area,
@@ -44,12 +48,9 @@ import {
 import { api } from "./lib/api";
 
 const navItems = [
-  { id: "tasks", label: "任务", icon: ListTodo },
-  { id: "timer", label: "计时", icon: Clock3 },
-  { id: "calendar", label: "日程", icon: CalendarDays },
-  { id: "stats", label: "统计", icon: BarChart3 },
+  { id: "workbench", label: "工作台", icon: LayoutDashboard },
+  { id: "ai", label: "AI", icon: Bot },
   { id: "settings", label: "设置", icon: Settings },
-  { id: "ai", label: "AI 助手", icon: Bot },
 ] as const;
 
 const emptyDraft = {
@@ -113,10 +114,11 @@ function App() {
   }, []);
 
   return (
-    <div className="app-shell h-screen min-w-[320px] overflow-x-auto overflow-y-hidden bg-[radial-gradient(circle_at_top_left,#dbeafe,transparent_34%),linear-gradient(135deg,#f8fafc,#eef2ff_50%,#fefce8)] p-2 text-slate-900 dark:bg-[radial-gradient(circle_at_top_left,#1e3a8a,transparent_32%),linear-gradient(135deg,#181825,#111827_52%,#27272a)] dark:text-slate-100 md:p-4">
+    <div className="app-shell second-gen-shell h-screen min-w-[320px] overflow-x-auto overflow-y-hidden p-2 text-slate-100 md:p-4">
       <div className="flex h-full min-w-[320px] gap-2 md:gap-4">
         <Sidebar />
-        <main className="glass flex min-w-[320px] flex-1 flex-col overflow-hidden rounded-xl p-3 md:p-5">
+        <main className="glass second-gen-main flex min-w-[320px] flex-1 flex-col overflow-hidden rounded-lg p-3 md:p-5">
+          {store.view === "workbench" && <WorkbenchView />}
           {store.view === "tasks" && <TasksView />}
           {store.view === "timer" && <TimerView />}
           {store.view === "calendar" && <CalendarView />}
@@ -126,7 +128,7 @@ function App() {
         </main>
       </div>
       <button
-        className="fixed bottom-6 right-6 grid h-14 w-14 place-items-center rounded-full bg-slate-950 text-white shadow-glow transition hover:scale-105 dark:bg-white dark:text-slate-950"
+        className="fixed bottom-6 right-6 grid h-14 w-14 place-items-center rounded-full border border-white/10 bg-white text-slate-950 shadow-glow transition hover:scale-105"
         onClick={() => store.setAiOpen(true)}
         title="AI助手"
       >
@@ -141,8 +143,8 @@ function App() {
 function Sidebar() {
   const { view, setView } = useAppStore();
   return (
-    <aside className="glass flex w-16 min-w-16 max-w-[220px] shrink-0 flex-col items-center gap-3 rounded-xl py-4 transition-all duration-300 md:hover:w-[220px] md:hover:min-w-[220px]">
-      <div className="mb-2 grid h-10 w-10 place-items-center rounded-lg bg-slate-950 text-sm font-bold text-white dark:bg-white dark:text-slate-950">
+    <aside className="glass second-gen-sidebar flex w-16 min-w-16 max-w-[220px] shrink-0 flex-col items-center gap-3 rounded-lg py-4 transition-all duration-300 md:hover:w-[180px] md:hover:min-w-[180px]">
+      <div className="mb-2 grid h-10 w-10 place-items-center rounded-lg border border-white/10 bg-white/10 text-sm font-bold text-white">
         SF
       </div>
       {navItems.map((item) => {
@@ -153,8 +155,8 @@ function Sidebar() {
             key={item.id}
             onClick={() => setView(item.id)}
             title={item.label}
-            className={`group flex h-11 w-[calc(100%-16px)] items-center justify-center gap-3 rounded-lg transition hover:bg-white/70 dark:hover:bg-white/10 ${
-              active ? "bg-slate-950 text-white dark:bg-white dark:text-slate-950" : ""
+            className={`group flex h-11 w-[calc(100%-16px)] items-center justify-center gap-3 rounded-lg border border-transparent text-slate-400 transition hover:border-white/10 hover:bg-white/10 hover:text-white ${
+              active ? "border-white/10 bg-white/10 text-white shadow-inner" : ""
             }`}
           >
             <Icon size={20} />
@@ -164,7 +166,231 @@ function Sidebar() {
           </button>
         );
       })}
+      <div className="mt-auto flex flex-col items-center gap-2 opacity-60">
+        <ListTodo size={16} />
+        <Clock3 size={16} />
+        <CalendarDays size={16} />
+        <BarChart3 size={16} />
+      </div>
     </aside>
+  );
+}
+
+function WorkbenchView() {
+  const { tasks, timer, stats, records, selectTask, startFocus, setView } = useAppStore();
+  const today = dayjs().format("YYYY-MM-DD");
+  const activeTasks = tasks
+    .filter((task) => task.status !== "archived")
+    .sort((a, b) => {
+      const plannedA = a.planned_date === today ? 0 : 1;
+      const plannedB = b.planned_date === today ? 0 : 1;
+      return plannedA - plannedB || a.quadrant - b.quadrant || b.sort_order - a.sort_order;
+    });
+  const todayTasks = activeTasks.filter((task) => task.status !== "done").slice(0, 6);
+  const plannedToday = tasks.filter((task) => task.planned_date === today && task.status !== "archived");
+  const recentRecords = records
+    .filter((record) => dayjs(record.started_at).format("YYYY-MM-DD") === today)
+    .slice(0, 4);
+  const completionRate = stats?.total_tasks ? Math.round(((stats?.total_tasks ?? 0) - (stats?.open_tasks ?? 0)) / (stats.total_tasks || 1) * 100) : 0;
+  const displaySeconds =
+    timer.mode === "positive" || !timer.remaining_seconds ? timer.elapsed_seconds : timer.remaining_seconds;
+
+  return (
+    <section className="workbench-grid min-h-0 flex-1">
+      <div className="workbench-center min-w-0">
+        <div className="command-stream min-w-0">
+          <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-xs uppercase tracking-[0.2em] text-slate-400">AI Agent Command Stream</p>
+              <h1 className="mt-1 text-2xl font-semibold text-white md:text-3xl">今天想怎么安排？</h1>
+            </div>
+            <button className="btn-secondary gap-2" onClick={() => setView("tasks")}>
+              <Plus size={16} /> 手动创建
+            </button>
+          </div>
+          <div className="h-[180px] min-h-0 xl:h-[220px]">
+            <AiPanel embedded />
+          </div>
+        </div>
+
+        <div className="workbench-content min-h-0">
+          <section className="second-gen-panel min-w-0">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Today Stack</p>
+                <h2 className="text-lg font-semibold text-white">今日待办</h2>
+              </div>
+              <button className="text-sm text-slate-400 transition hover:text-white" onClick={() => setView("tasks")}>
+                查看任务
+              </button>
+            </div>
+            <div className="space-y-2">
+              {todayTasks.map((task) => (
+                <div
+                  key={task.id}
+                  className="workbench-task-card w-full cursor-pointer text-left"
+                  role="button"
+                  tabIndex={0}
+                  style={{ borderColor: `${quadrantColors[task.quadrant]}66` }}
+                  onClick={() => {
+                    selectTask(task.id);
+                    setView("tasks");
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" && event.key !== " ") return;
+                    event.preventDefault();
+                    selectTask(task.id);
+                    setView("tasks");
+                  }}
+                >
+                  <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: quadrantColors[task.quadrant] }} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-semibold text-white">{task.title}</span>
+                    <span className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-400">
+                      <span>Q{task.quadrant} {quadrantLabels[task.quadrant]}</span>
+                      <span>{task.deadline ? dayjs(task.deadline).format("MM-DD HH:mm") : "无截止"}</span>
+                      <span>{task.estimated_duration ? formatMinutes(task.estimated_duration) : "未估时"}</span>
+                    </span>
+                  </span>
+                  <button
+                    className="icon-btn shrink-0"
+                    title="开始专注"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      startFocus(task);
+                    }}
+                  >
+                    <CirclePlay size={15} />
+                  </button>
+                </div>
+              ))}
+              {todayTasks.length === 0 && (
+                <div className="rounded-lg border border-dashed border-white/10 p-4 text-sm text-slate-400">
+                  还没有今日待办，可以直接在上方让 AI 创建或安排任务。
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section className="second-gen-panel min-w-0">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Timeline + Timer</p>
+                <h2 className="text-lg font-semibold text-white">日历计时融合视图</h2>
+              </div>
+              <button className="text-sm text-slate-400 transition hover:text-white" onClick={() => setView("calendar")}>
+                查看日程
+              </button>
+            </div>
+            <div className="grid gap-3 lg:grid-cols-[180px_minmax(0,1fr)]">
+              <MiniPlanRing planned={plannedToday.length} records={recentRecords.length} minutes={stats?.today_minutes ?? 0} />
+              <div className="grid gap-3">
+                <div className="rounded-lg border border-white/10 bg-slate-950/35 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-sm text-slate-400">Active Timer</span>
+                    <button className="text-sm text-slate-400 transition hover:text-white" onClick={() => setView("timer")}>
+                      打开计时
+                    </button>
+                  </div>
+                  <div className="mt-3 font-mono text-3xl font-semibold text-white">{formatSeconds(displaySeconds)}</div>
+                  <p className="mt-1 truncate text-sm text-slate-400">{timer.active ? timer.topic : "等待开始专注"}</p>
+                </div>
+                <div className="grid gap-2">
+                  {plannedToday.slice(0, 3).map((task) => (
+                    <div key={task.id} className="flex min-w-0 items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm">
+                      <span className="h-2 w-2 rounded-full" style={{ background: quadrantColors[task.quadrant] }} />
+                      <span className="min-w-0 flex-1 truncate text-slate-200">{task.title}</span>
+                      <span className="shrink-0 text-xs text-slate-500">{task.estimated_duration ? formatMinutes(task.estimated_duration) : "未估时"}</span>
+                    </div>
+                  ))}
+                  {plannedToday.length === 0 && <p className="rounded-lg border border-dashed border-white/10 p-3 text-sm text-slate-500">今日暂无计划任务。</p>}
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <aside className="workbench-side min-w-0">
+        <section className="second-gen-panel">
+          <div className="flex items-center gap-2 text-slate-400">
+            <Sprout size={17} />
+            <span className="text-xs uppercase tracking-[0.18em]">Focus Garden</span>
+          </div>
+          <div className="mt-4 flex items-end justify-between gap-4">
+            <div>
+              <div className="text-3xl font-semibold text-white">{Math.min(100, Math.round((stats?.today_minutes ?? 0) / 240 * 100))}%</div>
+              <p className="mt-1 text-sm text-slate-400">plant stage</p>
+            </div>
+            <div className="garden-sprout" aria-hidden="true">
+              <span />
+            </div>
+          </div>
+          <p className="mt-4 text-sm text-slate-500">今日专注会推动花园成长；完整奖励系统留到 Sprint 13。</p>
+        </section>
+
+        <section className="second-gen-panel">
+          <div className="mb-3 flex items-center gap-2 text-slate-400">
+            <BarChart3 size={17} />
+            <span className="text-xs uppercase tracking-[0.18em]">Quick Stats</span>
+          </div>
+          <div className="grid gap-2">
+            <SignalRow label="今日专注" value={formatMinutes(stats?.today_minutes ?? 0)} />
+            <SignalRow label="完成率" value={`${completionRate}%`} />
+            <SignalRow label="未完成" value={`${stats?.open_tasks ?? 0} 项`} />
+            <SignalRow label="今日计时" value={`${stats?.today_timer_count ?? 0} 次`} />
+          </div>
+        </section>
+
+        <section className="second-gen-panel">
+          <div className="mb-3 flex items-center gap-2 text-slate-400">
+            <Trophy size={17} />
+            <span className="text-xs uppercase tracking-[0.18em]">Achievements</span>
+          </div>
+          <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-slate-200">深度专注者</span>
+              <span className="text-slate-500">{Math.min(4, stats?.today_timer_count ?? 0)}/4</span>
+            </div>
+            <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/10">
+              <div className="h-full rounded-full bg-blue-400" style={{ width: `${Math.min(100, ((stats?.today_timer_count ?? 0) / 4) * 100)}%` }} />
+            </div>
+          </div>
+        </section>
+      </aside>
+    </section>
+  );
+}
+
+function MiniPlanRing({ planned, records, minutes }: { planned: number; records: number; minutes: number }) {
+  const plannedPct = Math.min(100, planned * 16);
+  const actualPct = Math.min(100, (minutes / 360) * 100);
+  return (
+    <div className="grid place-items-center rounded-lg border border-white/10 bg-slate-950/35 p-4">
+      <div
+        className="grid h-36 w-36 place-items-center rounded-full"
+        style={{
+          background: `conic-gradient(#60A5FA ${actualPct * 3.6}deg, rgba(245,158,11,.55) 0deg ${Math.max(actualPct, plannedPct) * 3.6}deg, rgba(255,255,255,.08) 0deg)`,
+        }}
+      >
+        <div className="grid h-28 w-28 place-items-center rounded-full bg-[#0B0F17] text-center">
+          <div>
+            <div className="text-2xl font-semibold text-white">{records}</div>
+            <div className="text-xs text-slate-500">records</div>
+          </div>
+        </div>
+      </div>
+      <p className="mt-3 text-center text-xs text-slate-500">计划 {planned} 项 / 实际 {formatMinutes(minutes)}</p>
+    </div>
+  );
+}
+
+function SignalRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm">
+      <span className="text-slate-400">{label}</span>
+      <span className="font-medium text-white">{value}</span>
+    </div>
   );
 }
 
@@ -827,7 +1053,7 @@ function AiPanel({ embedded = false }: { embedded?: boolean }) {
 
   return (
     <div className={embedded ? "h-full min-h-0" : "fixed inset-0 z-30 flex items-end justify-end bg-slate-950/25 p-2 sm:p-6"} onClick={() => !embedded && setAiOpen(false)}>
-      <aside className={`glass flex min-w-0 flex-col rounded-xl p-4 ${embedded ? "h-full w-full" : "h-[min(620px,calc(100vh-16px))] w-full max-w-[420px]"}`} onClick={(event) => event.stopPropagation()}>
+      <aside className={`${embedded ? "ai-command-panel" : "glass"} flex min-w-0 flex-col rounded-lg p-4 ${embedded ? "h-full w-full" : "h-[min(620px,calc(100vh-16px))] w-full max-w-[420px]"}`} onClick={(event) => event.stopPropagation()}>
         <div className="mb-3 flex items-center justify-between">
           <h2 className="font-semibold">AI助手</h2>
           {!embedded && <button className="icon-btn" onClick={() => setAiOpen(false)}>×</button>}

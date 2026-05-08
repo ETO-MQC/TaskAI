@@ -342,6 +342,25 @@ Acceptance：
 - 旧的任务、日程、计时割裂页面不再是主流程入口，但必要功能仍可从工作台触达。
 - 手动缩放浏览器窗口从 1920px 到 320px 宽度，逐段检查无按钮、卡片、输入框、文本互相重叠或遮挡；低于内容最小宽度时只能出现横向滚动，不能挤压变形。
 
+状态：已实现。
+
+判断依据：
+- 默认入口已从任务页改为一体化工作台，侧边栏主入口收敛为工作台、AI、设置；旧任务、计时、日程、统计页面不再作为主流程入口。
+- 工作台顶部复用 `AiPanel` 作为 AI Agent Command Stream，保留语音输入、文本发送、SSE 监听与 `sendAi` 数据流。
+- 工作台同屏展示今日待办、日历计时融合视图、快捷统计、Focus Garden 辅助摘要和成就进度；旧任务/计时/日程功能通过工作台按钮继续触达。
+- 未修改 Rust 计时器核心、Tauri 命令、数据库迁移或 AI intent 后端闭环；`create_task`、`start_timer` 数据契约保持不变。
+- 第二代视觉样式已落地深色背景、微妙网格、低饱和边框、8px 圆角和轻阴影。
+
+验收结果：
+- `npm run build` 通过。
+- 已生成截图：
+  - `validation-screenshots/sprint9-workbench-1920x1080.png`
+  - `validation-screenshots/sprint9-workbench-1366x768.png`
+- 计时器核心数据流未改：Tauri 环境仍由后端 `timer_tick` 推送，浏览器 fallback 仍由前端 `setInterval` 更新 Zustand timer 快照。
+
+遗留 TODO：
+- 浏览器 fallback 的 AI 演示实现不执行真实 `create_task` intent；真实 AI 创建任务与启动计时闭环需在 Tauri/Rust 后端环境验收。
+
 ### Sprint 10：AI Agent Intent 执行闭环
 
 目标：让 AI 从“回复建议”升级为“自动执行”。

@@ -13,7 +13,7 @@ import type {
   Urgency,
 } from "./types";
 
-type View = "tasks" | "timer" | "calendar" | "stats" | "settings" | "ai";
+type View = "workbench" | "tasks" | "timer" | "calendar" | "stats" | "settings" | "ai";
 
 interface AiMessage {
   role: "user" | "assistant";
@@ -83,7 +83,7 @@ function draftToInput(draft: TaskDraft): TaskInput {
 }
 
 export const useAppStore = create<AppStore>((set, get) => ({
-  view: "tasks",
+  view: "workbench",
   tasks: [],
   selectedTaskId: null,
   timer: emptyTimer,
