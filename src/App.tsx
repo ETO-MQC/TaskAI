@@ -94,22 +94,29 @@ function App() {
 
   useEffect(() => {
     if ("__TAURI_INTERNALS__" in window) return;
-    // Frontend fallback only: Vite/browser mode has no Rust timer_tick event,
-    // so setInterval polls the fallback snapshot to keep the timer UI moving.
+    // Frontend Fallback only: Vite/browser mode has no Rust timer_tick event,
+    // so setInterval directly advances the Zustand timer snapshot every second.
     const intervalId = window.setInterval(async () => {
       const current = useAppStore.getState().timer;
       if (!current.active || current.paused) return;
-      const timer = await api<TimerSnapshot>("get_timer_snapshot").catch(() => null);
-      if (timer) useAppStore.setState({ timer });
+      const elapsed_seconds = current.elapsed_seconds + 1;
+      useAppStore.setState({
+        timer: {
+          ...current,
+          elapsed_seconds,
+          remaining_seconds:
+            current.target_seconds == null ? null : Math.max(0, current.target_seconds - elapsed_seconds),
+        },
+      });
     }, 1000);
     return () => window.clearInterval(intervalId);
   }, []);
 
   return (
-    <div className="app-shell h-screen bg-[radial-gradient(circle_at_top_left,#dbeafe,transparent_34%),linear-gradient(135deg,#f8fafc,#eef2ff_50%,#fefce8)] p-4 text-slate-900 dark:bg-[radial-gradient(circle_at_top_left,#1e3a8a,transparent_32%),linear-gradient(135deg,#181825,#111827_52%,#27272a)] dark:text-slate-100">
-      <div className="flex h-full gap-4">
+    <div className="app-shell h-screen min-w-[320px] overflow-x-auto overflow-y-hidden bg-[radial-gradient(circle_at_top_left,#dbeafe,transparent_34%),linear-gradient(135deg,#f8fafc,#eef2ff_50%,#fefce8)] p-2 text-slate-900 dark:bg-[radial-gradient(circle_at_top_left,#1e3a8a,transparent_32%),linear-gradient(135deg,#181825,#111827_52%,#27272a)] dark:text-slate-100 md:p-4">
+      <div className="flex h-full min-w-[320px] gap-2 md:gap-4">
         <Sidebar />
-        <main className="glass flex min-w-0 flex-1 flex-col rounded-xl p-5">
+        <main className="glass flex min-w-[320px] flex-1 flex-col overflow-hidden rounded-xl p-3 md:p-5">
           {store.view === "tasks" && <TasksView />}
           {store.view === "timer" && <TimerView />}
           {store.view === "calendar" && <CalendarView />}
@@ -134,7 +141,7 @@ function App() {
 function Sidebar() {
   const { view, setView } = useAppStore();
   return (
-    <aside className="glass flex w-16 min-w-16 max-w-[220px] shrink-0 flex-col items-center gap-3 rounded-xl py-4 transition-all duration-300 hover:w-[220px] hover:min-w-[220px]">
+    <aside className="glass flex w-16 min-w-16 max-w-[220px] shrink-0 flex-col items-center gap-3 rounded-xl py-4 transition-all duration-300 md:hover:w-[220px] md:hover:min-w-[220px]">
       <div className="mb-2 grid h-10 w-10 place-items-center rounded-lg bg-slate-950 text-sm font-bold text-white dark:bg-white dark:text-slate-950">
         SF
       </div>
@@ -151,7 +158,7 @@ function Sidebar() {
             }`}
           >
             <Icon size={20} />
-            <span className="hidden whitespace-nowrap text-sm font-medium group-hover:inline">
+            <span className="hidden whitespace-nowrap text-sm font-medium md:group-hover:inline">
               {item.label}
             </span>
           </button>
@@ -166,7 +173,7 @@ function TasksView() {
   const activeTasks = tasks.filter((task) => task.status !== "archived");
   const selected = activeTasks.find((task) => task.id === selectedTaskId) ?? activeTasks[0] ?? null;
   return (
-    <section className="flex min-h-0 flex-1 gap-5">
+    <section className="flex min-h-0 flex-1 flex-col gap-4 xl:flex-row xl:gap-5">
       <div className="flex min-w-0 flex-1 flex-col">
         <Header title="任务列表" subtitle="未完成 / 已完成 / 四象限" />
         <TaskForm />
@@ -176,7 +183,7 @@ function TasksView() {
             <span>还没有任务，对 AI 说一句话试试吧~</span>
           </div>
         )}
-        <div className="mt-4 grid min-h-0 flex-1 grid-cols-2 gap-3 overflow-auto pr-1">
+        <div className="mt-4 grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-auto pr-1 lg:grid-cols-2">
           {[1, 2, 3, 4].map((quadrant) => (
             <QuadrantColumn
               key={quadrant}
@@ -199,7 +206,7 @@ function TaskForm() {
 
   return (
     <form
-      className="grid grid-cols-[1.4fr_1fr_1fr_1fr_auto] gap-2"
+      className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(220px,1.4fr)_minmax(120px,1fr)_minmax(120px,1fr)_minmax(120px,1fr)_auto]"
       onSubmit={async (event) => {
         event.preventDefault();
         if (!draft.title.trim()) return;
@@ -225,7 +232,7 @@ function TaskForm() {
         创建
       </button>
       <textarea
-        className="field col-span-2 min-h-16"
+        className="field min-h-16 sm:col-span-2"
         value={draft.description}
         onChange={(e) => update("description", e.target.value)}
         placeholder="备注支持 Markdown：列表、加粗、链接"
@@ -238,15 +245,15 @@ function TaskForm() {
 }
 
 function QuadrantColumn({ quadrant, tasks, onSelect }: { quadrant: number; tasks: Task[]; onSelect: (id: string) => void }) {
-  const quadrantMeta: Record<number, { label: string; className: string }> = {
-    1: { label: "🔴 重要且紧急", className: "from-red-50/95 to-red-100/45 dark:from-red-500/14 dark:to-red-400/5" },
-    2: { label: "🟡 重要不紧急", className: "from-amber-50/95 to-yellow-100/45 dark:from-amber-500/14 dark:to-yellow-400/5" },
-    3: { label: "🔵 紧急不重要", className: "from-blue-50/95 to-sky-100/45 dark:from-blue-500/14 dark:to-sky-400/5" },
-    4: { label: "⚪ 不重要不紧急", className: "from-slate-50/95 to-slate-100/60 dark:from-slate-500/14 dark:to-slate-400/5" },
+  const quadrantMeta: Record<number, { label: string; className: string; borderClass: string }> = {
+    1: { label: "🔴 重要且紧急", className: "from-red-50/95 to-red-100/45", borderClass: "dark:border-red-500/35" },
+    2: { label: "🟡 重要不紧急", className: "from-amber-50/95 to-yellow-100/45", borderClass: "dark:border-amber-500/35" },
+    3: { label: "🔵 紧急不重要", className: "from-blue-50/95 to-sky-100/45", borderClass: "dark:border-blue-500/35" },
+    4: { label: "⚪ 不重要不紧急", className: "from-slate-50/95 to-slate-100/60", borderClass: "dark:border-slate-400/30" },
   };
   const meta = quadrantMeta[quadrant];
   return (
-    <div className={`rounded-lg border border-white/60 bg-gradient-to-br p-3 shadow-md dark:border-white/10 ${meta.className}`}>
+    <div className={`rounded-lg border border-white/60 bg-gradient-to-br p-3 shadow-md dark:bg-slate-950/45 dark:bg-none ${meta.borderClass} ${meta.className}`}>
       <div className="mb-3 flex items-center justify-between">
         <h3 className="font-bold" style={{ color: quadrantColors[quadrant] }}>
           {meta.label}
@@ -321,7 +328,7 @@ function TaskDetail({ task }: { task: Task | null }) {
     return <aside className="w-[360px] rounded-xl border border-dashed border-slate-300 p-5 opacity-70">选择任务后在这里查看详情。</aside>;
   }
   return (
-    <aside className="flex w-[380px] flex-col overflow-auto rounded-xl border border-white/30 bg-white/46 p-5 dark:border-white/10 dark:bg-white/5">
+    <aside className="flex w-full min-w-0 flex-col overflow-auto rounded-xl border border-white/30 bg-white/46 p-4 dark:border-white/10 dark:bg-white/5 xl:w-[380px] xl:min-w-[320px] xl:p-5">
       <div className="mb-4">
         <p className="text-xs opacity-60">任务详情</p>
         <h2 className="text-xl font-semibold">{task.title}</h2>
@@ -373,6 +380,32 @@ function TimerView() {
   const [mode, setMode] = useState<TimerMode>("pomodoro");
   const [topic, setTopic] = useState("自由专注");
   const [minutes, setMinutes] = useState("25");
+  const isFallbackTimer = !("__TAURI_INTERNALS__" in window);
+  const idleTimerForMode = (nextMode: TimerMode): TimerSnapshot => {
+    const targetSeconds = nextMode === "positive" ? null : Math.max(1, Number(minutes) || 25) * 60;
+    return {
+      active: false,
+      elapsed_seconds: 0,
+      mode: nextMode,
+      remaining_seconds: targetSeconds,
+      target_seconds: targetSeconds,
+      paused: false,
+    };
+  };
+  const switchMode = async (nextMode: TimerMode) => {
+    const wasActive = useAppStore.getState().timer.active;
+    const nextTimer = idleTimerForMode(nextMode);
+    setMode(nextMode);
+    useAppStore.setState({ timer: nextTimer });
+    if (wasActive) {
+      await resetTimer();
+      useAppStore.setState({ timer: nextTimer });
+    }
+  };
+  useEffect(() => {
+    if (useAppStore.getState().timer.active) return;
+    useAppStore.setState({ timer: idleTimerForMode(mode) });
+  }, [mode, minutes]);
   const color = timerColors[timer.mode ?? mode];
   const elapsed = timer.elapsed_seconds;
   const target = timer.target_seconds ?? (mode === "positive" ? Math.max(3600, elapsed || 3600) : Number(minutes) * 60);
@@ -384,12 +417,12 @@ function TimerView() {
       <Header title="专注计时" subtitle="Rust 后端 Instant 管理起止时间，前端消费后端秒级状态" />
       <div className="grid flex-1 place-items-center">
         <div className="flex w-full max-w-4xl flex-col items-center gap-6">
-          <div className="flex gap-2">
+          <div className="flex flex-wrap justify-center gap-2">
             {(["positive", "pomodoro", "countdown"] as TimerMode[]).map((item) => (
               <button
                 key={item}
                 className={`rounded-lg px-4 py-2 text-sm ${mode === item ? "bg-slate-950 text-white dark:bg-white dark:text-slate-950" : "bg-white/60 dark:bg-white/10"}`}
-                onClick={() => setMode(item)}
+                onClick={() => switchMode(item)}
               >
                 {modeLabel(item)}
               </button>
@@ -409,11 +442,11 @@ function TimerView() {
               </div>
             </div>
           </div>
-          <div className="grid w-full max-w-2xl grid-cols-[1fr_120px] gap-2">
+          <div className="grid w-full max-w-2xl grid-cols-1 gap-2 sm:grid-cols-[minmax(180px,1fr)_120px]">
             <input className="field" value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="当前专注主题" />
             <input className="field" value={minutes} onChange={(e) => setMinutes(e.target.value)} type="number" min="1" />
           </div>
-          <div className="flex gap-3">
+          <div className="flex flex-wrap justify-center gap-3">
             {!timer.active ? (
               <button
                 className="btn-primary gap-2"
@@ -442,7 +475,9 @@ function TimerView() {
             )}
           </div>
           <div className="rounded-lg bg-white/54 p-3 text-sm opacity-75 dark:bg-white/5">
-            托盘动态进度环使用 Tauri tray-icon API 与 base64 图标更新实现；Linux 作为已知限制记录在 Sprint 8。
+            {isFallbackTimer
+              ? "Fallback: 当前是 npm run dev 纯前端模式，计时由前端 setInterval 模拟，正式应用仍由 Rust tokio::time::Instant 管理。"
+              : "托盘动态进度环使用 Tauri tray-icon API 与 base64 图标更新实现；Linux 作为已知限制记录在 Sprint 8。"}
           </div>
         </div>
       </div>
@@ -498,16 +533,40 @@ function LinkRecordPanel() {
 
 function StatsView() {
   const stats = useAppStore((state) => state.stats);
+  const tasks = useAppStore((state) => state.tasks);
+  const records = useAppStore((state) => state.records);
   const data = stats?.quadrant_counts ?? [];
   const trend = stats?.trend ?? [];
-  const ringSegments = stats?.ring_segments ?? [];
+  const taskTitleSegments = useMemo(() => {
+    const today = dayjs().format("YYYY-MM-DD");
+    const palette = ["#EF4444", "#F59E0B", "#3B82F6", "#10B981", "#A855F7", "#64748B"];
+    const groups = new Map<string, { label: string; minutes: number; color: string }>();
+    records
+      .filter((record) => dayjs(record.started_at).format("YYYY-MM-DD") === today)
+      .forEach((record) => {
+        const task = tasks.find((item) => item.id === record.task_id);
+        const label = task?.title || record.task_topic || "未关联专注";
+        const current = groups.get(label);
+        if (current) {
+          current.minutes += record.duration;
+          return;
+        }
+        groups.set(label, {
+          label,
+          minutes: record.duration,
+          color: task ? quadrantColors[task.quadrant] : palette[groups.size % palette.length],
+        });
+      });
+    return Array.from(groups.values());
+  }, [records, tasks]);
+  const ringSegments = taskTitleSegments.length > 0 ? taskTitleSegments : (stats?.ring_segments ?? []);
   const total = Math.max(1, ringSegments.reduce((sum, item) => sum + item.minutes, 0));
   const hasRingData = ringSegments.some((item) => item.minutes > 0);
   let offset = 0;
   return (
     <section className="flex min-h-0 flex-1 flex-col">
       <Header title="今日数据" subtitle="日环进度圈、四象限饼图、趋势折线图、统计卡片" />
-      <div className="grid min-h-0 flex-1 grid-cols-2 gap-5 overflow-y-auto pr-1">
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-y-auto pr-1 xl:grid-cols-2 xl:gap-5">
         <div className="rounded-xl bg-white/60 p-5 shadow-md dark:bg-white/5">
           <div className="grid place-items-center">
             <svg width="260" height="260" viewBox="0 0 260 260">
@@ -558,14 +617,14 @@ function StatsView() {
             )}
           </div>
         </div>
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
           <StatCard label="本周完成率" value={`${Math.round(stats?.weekly_completion_rate ?? 0)}%`} />
           <StatCard label="本月完成率" value={`${Math.round(stats?.monthly_completion_rate ?? 0)}%`} />
           <StatCard label="未完成任务" value={stats?.open_tasks ?? 0} />
           <StatCard label="今日完成任务数" value={stats?.completed_today ?? 0} />
           <StatCard label="今日计时次数" value={stats?.today_timer_count ?? 0} />
           <StatCard label="总任务" value={stats?.total_tasks ?? 0} />
-          <div className="col-span-3 h-64 rounded-xl bg-white/50 p-4 dark:bg-white/5">
+          <div className="h-64 rounded-xl bg-white/50 p-4 dark:bg-white/5 sm:col-span-2 xl:col-span-3">
             <ResponsiveContainer>
               <PieChart>
                 <Pie data={data} dataKey="count" nameKey="quadrant" innerRadius={52} outerRadius={86}>
@@ -578,7 +637,7 @@ function StatsView() {
             </ResponsiveContainer>
           </div>
         </div>
-        <div className="col-span-2 h-72 rounded-xl bg-white/50 p-4 dark:bg-white/5">
+        <div className="h-72 rounded-xl bg-white/50 p-4 dark:bg-white/5 xl:col-span-2">
           <ResponsiveContainer>
             <AreaChart data={trend}>
               <XAxis dataKey="day" />
@@ -654,7 +713,7 @@ function CalendarView() {
   };
   return (
     <section className="flex flex-1 flex-col">
-      <header className="mb-4 flex items-end justify-between">
+      <header className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold">日程</h1>
           <p className="text-sm opacity-65">月/周/日视图任务小圆点、点击查看、拖拽改期</p>
@@ -671,7 +730,7 @@ function CalendarView() {
           ))}
         </div>
       </header>
-      <div className="grid min-h-0 flex-1 grid-cols-[1fr_320px] gap-5">
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[minmax(320px,1fr)_minmax(280px,320px)] lg:gap-5">
         <div className={calendarMode === "day" ? "overflow-auto" : "grid grid-cols-7 gap-2 overflow-auto"}>
           {calendarMode === "month" && monthDays.map((day) => renderDateCell(day))}
           {calendarMode === "week" && weekDays.map((day) => renderDateCell(day, true))}
@@ -702,7 +761,7 @@ function CalendarView() {
             </div>
           )}
         </div>
-        <aside className="rounded-xl bg-white/50 p-4 dark:bg-white/5">
+        <aside className="min-w-0 rounded-xl bg-white/50 p-4 dark:bg-white/5">
           <h3 className="font-semibold">{selected}</h3>
           <p className="mt-1 text-sm opacity-70">工作负荷：预估 {formatMinutes(selectedTasks.reduce((sum, task) => sum + (task.estimated_duration ?? 0), 0))}</p>
           <div className="mt-4 space-y-2">
@@ -767,8 +826,8 @@ function AiPanel({ embedded = false }: { embedded?: boolean }) {
   }
 
   return (
-    <div className={embedded ? "h-full min-h-0" : "fixed inset-0 z-30 bg-slate-950/25"} onClick={() => !embedded && setAiOpen(false)}>
-      <aside className={`glass flex flex-col rounded-xl p-4 ${embedded ? "h-full w-full" : "absolute bottom-6 right-6 h-[620px] w-[420px]"}`} onClick={(event) => event.stopPropagation()}>
+    <div className={embedded ? "h-full min-h-0" : "fixed inset-0 z-30 flex items-end justify-end bg-slate-950/25 p-2 sm:p-6"} onClick={() => !embedded && setAiOpen(false)}>
+      <aside className={`glass flex min-w-0 flex-col rounded-xl p-4 ${embedded ? "h-full w-full" : "h-[min(620px,calc(100vh-16px))] w-full max-w-[420px]"}`} onClick={(event) => event.stopPropagation()}>
         <div className="mb-3 flex items-center justify-between">
           <h2 className="font-semibold">AI助手</h2>
           {!embedded && <button className="icon-btn" onClick={() => setAiOpen(false)}>×</button>}
@@ -900,15 +959,15 @@ function SettingsView() {
         <div className="rounded-xl bg-white/50 p-4 dark:bg-white/5">
           <span className="mb-3 block text-sm font-medium">全局快捷键</span>
           <div className="grid gap-3">
-            <label className="grid grid-cols-[150px_1fr] items-center gap-3 text-sm">
+            <label className="grid grid-cols-1 items-center gap-2 text-sm sm:grid-cols-[150px_minmax(0,1fr)] sm:gap-3">
               <span className="opacity-70">AI 面板</span>
               <input className="field" value={shortcuts.toggle_ai} onChange={(event) => updateShortcut("toggle_ai", event.target.value)} />
             </label>
-            <label className="grid grid-cols-[150px_1fr] items-center gap-3 text-sm">
+            <label className="grid grid-cols-1 items-center gap-2 text-sm sm:grid-cols-[150px_minmax(0,1fr)] sm:gap-3">
               <span className="opacity-70">显示/隐藏主窗口</span>
               <input className="field" value={shortcuts.toggle_window} onChange={(event) => updateShortcut("toggle_window", event.target.value)} />
             </label>
-            <label className="grid grid-cols-[150px_1fr] items-center gap-3 text-sm">
+            <label className="grid grid-cols-1 items-center gap-2 text-sm sm:grid-cols-[150px_minmax(0,1fr)] sm:gap-3">
               <span className="opacity-70">开始/暂停计时</span>
               <input className="field" value={shortcuts.toggle_timer} onChange={(event) => updateShortcut("toggle_timer", event.target.value)} />
             </label>
@@ -943,7 +1002,7 @@ function SettingsView() {
 
 function Header({ title, subtitle }: { title: string; subtitle: string }) {
   return (
-    <header className="mb-4 flex items-end justify-between">
+    <header className="mb-4 flex flex-wrap items-end justify-between gap-3">
       <div>
         <h1 className="text-2xl font-semibold">{title}</h1>
         <p className="text-sm opacity-65">{subtitle}</p>

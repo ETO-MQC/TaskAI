@@ -1,0 +1,129 @@
+{
+   "chat_actions_copy": {
+      "message": "Copy"
+   },
+   "chat_actions_dislike": {
+      "message": "Dislike"
+   },
+   "chat_actions_like": {
+      "message": "Like"
+   },
+   "chat_actions_retry": {
+      "message": "Retry"
+   },
+   "chat_canceled": {
+      "message": "(Paused)"
+   },
+   "chat_error": {
+      "message": "Sorry, Kimi didn't catch that, could you please repeat?"
+   },
+   "chat_placeholder": {
+      "message": "Ask me anything"
+   },
+   "chat_placeholder_image": {
+      "message": "Explain text on the image"
+   },
+   "chat_screenshot": {
+      "message": "Explain screen"
+   },
+   "chat_searching": {
+      "message": "Searching..."
+   },
+   "chat_summary": {
+      "message": "Summarize page"
+   },
+   "chat_thinking": {
+      "message": "Thinking..."
+   },
+   "chat_title": {
+      "message": "Untitled Chat"
+   },
+   "command_chat": {
+      "message": "Chat"
+   },
+   "command_explore": {
+      "message": "Explore"
+   },
+   "desc": {
+      "message": "Kimi Explorer: Highlight for explanations, explain screen areas, summarize articles, and find inspire writing - All in one!"
+   },
+   "explore_asked": {
+      "message": "$count$ asked",
+      "placeholders": {
+         "count": {
+            "content": "$1"
+         }
+      }
+   },
+   "explore_prompt": {
+      "message": "Explore"
+   },
+   "name": {
+      "message": "Kimi Explorer"
+   },
+   "ocr_error": {
+      "message": "No text found within the area."
+   },
+   "ocr_loading": {
+      "message": "Reading text within the area…"
+   },
+   "popup_chat_float_button": {
+      "message": "Pin Kimi floating bubble"
+   },
+   "popup_chat_shortcut": {
+      "message": "Chat shortcut"
+   },
+   "popup_chat_title": {
+      "message": "Chat"
+   },
+   "popup_chat_window_mode": {
+      "message": "Pop-up display mode"
+   },
+   "popup_chat_window_mode_modal": {
+      "message": "Overlay"
+   },
+   "popup_chat_window_mode_sidepanel": {
+      "message": "Side Panel"
+   },
+   "popup_explore_shortcut": {
+      "message": "Explore shortcut (Highlight & Capture)"
+   },
+   "popup_explore_title": {
+      "message": "Explore"
+   },
+   "popup_explore_toolbar": {
+      "message": "Show explore button after highlighting"
+   },
+   "popup_explore_underline": {
+      "message": "Add underline after exploring"
+   },
+   "popup_login": {
+      "message": "Log in"
+   },
+   "popup_logout": {
+      "message": "Log out"
+   },
+   "prompt_pdf": {
+      "message": "Answer based on PDF content"
+   },
+   "shortcut": {
+      "message": "N/A"
+   },
+   "shortcut_settings": {
+      "message": "Set shortcut"
+   },
+   "upload_error": {
+      "message": "No text available"
+   },
+   "upload_limit": {
+      "message": "Upload up to $count$ images",
+      "placeholders": {
+         "count": {
+            "content": "$1"
+         }
+      }
+   },
+   "visit_kimi": {
+      "message": "Kimi.ai"
+   }
+}

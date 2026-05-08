@@ -1,0 +1,103 @@
+{
+  "manifest_version": 3,
+  "name": "AI Content Detector for ChatGPT - Sapling.ai",
+  "short_name": "Sapling AI Detector",
+  "description": "Quickly check if any content was AI generated, and make sure your writing isn't!",
+  "version": "1.0.0.6",
+  "author": "sapling.ai",
+  "icons": {
+    "32": "assets/sapling-32x32.png",
+    "48": "assets/sapling-48x48.png",
+    "128": "assets/sapling-128x128.png",
+    "176": "assets/sapling-176x176.png"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self';"
+  },
+  "action": {
+    "default_icon": {
+      "40": "assets/sapling-40x40.png"
+    },
+    "default_title": "Sapling",
+    "default_popup": "generated/popup.html#saplingpopup"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "addon@sapling.ai",
+      "strict_min_version": "42.0"
+    }
+  },
+  "permissions": [
+    "activeTab",
+    "alarms",
+    "clipboardRead",
+    "clipboardWrite",
+    "identity",
+    "identity.email",
+    "offscreen",
+    "scripting",
+    "storage",
+    "tabs",
+    "webNavigation"
+  ],
+  "host_permissions": [
+    "<all_urls>",
+    "*://*/*"
+  ],
+  "background": {
+    "service_worker": "generated/background-bundle.js"
+  },
+  "commands": {
+    "_execute_browser_action": {}
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://sapling.ai/main_declarative_injection_dont_remove",
+        "https://*.workplaceoptions.com/*",
+        "http://localhost:8000/*",
+        "http://localhost:3176/*"
+      ],
+      "js": [
+        "generated/jquery-3.5.1.min.js",
+        "generated/main-bundle.js"
+      ],
+      "all_frames": true,
+      "match_about_blank": true
+    },
+    {
+      "matches": [
+        "https://mail.google.com/*"
+      ],
+      "js": [
+        "scripts/gmail-injector.js"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "externally_connectable": {
+    "matches": [
+      "https://mail.google.com/*"
+    ]
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "assets/*",
+        "generated/*"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    },
+    {
+      "resources": [
+        "generated/gmail-module.js",
+        "generated/gmail-listener.js"
+      ],
+      "matches": [
+        "*://mail.google.com/*"
+      ]
+    }
+  ]
+}

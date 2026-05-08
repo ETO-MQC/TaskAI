@@ -1,0 +1,5 @@
+2026/05/08-00:54:11.776 a2fc Creating DB E:\DEF\TaskAI\.edge-validation-profile\Default\Local Storage\leveldb since it was missing.
+2026/05/08-00:54:11.838 a2fc Reusing MANIFEST E:\DEF\TaskAI\.edge-validation-profile\Default\Local Storage\leveldb/MANIFEST-000001
+2026/05/08-00:57:12.300 a2fc Level-0 table #5: started
+2026/05/08-00:57:12.310 a2fc Level-0 table #5: 144996 bytes OK
+2026/05/08-00:57:12.318 a2fc Delete type=0 #3

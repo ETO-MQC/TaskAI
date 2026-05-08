@@ -1,0 +1,129 @@
+{
+   "chat_actions_copy": {
+      "message": "复制"
+   },
+   "chat_actions_dislike": {
+      "message": "不喜欢"
+   },
+   "chat_actions_like": {
+      "message": "喜欢"
+   },
+   "chat_actions_retry": {
+      "message": "重试"
+   },
+   "chat_canceled": {
+      "message": "（已停止）"
+   },
+   "chat_error": {
+      "message": "抱歉，刚刚 Kimi 没反应过来，你可以再说一次嘛？"
+   },
+   "chat_placeholder": {
+      "message": "有什么问题尽管问我"
+   },
+   "chat_placeholder_image": {
+      "message": "解释图中的文字内容"
+   },
+   "chat_screenshot": {
+      "message": "解释当前屏幕"
+   },
+   "chat_searching": {
+      "message": "搜索中..."
+   },
+   "chat_summary": {
+      "message": "总结全文"
+   },
+   "chat_thinking": {
+      "message": "思考中..."
+   },
+   "chat_title": {
+      "message": "未命名会话"
+   },
+   "command_chat": {
+      "message": "对话"
+   },
+   "command_explore": {
+      "message": "探索"
+   },
+   "desc": {
+      "message": "来自 Kimi 官方的浏览器助手，划线解答疑问，丝滑截图探索，快速摘要长文，文档提供灵感，统统找 Kimi。"
+   },
+   "explore_asked": {
+      "message": "$count$ 人问过",
+      "placeholders": {
+         "count": {
+            "content": "$1"
+         }
+      }
+   },
+   "explore_prompt": {
+      "message": "解释"
+   },
+   "name": {
+      "message": "Kimi 浏览器助手"
+   },
+   "ocr_error": {
+      "message": "区域内未找到文字。"
+   },
+   "ocr_loading": {
+      "message": "正在阅读区域内的文字..."
+   },
+   "popup_chat_float_button": {
+      "message": "Kimi 悬浮按钮"
+   },
+   "popup_chat_shortcut": {
+      "message": "对话快捷键"
+   },
+   "popup_chat_title": {
+      "message": "对话"
+   },
+   "popup_chat_window_mode": {
+      "message": "窗口显示方式"
+   },
+   "popup_chat_window_mode_modal": {
+      "message": "全局浮窗"
+   },
+   "popup_chat_window_mode_sidepanel": {
+      "message": "侧边栏"
+   },
+   "popup_explore_shortcut": {
+      "message": "探索快捷键（支持划线与截图）"
+   },
+   "popup_explore_title": {
+      "message": "探索"
+   },
+   "popup_explore_toolbar": {
+      "message": "划线后显示快捷按钮"
+   },
+   "popup_explore_underline": {
+      "message": "保留文字下划线"
+   },
+   "popup_login": {
+      "message": "点击登录"
+   },
+   "popup_logout": {
+      "message": "登出"
+   },
+   "prompt_pdf": {
+      "message": "根据这篇 PDF 内容进行回答"
+   },
+   "shortcut": {
+      "message": "未设置"
+   },
+   "shortcut_settings": {
+      "message": "设置快捷键"
+   },
+   "upload_error": {
+      "message": "未提取到文字"
+   },
+   "upload_limit": {
+      "message": "最多可上传 $count$ 张图片",
+      "placeholders": {
+         "count": {
+            "content": "$1"
+         }
+      }
+   },
+   "visit_kimi": {
+      "message": "访问 Kimi"
+   }
+}

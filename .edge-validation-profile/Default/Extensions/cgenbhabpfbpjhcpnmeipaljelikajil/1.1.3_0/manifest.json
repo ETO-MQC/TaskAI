@@ -1,0 +1,53 @@
+{
+   "action": {
+      "default_popup": "popup.html",
+      "default_title": "Kimi Popup"
+   },
+   "background": {
+      "service_worker": "background.js"
+   },
+   "commands": {
+      "chat": {
+         "description": "__MSG_command_chat__",
+         "suggested_key": {
+            "default": "Ctrl+K"
+         }
+      },
+      "explore": {
+         "description": "__MSG_command_explore__",
+         "suggested_key": {
+            "default": "Ctrl+J"
+         }
+      }
+   },
+   "content_scripts": [ {
+      "js": [ "content-scripts/content.js" ],
+      "matches": [ "\u003Call_urls>" ]
+   } ],
+   "default_locale": "zh_CN",
+   "description": "__MSG_desc__",
+   "homepage_url": "https://kimi.moonshot.cn",
+   "icons": {
+      "128": "icon/128.png",
+      "16": "icon/16.png",
+      "32": "icon/32.png",
+      "48": "icon/48.png",
+      "96": "icon/96.png"
+   },
+   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxFUhmiVemRC7exIRZZGvT2AOD9N2+mVH+sYZfnuOo3nicF+JsyiWJT9mQd7BdQHgYMZ5hOCrLI7cmAnLSfGPGHG+25W5R9wsT9nJoc7zs5r+vX1GHnowU1FonVbfsecL7vuJtLAonB+kWNt6iGnzPBwgf0N6hw1J00P0IfGVAy4iNbAJno1sjxvtMiRBEIk65bUvbgz1Irg5xhixffLRkAwaFk0X3V2arl1cdc2eCS9fL1WDpTcSeOtD0HwNxrr8gJ555CfddxYBOHOQ5MnDX9geryGop9TUMj2a3phpBX5Xt+KMa6Lds4iDFaiocalukwoIUxbO0duUSMSywRxptwIDAQAB",
+   "manifest_version": 3,
+   "name": "__MSG_name__",
+   "omnibox": {
+      "keyword": "kimi"
+   },
+   "permissions": [ "activeTab", "storage", "tabs", "sidePanel" ],
+   "side_panel": {
+      "default_path": "sidepanel.html"
+   },
+   "update_url": "https://edge.microsoft.com/extensionwebstorebase/v1/crx",
+   "version": "1.1.3",
+   "web_accessible_resources": [ {
+      "matches": [ "\u003Call_urls>" ],
+      "resources": [ "content-scripts/content.css" ]
+   } ]
+}

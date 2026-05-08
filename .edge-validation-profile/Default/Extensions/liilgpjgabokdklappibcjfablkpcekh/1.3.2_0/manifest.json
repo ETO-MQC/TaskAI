@@ -1,0 +1,37 @@
+{
+   "action": {
+      "default_icon": {
+         "128": "assets/logo.png"
+      },
+      "default_popup": "src/popup.html"
+   },
+   "author": "CodFrm",
+   "background": {
+      "service_worker": "src/service_worker.js"
+   },
+   "default_locale": "en",
+   "description": "__MSG_scriptcat_description__",
+   "host_permissions": [ "\u003Call_urls>" ],
+   "icons": {
+      "128": "assets/logo.png"
+   },
+   "incognito": "split",
+   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtsWIPxfRpoykop0oqVrpcqPyV/6j0GwCQ6v6LJxgSd3z8wsix9PgpvkRc4aiU0Bjp2gR/epYCcd+HZ0BzCSmr03B4XgO0QW4Mt505VY0ZuhqIjnXWGFFkgLRij0Z/kb3l42a9eW8agDJ8AOxz4AI0w6vJ5qyEaf+2XLc0vgghCB6rFxU/uR1PrDNXyO05WltumuP2Xh0Mmp/BlFDr3kUqVU7+u+yxT4zErcFrYkCVuSqlXh2XzEB0QpBqk/RFRS5tENJv2drJcsBySv4QENeGP0lyYG1kYmiOzuNiFkkNfdiQBaJk3r+1i5MJM8cSE+N3ufTJabXAq6D8xp6EnDetQIDAQAB",
+   "manifest_version": 3,
+   "name": "__MSG_scriptcat__",
+   "optional_permissions": [ "background" ],
+   "options_ui": {
+      "open_in_tab": true,
+      "page": "src/options.html"
+   },
+   "permissions": [ "tabs", "alarms", "storage", "cookies", "offscreen", "scripting", "downloads", "activeTab", "webRequest", "userScripts", "contextMenus", "webNavigation", "notifications", "clipboardWrite", "unlimitedStorage", "declarativeNetRequest" ],
+   "sandbox": {
+      "pages": [ "src/sandbox.html" ]
+   },
+   "update_url": "https://edge.microsoft.com/extensionwebstorebase/v1/crx",
+   "version": "1.3.2",
+   "web_accessible_resources": [ {
+      "matches": [ "\u003Call_urls>" ],
+      "resources": [ "/src/install.html" ]
+   } ]
+}

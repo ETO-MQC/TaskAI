@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html id="popup-html">
+  <head>
+    <meta charset="utf-8"/>
+    <link rel="stylesheet" type="text/css" href="../assets/popup.css">
+    <link rel="stylesheet" type="text/css" href="../generated/icomoon.css">
+    <link rel="stylesheet" type="text/css" href="../generated/fontawesome_5.7.0.css">
+
+    <script type="text/javascript" src="./jquery-3.5.1.min.js"></script>
+    <script type="text/javascript" src="./main-bundle.js"></script>
+  </head>
+  <body>
+    <div id="sapling-embedded-popup">
+      <span>
+      <a id="teams-link" target="_blank">
+        <img src="../assets/sapling-logo-horizontal.png" style="height: 30px; margin-bottom: 0.5em;" />
+      </a>
+      </span>
+
+      <p id="subscription-banner">You are on the <strong>free</strong> plan. <a id="plans-link">Pro features</a> are missing.</p>
+      <p id="navigation">
+        <span id="nav-settings"><i class="fas fa-cog"></i> Settings</span>
+        <span id="nav-notepad" style="display:none;"><i class="fas fa-sticky-note"></i> Notepad</span>
+      </p>
+
+      <p id="team-premium-banner"></p>
+      <p id="team-share-banner"></p>
+
+      <div id="sapling-settings-container" style="display:none;">
+        <div id="sapling-embed-controls">
+
+        </div>
+        <p id="refresh-warning"><strong>Refresh</strong> the page after changing this setting.</p>
+
+        <div id="endpoint-settings-row" style="display: none;">
+          <div>
+            <label for="apiurl">API Endpoint</label>
+            <input type="text" id="apiurl" name="apiurl">
+            <br>
+            <br>
+            <label for="weburl">Website Endpoint</label>
+            <input type="text" id="weburl" name="weburl">
+          </div>
+        </div>
+        <div id="dashboard-settings-row" class="settings-row">
+          <a id="settings-link">
+            <i class="fas fa-table"></i> Dashboard
+          </a>
+        </div>
+
+        <div id="extension-settings-row" class="settings-row">
+          <a id="extension-shortcuts">
+            <i class="fas fa-table"></i> Extension Shortcuts
+          </a>
+        </div>
+
+        <div id="logout-settings-row" class="settings-row">
+          <a id="logout-button">
+            <i class="fas fa-sign-out-alt"></i> Logout
+          </a>
+        </div>
+
+        <div id="login-settings-row" class="settings-row">
+          <a class="register-link">
+            <i class="fas fa-sign-in-alt"></i> Sign Up
+          </a>
+          or
+          <a class="sign-in-link">
+            <i class="fas fa-sign-in-alt"></i> Log in
+          </a>
+        </div>
+
+        <div id="lang-settings-row" class="settings-row">
+          <div style="text-align: center; margin: 0 auto 1.5em auto;">
+            <select id="lang-select" class="form-select" aria-label="Select language">
+              <option value="en">English</option>
+              <option value="zh">中文</option>
+              <option value="nl">Nederlands</option>
+              <option value="de">Deutsch</option>
+              <option value="es">Español</option>
+              <option value="tl">Filipino</option>
+              <option value="fr">Français</option>
+              <option value="el">Ελληνικά</option>
+              <option value="it">Italiano</option>
+              <option value="jp">日本語</option>
+              <option value="ko">한국어</option>
+              <option value="pl">polski</option>
+              <option value="pt">Português</option>
+              <option value="sv">svenska</option>
+              <option value="auto">Autodetect</option>
+            </select>
+          </div>
+        </div>
+
+      </div>
+
+      <div id="sapling-embedded-container">
+        <div id="sapling-embedded-editable" contenteditable=true data-gramm_editor="false" spellcheck=false placeholder="Type/paste some text here, or just type within the webpage textboxes." autofocus></div>
+        <div id="user-manager-form" style="display:none;">
+          <div id="confirm-message" class="text-center">An email has been sent to your email address.  Please click the link in the email to use the editor. Make sure to check your spam folder.</div>
+          <div id="login-signup-block" class="text-center">
+            <div class="sign-up-block">
+              <button class="btn-primary register-link">Sign Up</button> to use the Sapling editor
+            </div>
+            <div class="log-in-block">
+              Already registered? <a class='sign-in-link' target="_blank">Log in</a>
+            </div>
+          </div>
+        </div>
+        <div id="ai-detect-min-length"></div>
+      </div>
+
+      <div id="footer">
+        <div id="run-ai-detect" class="disabled">
+          Run AI Detection
+        </div>
+        <div id="ai-detect-message"></div>
+        <div id="user-usage">
+            <div class="user-usage-stat">
+              <span>Accepts:</span>
+              <span id="user-usage-accepts"></span>
+            </div>
+            <div class="user-usage-stat">
+              <span>Ignores:</span>
+              <span id="user-usage-ignores"></span>
+            </div>
+            <div class="user-usage-stat">
+              <span>Since:</span>
+              <span id="user-usage-since"></span>
+            </div>
+        </div>
+        <div id="footer-right">
+          <p id="popup-message"></p>
+        </div>
+        <div style="margin-top: 3em;">
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

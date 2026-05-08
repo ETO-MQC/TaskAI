@@ -1,0 +1,39 @@
+{
+   "action": {
+      "default_popup": "popup.html"
+   },
+   "background": {
+      "mode": "module",
+      "service_worker": "background.chrome.js"
+   },
+   "content_scripts": [ {
+      "all_frames": true,
+      "js": [ "extension.chrome.user.js" ],
+      "matches": [ "\u003Call_urls>" ]
+   }, {
+      "all_frames": true,
+      "js": [ "pre.js" ],
+      "matches": [ "\u003Call_urls>" ],
+      "run_at": "document_start"
+   }, {
+      "all_frames": true,
+      "js": [ "preInjected.js" ],
+      "matches": [ "\u003Call_urls>" ],
+      "run_at": "document_start",
+      "world": "MAIN"
+   } ],
+   "description": "Watch video together",
+   "icons": {
+      "192": "./icon/android-icon-192x192.png"
+   },
+   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAz8BViEYOU3wLhThO8arLkApYQ9bnC4bre7Mg1WbitEfFcFPJkBoOQpeCUPDBSIeF1UaJLUcMKkxxWNa0oR847ZCR0Wz/Q41rDpuTA2jw/mg7nCEzREPdVKxrV0pNJPamu3yO4sQhVF/BT/fZbUYF2h6n1Mbu5dKL1x94kopKeW3PlQ68WOuFB/ETXO798hFZXdKmmYbpET5M5z1j4unkQREKlkwhrsFUQxOL13gjMhPv2FAZ08rFRSWWrgmaR1Iug11I0rEL5nqZHoOnqi/YUjzhSO3WpEpzlLcIuCJLVqEXBLcGhNlANecHBUMynI9wnX0lAUbYfrKyOJTrymg1NwIDAQAB",
+   "manifest_version": 3,
+   "name": "VideoTogether",
+   "permissions": [ "storage", "unlimitedStorage" ],
+   "update_url": "https://edge.microsoft.com/extensionwebstorebase/v1/crx",
+   "version": "3.0.23",
+   "web_accessible_resources": [ {
+      "matches": [ "\u003Call_urls>" ],
+      "resources": [ "vt.en-us.user.js", "vt.zh-cn.user.js", "vt.ja-jp.user.js", "preInjected.js" ]
+   } ]
+}

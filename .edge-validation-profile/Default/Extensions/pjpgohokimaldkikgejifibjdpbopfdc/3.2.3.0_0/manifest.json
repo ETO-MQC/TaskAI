@@ -1,0 +1,89 @@
+{
+   "action": {
+      "default_icon": {
+         "40": "assets/sapling-40x40.png"
+      },
+      "default_popup": "generated/popup.html#saplingpopup",
+      "default_title": "Sapling"
+   },
+   "author": "sapling.ai",
+   "background": {
+      "service_worker": "generated/background-bundle.js"
+   },
+   "browser_specific_settings": {
+      "gecko": {
+         "id": "addon@sapling.ai",
+         "strict_min_version": "42.0"
+      }
+   },
+   "commands": {
+      "_execute_action": {
+      },
+      "accept-all-edits": {
+         "description": "Accept all edit suggestions",
+         "suggested_key": {
+            "default": "Alt+O",
+            "mac": "MacCtrl+O"
+         }
+      },
+      "accept-current-sentence-edits": {
+         "description": "Accept edit suggestions in current sentence",
+         "suggested_key": {
+            "default": "Alt+I",
+            "mac": "MacCtrl+I"
+         }
+      },
+      "toggle-rephrase-controls": {
+         "description": "Launch rephrase popup",
+         "suggested_key": {
+            "default": "Ctrl+J",
+            "mac": "Command+J"
+         }
+      },
+      "toggle-snippet-controls": {
+         "description": "Launch snippet selector",
+         "suggested_key": {
+            "default": "Alt+L",
+            "mac": "MacCtrl+L"
+         }
+      }
+   },
+   "content_scripts": [ {
+      "all_frames": true,
+      "js": [ "generated/jquery-3.5.1.min.js", "generated/main-bundle.js" ],
+      "match_about_blank": true,
+      "matches": [ "https://sapling.ai/main_declarative_injection_dont_remove", "https://*.workplaceoptions.com/*", "http://localhost:8000/*", "http://localhost:3176/*" ]
+   }, {
+      "js": [ "scripts/gmail-injector.js" ],
+      "matches": [ "https://mail.google.com/*" ],
+      "run_at": "document_start"
+   } ],
+   "content_security_policy": {
+      "extension_pages": "script-src 'self'; object-src 'self';"
+   },
+   "description": "Improve your writing with a spell + grammar checker and writing suggestions.",
+   "externally_connectable": {
+      "matches": [ "https://mail.google.com/*" ]
+   },
+   "host_permissions": [ "\u003Call_urls>", "*://*/*" ],
+   "icons": {
+      "128": "assets/sapling-128x128.png",
+      "176": "assets/sapling-176x176.png",
+      "32": "assets/sapling-32x32.png",
+      "48": "assets/sapling-48x48.png"
+   },
+   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAiHHGJttdWMOSjbsUCMQMAI4E3ixg9bIz1gi/039lh9BWmsVqNCRk18vB6PM+WGKc9AvTh4dKhaljNmRgayXW5kWHfmqUJPAV7uLDphM9maajadGA7njHC2xow0RNVMQrZwGIW/a2IVpCPt7s0pyK4rstaqUsldgOnsPUElDUjhZrgIJgJulCPRR6zK0zs92x2uYCdwaCo+JwH+nLm+7ziReI3Xt7eHb2wqPuG2PDZTixn67g+KiSReFNNm14Ua5KLw1RA6r5huaqyCDrNDZpAMAU2A+l1XUqUPjcdSUCtbIZl3AiEtD2lWHCnU2y2FeF6hVOgwI7NjrqkC7zjyGX/wIDAQAB",
+   "manifest_version": 3,
+   "name": "Sapling Grammar Checker and Writing Assistant",
+   "permissions": [ "activeTab", "alarms", "clipboardRead", "clipboardWrite", "identity", "identity.email", "offscreen", "scripting", "storage", "tabs", "webNavigation" ],
+   "short_name": "Sapling",
+   "update_url": "https://clients2.google.com/service/update2/crx",
+   "version": "3.2.3.0",
+   "web_accessible_resources": [ {
+      "matches": [ "\u003Call_urls>" ],
+      "resources": [ "assets/*", "generated/*" ]
+   }, {
+      "matches": [ "*://mail.google.com/*" ],
+      "resources": [ "generated/gmail-module.js", "generated/gmail-listener.js" ]
+   } ]
+}

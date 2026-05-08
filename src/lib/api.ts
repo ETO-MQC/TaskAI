@@ -85,6 +85,38 @@ function normalizeTask(input: TaskInput): Task {
   };
 }
 
+function ensureFallbackTasks(): Task[] {
+  const existing = localStorage.getItem(taskKey);
+  if (existing) return readJson<Task[]>(taskKey, []);
+  const today = localDateKey();
+  const tomorrowDate = new Date();
+  tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+  const seeded = [
+    normalizeTask({
+      title: "Fallback 演示：整理今日计划",
+      description: "纯前端模式下用于验证任务页和日程页 planned_date 同步。",
+      priority: "high",
+      urgency: "urgent",
+      importance: "important",
+      planned_date: today,
+      estimated_duration: 45,
+      tags: ["Fallback", "日程"],
+    }),
+    normalizeTask({
+      title: "Fallback 演示：准备 AI 周报",
+      description: "带 planned_date 的任务会自动出现在日程页对应日期。",
+      priority: "medium",
+      urgency: "not_urgent",
+      importance: "important",
+      planned_date: localDateKey(tomorrowDate),
+      estimated_duration: 90,
+      tags: ["AI", "周报"],
+    }),
+  ];
+  writeJson(taskKey, seeded);
+  return seeded;
+}
+
 class FallbackApi {
   private timer: {
     snapshot: TimerSnapshot;
@@ -97,7 +129,7 @@ class FallbackApi {
   } | null = null;
 
   async list_tasks(): Promise<Task[]> {
-    return readJson<Task[]>(taskKey, []).filter((task) => task.status !== "archived");
+    return ensureFallbackTasks().filter((task) => task.status !== "archived");
   }
 
   async create_task(input: TaskInput): Promise<Task> {

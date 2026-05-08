@@ -1,0 +1,1 @@
+import{C as c}from"./idx.index.COqrbSUj.js";const o=new c,s=({text:e="",color:t="#FFFFFF",backgroundColor:r="#FF1522"})=>{o.setBadgeBackgroundColor({color:r}),o.setBadgeTextColor({color:t}),o.setBadgeText({text:e})},a=()=>{s({text:"",color:"",backgroundColor:""})};export{a as u};

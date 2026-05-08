@@ -1,0 +1,36 @@
+{
+   "action": {
+      "default_title": "千问-你的工作学习助手"
+   },
+   "background": {
+      "service_worker": "background.js",
+      "type": "module"
+   },
+   "content_scripts": [ {
+      "js": [ "content-scripts/content.js" ],
+      "matches": [ "http://*/*", "https://*/*" ]
+   } ],
+   "content_security_policy": {
+      "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; frame-src 'self' https://g.alicdn.com https://dev.g.alicdn.com;"
+   },
+   "description": "实时记录：实时语音识别，AI字幕翻译，智能总结。网课、追剧追番、线上会议必备。阅读助手：总结网页PDF内容、划选解读翻译问答，AI帮你一键速读网页文档。",
+   "host_permissions": [ "https://*/" ],
+   "icons": {
+      "128": "logo128.png",
+      "16": "logo16.png",
+      "48": "logo48.png"
+   },
+   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzLljNhFTPzpGImL5uD9TH9eAqLlrQsrNcbkMTt1/wa2Oit9HiV38oCkwGR5Fl3dSXbuu9z85LmC8kl7kTtNwOlP4L3y2n1C0cDOcMOsITKnIAmtc/20uNynXG23B5ZCOMSNYgNA+RXo0CD71iunnXkQakHSmv4ZMv5BXicTmQqnpblxytJY2cLnQKTtnItD+iVJJ0GCJ+yV1j+/W1Bci6JF5qzVkHmh7Sz8G6rMZuU+vrfSt16q7Nka2gcfzVsPyyG0FFGduF8Snk2ozlSUmqk31XYn92iqBozgdWsi/QlMPnZsTytOg0i5Qexm/6skjkCEGSL9v09FP8+5+2J1LxQIDAQAB",
+   "manifest_version": 3,
+   "name": "千问-语音转文字，实时字幕，划词翻译，网页速读",
+   "permissions": [ "activeTab", "desktopCapture", "storage", "management", "scripting", "offscreen" ],
+   "update_url": "https://edge.microsoft.com/extensionwebstorebase/v1/crx",
+   "version": "1.2.1",
+   "web_accessible_resources": [ {
+      "matches": [ "\u003Call_urls>" ],
+      "resources": [ "loginPointTongyi.svg", "background.svg", "captionButton.svg", "captionButtonActive.svg", "captionButtonHover.svg", "closeLarge.svg", "closeHoverLarge.svg", "closeActiveLarge.svg", "closeSmall.svg", "closeHoverSmall.svg", "closeActiveSmall.svg", "defaultUrl.png", "expandButton.svg", "expandButtonActive.svg", "expandButtonHover.svg", "folderRadioDefault.svg", "folderRadioDisabled.svg", "logo.svg", "logoStartPanelAli.svg", "logoStartPanelTongyi.svg", "logoSlogan.svg", "logo48.png", "marksGuideBlue.svg", "marksGuideRed.svg", "marksGuideYellow.svg", "pauseButton.svg", "pauseButtonActive.svg", "pauseButtonHover.svg", "pauseButtonCaption.svg", "pauseButtonHoverCaption.svg", "restartButton.svg", "restartButtonActive.svg", "restartButtonCaption.svg", "restartButtonHoverCaption.svg", "selectArrow.svg", "selectArrowHover.svg", "selectArrowDisabled.svg", "selectOptionCheck.svg", "selectOptionCheckCaption.svg", "selectRadioActive.svg", "selectRadioDefault.svg", "selectRadioDisabled.svg", "stopButton.svg", "stopButtonActive.svg", "stopButtonHover.svg", "translateSelectArrow.svg", "translateSelectArrowCaption.svg", "warn.svg", "warnHover.svg", "warnLargeHover.svg", "warnRadio.svg", "applaudB.png", "laughB.png", "musicB.png", "networkB.png", "noiseA.png", "noiseC.png", "recordingB.png", "recordingC.png", "stopA.png", "stopB.png", "stopC.png", "tableB.png", "equityNotification.png", "logoTongyi.svg", "freeTips.png", "upgradeModelHeader.png", "computer_line.svg", "false-line.svg", "RTSTT-line.svg", "interpret-line.svg", "star.svg", "error.png", "O1CN01xljQ921q6JxKOu0xe_!!6000000005446-2-tps-640-880.png", "O1CN01nXm4fs1groretepsl_!!6000000004196-55-tps-40-40.svg", "O1CN01Wz64gb1EgXsDit8iP_!!6000000000381-55-tps-40-40.svg", "O1CN01ldj8bs1rCYxXFfisL_!!6000000005595-55-tps-40-40.svg", "O1CN01WrCtbH1YxIg6opcy5_!!6000000003125-55-tps-40-40.svg", "O1CN011DU1171useCUTvkb8_!!6000000006093-55-tps-40-40.svg", "O1CN01BGuiEE1asq395bfiq_!!6000000003386-55-tps-40-40.svg", "O1CN01bvpAJZ1zd8s3qf1O4_!!6000000006736-55-tps-40-40.svg", "O1CN01dwFpxg1kKADoV8ULJ_!!6000000004664-55-tps-40-40.svg", "O1CN01vWFp6Z1GDLrLdIeAZ_!!6000000000588-55-tps-40-40.svg", "O1CN01fvraJU1U8gRUICy9G_!!6000000002473-55-tps-40-40.svg", "O1CN01MXsYxk1z9N7vxeafG_!!6000000006671-55-tps-40-40.svg", "O1CN01mqaz5k1gzbSjkrFAW_!!6000000004213-2-tps-339-339.png", "O1CN01bYk4v01bIU3act9rE_!!6000000003442-2-tps-72-72.png", "O1CN01ZNuOEG253lmJp2lwB_!!6000000007471-55-tps-77-77.svg", "O1CN01OnGoNt1P0N7uFm957_!!6000000001778-2-tps-72-72.png", "O1CN01xu6eUY1doCqJJ8PBl_!!6000000003782-2-tps-72-72.png", "O1CN01Nr2eGK1DzUdHRsv3U_!!6000000000287-2-tps-216-216.png", "O1CN01ZoQ5ff1NUTmKZoPDL_!!6000000001573-2-tps-21760-64.png", "O1CN01coyLMt1tgRpYOVo6l_!!6000000005931-2-tps-21760-64.png", "O1CN01TdrAvV1YI4pJ1sw1o_!!6000000003035-2-tps-21760-64.png", "O1CN017TbJtm1PU8iScxq9N_!!6000000001843-2-tps-21760-64.png", "O1CN01sxNCzg1d0HW58u2E2_!!6000000003673-2-tps-1600-64.png", "O1CN01ieEQeZ1yPZJbrUCDn_!!6000000006571-2-tps-1280-64.png", "O1CN01AV7f1E1kwAtJHELpc_!!6000000004747-2-tps-5760-64.png", "O1CN01e4OwQV1F5H3X0W3rV_!!6000000000435-2-tps-5760-64.png", "O1CN01VncQUl1yMowNciQtc_!!6000000006565-2-tps-1984-64.png", "O1CN01O2W9LQ1XolTfKii1e_!!6000000002971-2-tps-64-64.png", "O1CN01N5DT8y20dsvYx7glW_!!6000000006873-2-tps-1984-64.png", "O1CN011RiVV21tHiRpciuSu_!!6000000005877-2-tps-21760-64.png", "O1CN01VncQUl1yMowNciQtc_!!6000000006565-2-tps-1984-64.png", "O1CN01O2W9LQ1XolTfKii1e_!!6000000002971-2-tps-64-64.png", "O1CN01N5DT8y20dsvYx7glW_!!6000000006873-2-tps-1984-64.png", "O1CN01AV7f1E1kwAtJHELpc_!!6000000004747-2-tps-5760-64.png", "O1CN01sxNCzg1d0HW58u2E2_!!6000000003673-2-tps-1600-64.png", "O1CN01ieEQeZ1yPZJbrUCDn_!!6000000006571-2-tps-1280-64.png", "O1CN01ZoQ5ff1NUTmKZoPDL_!!6000000001573-2-tps-21760-64.png", "O1CN01coyLMt1tgRpYOVo6l_!!6000000005931-2-tps-21760-64.png", "O1CN01TdrAvV1YI4pJ1sw1o_!!6000000003035-2-tps-21760-64.png", "O1CN017TbJtm1PU8iScxq9N_!!6000000001843-2-tps-21760-64.png", "O1CN011RiVV21tHiRpciuSu_!!6000000005877-2-tps-21760-64.png", "O1CN01g487Oj1GsZTvvyE8l_!!6000000000678-2-tps-48-48.png", "O1CN01nXm4fs1groretepsl_!!6000000004196-55-tps-40-40.svg", "O1CN01Wz64gb1EgXsDit8iP_!!6000000000381-55-tps-40-40.svg", "O1CN01ldj8bs1rCYxXFfisL_!!6000000005595-55-tps-40-40.svg", "O1CN01ldj8bs1rCYxXFfisL_!!6000000005595-55-tps-40-40.svg", "O1CN01WrCtbH1YxIg6opcy5_!!6000000003125-55-tps-40-40.svg", "O1CN011DU1171useCUTvkb8_!!6000000006093-55-tps-40-40.svg", "O1CN01BGuiEE1asq395bfiq_!!6000000003386-55-tps-40-40.svg", "O1CN01bvpAJZ1zd8s3qf1O4_!!6000000006736-55-tps-40-40.svg", "O1CN01dwFpxg1kKADoV8ULJ_!!6000000004664-55-tps-40-40.svg", "O1CN01vWFp6Z1GDLrLdIeAZ_!!6000000000588-55-tps-40-40.svg", "O1CN01fvraJU1U8gRUICy9G_!!6000000002473-55-tps-40-40.svg", "O1CN01MXsYxk1z9N7vxeafG_!!6000000006671-55-tps-40-40.svg", "O1CN01khO8o01EAwXZnPWhX_!!6000000000312-2-tps-144-144.png", "O1CN01Sdm1FI1INXriWqtMK_!!6000000000881-54-tps-660-660.apng", "O1CN01srfVnH23SNzXW8Tyy_!!6000000007254-54-tps-660-660.apng", "O1CN01tNP5BR1x1T1oGNlat_!!6000000006383-54-tps-660-660.apng", "O1CN01SsyJGk1GrehRMCOES_!!6000000000676-2-tps-64-64.png", "O1CN01lpG2h51SSG8jrOtTs_!!6000000002245-2-tps-88-88.png", "O1CN01lpG2h51SSG8jrOtTs_!!6000000002245-2-tps-88-88.png", "O1CN01lpG2h51SSG8jrOtTs_!!6000000002245-2-tps-88-88.png", "O1CN01lpG2h51SSG8jrOtTs_!!6000000002245-2-tps-88-88.png", "O1CN01ZeGmKK26aZx29ijKx_!!6000000007678-54-tps-60-60.apng", "O1CN01qPUtnk1KwvitibrhI_!!6000000001229-54-tps-50-50.apng", "O1CN01W8ZUgF28fjfI6MjnY_!!6000000007960-55-tps-58-20.svg", "O1CN01d0zVoE29f6pohTAbI_!!6000000008094-2-tps-450-450.png", "Captionlogo.svg", "DarkCaptionlogo.svg", "offscreen.html", "offscreen.js" ]
+   }, {
+      "matches": [ "http://*/*", "https://*/*" ],
+      "resources": [ "content-scripts/content.css" ]
+   } ]
+}
