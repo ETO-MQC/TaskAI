@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { DragEvent } from "react";
+import type { DragEvent, ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import {
   BarChart3,
@@ -8,6 +8,7 @@ import {
   Check,
   CirclePlay,
   Clock3,
+  ClipboardList,
   LayoutDashboard,
   ListTodo,
   Mic,
@@ -16,6 +17,7 @@ import {
   Plus,
   RotateCcw,
   Settings,
+  Sparkles,
   Sprout,
   Square,
   Trash2,
@@ -43,7 +45,6 @@ import {
   priorityLabel,
   quadrantColors,
   quadrantLabels,
-  timerColors,
 } from "./lib/domain";
 import { api } from "./lib/api";
 
@@ -65,6 +66,19 @@ const emptyDraft = {
   tags: "",
 };
 
+const timerModeColors: Record<TimerMode, { light: string; dark: string; track: string }> = {
+  positive: { light: "#2563EB", dark: "#60A5FA", track: "rgba(96, 165, 250, 0.18)" },
+  pomodoro: { light: "#DC2626", dark: "#F87171", track: "rgba(248, 113, 113, 0.18)" },
+  countdown: { light: "#D97706", dark: "#FBBF24", track: "rgba(251, 191, 36, 0.2)" },
+};
+
+const aiShortcutEventName = "smartfocus_ai_shortcut";
+
+function requestAiInputFocus() {
+  useAppStore.getState().setAiOpen(true);
+  window.setTimeout(() => window.dispatchEvent(new Event(aiShortcutEventName)), 0);
+}
+
 function App() {
   const store = useAppStore();
 
@@ -79,7 +93,7 @@ function App() {
           useAppStore.setState({ timer: event.payload as typeof store.timer });
         });
         unlistenAi = await listen("shortcut_toggle_ai", () => {
-          useAppStore.setState((state) => ({ aiOpen: !state.aiOpen }));
+          requestAiInputFocus();
         });
         unlistenTaskCreated = await listen("task_created", () => {
           useAppStore.getState().load();
@@ -111,6 +125,16 @@ function App() {
       });
     }, 1000);
     return () => window.clearInterval(intervalId);
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!event.ctrlKey || !event.shiftKey || event.key.toLowerCase() !== "a") return;
+      event.preventDefault();
+      requestAiInputFocus();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
   return (
@@ -177,7 +201,13 @@ function Sidebar() {
 }
 
 function WorkbenchView() {
-  const { tasks, timer, stats, records, selectTask, startFocus, setView } = useAppStore();
+  const { tasks, timer, records, selectTask, startFocus, startTimer, pauseTimer, resetTimer, setView, theme } = useAppStore();
+  const [fusionMode, setFusionMode] = useState<"timer" | "calendar">("timer");
+  const [timerDraftMode, setTimerDraftMode] = useState<TimerMode>("positive");
+  const [pomodoroMinutes, setPomodoroMinutes] = useState(25);
+  const [countdownHours, setCountdownHours] = useState(0);
+  const [countdownMinutes, setCountdownMinutes] = useState(30);
+  const [selectedCalendarDate, setSelectedCalendarDate] = useState(dayjs().format("YYYY-MM-DD"));
   const today = dayjs().format("YYYY-MM-DD");
   const activeTasks = tasks
     .filter((task) => task.status !== "archived")
@@ -186,14 +216,54 @@ function WorkbenchView() {
       const plannedB = b.planned_date === today ? 0 : 1;
       return plannedA - plannedB || a.quadrant - b.quadrant || b.sort_order - a.sort_order;
     });
-  const todayTasks = activeTasks.filter((task) => task.status !== "done").slice(0, 6);
+  const todayTasks = activeTasks
+    .filter((task) => task.status !== "done" && (!task.planned_date || task.planned_date === today))
+    .slice(0, 6);
   const plannedToday = tasks.filter((task) => task.planned_date === today && task.status !== "archived");
   const recentRecords = records
     .filter((record) => dayjs(record.started_at).format("YYYY-MM-DD") === today)
     .slice(0, 4);
-  const completionRate = stats?.total_tasks ? Math.round(((stats?.total_tasks ?? 0) - (stats?.open_tasks ?? 0)) / (stats.total_tasks || 1) * 100) : 0;
+  const todayRecords = records.filter((record) => dayjs(record.started_at).format("YYYY-MM-DD") === today);
+  const recordedFocusMinutes = todayRecords.reduce((sum, record) => sum + record.duration, 0);
+  const liveFocusMinutes = timer.active ? timer.elapsed_seconds / 60 : 0;
+  const todayFocusMinutes = recordedFocusMinutes + liveFocusMinutes;
+  const unfinishedCount = tasks.filter((task) => task.status !== "done" && task.status !== "archived").length;
+  const todayTotalTasks = plannedToday.length > 0 ? plannedToday.length : tasks.filter((task) => task.status !== "archived").length;
+  const todayDoneTasks = (plannedToday.length > 0 ? plannedToday : tasks).filter((task) => task.status === "done").length;
+  const completionRate = todayTotalTasks > 0 ? Math.round((todayDoneTasks / todayTotalTasks) * 100) : 0;
   const displaySeconds =
     timer.mode === "positive" || !timer.remaining_seconds ? timer.elapsed_seconds : timer.remaining_seconds;
+  const focusTopic = todayTasks[0]?.title ?? "自由专注";
+  const timerMode = timer.active ? (timer.mode ?? "positive") : timerDraftMode;
+  const timerColor = timerModeColors[timerMode][theme];
+  const timerTrack = timerModeColors[timerMode].track;
+  const draftTargetSeconds =
+    timerDraftMode === "positive"
+      ? null
+      : timerDraftMode === "pomodoro"
+        ? pomodoroMinutes * 60
+        : Math.max(60, (countdownHours * 60 + countdownMinutes) * 60);
+  const timerTarget = timer.target_seconds ?? draftTargetSeconds ?? Math.max(3600, timer.elapsed_seconds || 3600);
+  const timerProgress =
+    timerMode === "positive"
+      ? Math.min(100, (timer.elapsed_seconds / timerTarget) * 100)
+      : Math.min(100, ((timerTarget - (timer.remaining_seconds ?? timerTarget)) / timerTarget) * 100);
+  const visibleTimerProgress = timer.active ? Math.max(timerProgress, 1.5) : 6;
+  const gardenProgress = Math.min(100, Math.round(todayFocusMinutes / 240 * 100));
+  const calendarMonth = dayjs(selectedCalendarDate).startOf("month");
+  const calendarDays = useMemo(
+    () => Array.from({ length: 35 }, (_, index) => calendarMonth.startOf("week").add(index, "day")),
+    [calendarMonth],
+  );
+  const selectedCalendarTasks = tasks.filter((task) => task.planned_date === selectedCalendarDate && task.status !== "archived");
+  const startWorkbenchTimer = () => {
+    startTimer({
+      topic: focusTopic,
+      mode: timerDraftMode,
+      task_id: todayTasks[0]?.id ?? null,
+      target_seconds: draftTargetSeconds,
+    });
+  };
 
   return (
     <section className="workbench-grid min-h-0 flex-1">
@@ -201,14 +271,14 @@ function WorkbenchView() {
         <div className="command-stream min-w-0">
           <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
             <div>
-              <p className="text-xs uppercase tracking-[0.2em] text-slate-400">AI Agent Command Stream</p>
-              <h1 className="mt-1 text-2xl font-semibold text-white md:text-3xl">今天想怎么安排？</h1>
+              <p className="card-kicker"><Sparkles size={15} /> AI Agent Command Stream</p>
+              <h1 className="mt-1 text-2xl font-semibold text-slate-950 dark:text-white md:text-3xl">今天想怎么安排？</h1>
             </div>
             <button className="btn-secondary gap-2" onClick={() => setView("tasks")}>
               <Plus size={16} /> 手动创建
             </button>
           </div>
-          <div className="h-[180px] min-h-0 xl:h-[220px]">
+          <div className="ai-panel-frame h-[300px] max-h-[300px] min-h-0">
             <AiPanel embedded />
           </div>
         </div>
@@ -217,10 +287,11 @@ function WorkbenchView() {
           <section className="second-gen-panel min-w-0">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
-                <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Today Stack</p>
-                <h2 className="text-lg font-semibold text-white">今日待办</h2>
+                <p className="card-kicker"><ClipboardList size={15} /> Today Stack</p>
+                <h2 className="card-title">今日待办</h2>
               </div>
-              <button className="text-sm text-slate-400 transition hover:text-white" onClick={() => setView("tasks")}>
+              <button className="btn-secondary gap-2" onClick={() => setView("tasks")}>
+                <ListTodo size={15} />
                 查看任务
               </button>
             </div>
@@ -245,8 +316,8 @@ function WorkbenchView() {
                 >
                   <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: quadrantColors[task.quadrant] }} />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-semibold text-white">{task.title}</span>
-                    <span className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-400">
+                    <span className="task-title block truncate text-sm font-semibold text-slate-950 dark:text-white">{task.title}</span>
+                    <span className="task-meta mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
                       <span>Q{task.quadrant} {quadrantLabels[task.quadrant]}</span>
                       <span>{task.deadline ? dayjs(task.deadline).format("MM-DD HH:mm") : "无截止"}</span>
                       <span>{task.estimated_duration ? formatMinutes(task.estimated_duration) : "未估时"}</span>
@@ -272,38 +343,169 @@ function WorkbenchView() {
             </div>
           </section>
 
-          <section className="second-gen-panel min-w-0">
-            <div className="mb-3 flex items-center justify-between gap-3">
+          <section className="second-gen-panel fusion-panel min-w-0">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <div>
-                <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Timeline + Timer</p>
-                <h2 className="text-lg font-semibold text-white">日历计时融合视图</h2>
+                <p className="card-kicker"><Clock3 size={15} /> Timeline + Timer</p>
+                <h2 className="card-title">日历计时融合视图</h2>
               </div>
-              <button className="text-sm text-slate-400 transition hover:text-white" onClick={() => setView("calendar")}>
-                查看日程
-              </button>
+              <div className="fusion-tabs" role="tablist" aria-label="日历计时融合视图模式">
+                <button className={fusionMode === "timer" ? "active" : ""} onClick={() => setFusionMode("timer")} type="button">
+                  ⏱️ 计时
+                </button>
+                <button className={fusionMode === "calendar" ? "active" : ""} onClick={() => setFusionMode("calendar")} type="button">
+                  📅 日历
+                </button>
+              </div>
             </div>
-            <div className="grid gap-3 lg:grid-cols-[180px_minmax(0,1fr)]">
-              <MiniPlanRing planned={plannedToday.length} records={recentRecords.length} minutes={stats?.today_minutes ?? 0} />
-              <div className="grid gap-3">
-                <div className="rounded-lg border border-white/10 bg-slate-950/35 p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-sm text-slate-400">Active Timer</span>
-                    <button className="text-sm text-slate-400 transition hover:text-white" onClick={() => setView("timer")}>
-                      打开计时
-                    </button>
-                  </div>
-                  <div className="mt-3 font-mono text-3xl font-semibold text-white">{formatSeconds(displaySeconds)}</div>
-                  <p className="mt-1 truncate text-sm text-slate-400">{timer.active ? timer.topic : "等待开始专注"}</p>
-                </div>
-                <div className="grid gap-2">
-                  {plannedToday.slice(0, 3).map((task) => (
-                    <div key={task.id} className="flex min-w-0 items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm">
-                      <span className="h-2 w-2 rounded-full" style={{ background: quadrantColors[task.quadrant] }} />
-                      <span className="min-w-0 flex-1 truncate text-slate-200">{task.title}</span>
-                      <span className="shrink-0 text-xs text-slate-500">{task.estimated_duration ? formatMinutes(task.estimated_duration) : "未估时"}</span>
+
+            <div className="fusion-stage">
+              <div className={`fusion-pane ${fusionMode === "timer" ? "active" : "inactive-left"}`}>
+                <div className="fusion-timer-layout">
+                  <div className="grid justify-items-center gap-4">
+                    <div
+                      className="workbench-timer-ring workbench-timer-ring-large"
+                      style={{
+                        background: `conic-gradient(${timerColor} ${visibleTimerProgress * 3.6}deg, ${timerTrack} 0deg)`,
+                        borderColor: `${timerColor}55`,
+                        boxShadow: `inset 0 0 0 1px rgba(148, 163, 184, 0.18), 0 0 0 5px ${timerColor}14`,
+                      }}
+                    >
+                      <div className="workbench-timer-ring-inner workbench-timer-ring-inner-large">
+                        <span>{formatSeconds(timer.active ? displaySeconds : timerDraftMode === "positive" ? 0 : timerTarget)}</span>
+                      </div>
                     </div>
-                  ))}
-                  {plannedToday.length === 0 && <p className="rounded-lg border border-dashed border-white/10 p-3 text-sm text-slate-500">今日暂无计划任务。</p>}
+                    <div className="timer-mode-switch" aria-label="计时模式">
+                      {(["positive", "pomodoro", "countdown"] as TimerMode[]).map((item) => (
+                        <button
+                          key={item}
+                          className={timerDraftMode === item ? "active" : ""}
+                          disabled={timer.active}
+                          onClick={() => setTimerDraftMode(item)}
+                          type="button"
+                        >
+                          {modeLabel(item)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="fusion-timer-controls">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-500 dark:text-slate-400">当前主题</p>
+                      <h3 className="mt-1 truncate text-xl font-bold text-slate-950 dark:text-white">
+                        {timer.active ? timer.topic : focusTopic}
+                      </h3>
+                    </div>
+
+                    <div className="timer-param-panel">
+                      {timerDraftMode === "positive" && (
+                        <p>正计时无需设置时长，点击开始后自动向上计时，结束时保存本次专注记录。</p>
+                      )}
+                      {timerDraftMode === "pomodoro" && (
+                        <div>
+                          <p>番茄钟专注时长</p>
+                          <div className="timer-preset-row">
+                            {[15, 25, 30, 45, 60].map((value) => (
+                              <button
+                                key={value}
+                                className={pomodoroMinutes === value ? "active" : ""}
+                                disabled={timer.active}
+                                onClick={() => setPomodoroMinutes(value)}
+                                type="button"
+                              >
+                                {value}m
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {timerDraftMode === "countdown" && (
+                        <div>
+                          <p>倒计时结束后停止并进入记录流程</p>
+                          <div className="timer-duration-inputs">
+                            <label>
+                              小时
+                              <input value={countdownHours} min={0} max={12} disabled={timer.active} onChange={(event) => setCountdownHours(Math.max(0, Number(event.target.value) || 0))} type="number" />
+                            </label>
+                            <label>
+                              分钟
+                              <input value={countdownMinutes} min={1} max={59} disabled={timer.active} onChange={(event) => setCountdownMinutes(Math.max(1, Number(event.target.value) || 1))} type="number" />
+                            </label>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex flex-wrap gap-3">
+                      {!timer.active ? (
+                        <button className="btn-primary gap-2" onClick={startWorkbenchTimer}>
+                          <Play size={17} /> 开始
+                        </button>
+                      ) : (
+                        <button className="btn-primary gap-2" onClick={pauseTimer}>
+                          {timer.paused ? <Play size={17} /> : <Pause size={17} />} {timer.paused ? "继续" : "暂停"}
+                        </button>
+                      )}
+                      <button className="btn-secondary gap-2" onClick={resetTimer}>
+                        <RotateCcw size={17} /> 重置
+                      </button>
+                      <button className="btn-secondary gap-2" onClick={() => setView("timer")}>
+                        <Clock3 size={17} /> 完整计时页
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className={`fusion-pane ${fusionMode === "calendar" ? "active" : "inactive-right"}`}>
+                <div className="fusion-calendar-layout">
+                  <div className="fusion-calendar-header">
+                    <button type="button" onClick={() => setSelectedCalendarDate(dayjs(selectedCalendarDate).subtract(1, "month").format("YYYY-MM-DD"))}>‹</button>
+                    <strong>{calendarMonth.format("YYYY 年 MM 月")}</strong>
+                    <button type="button" onClick={() => setSelectedCalendarDate(dayjs(selectedCalendarDate).add(1, "month").format("YYYY-MM-DD"))}>›</button>
+                  </div>
+                  <div className="fusion-calendar-grid">
+                    {["日", "一", "二", "三", "四", "五", "六"].map((day) => (
+                      <span key={day} className="fusion-weekday">{day}</span>
+                    ))}
+                    {calendarDays.map((day) => {
+                      const key = day.format("YYYY-MM-DD");
+                      const dayItems = tasks.filter((task) => task.planned_date === key && task.status !== "archived");
+                      const isSelected = key === selectedCalendarDate;
+                      const isMuted = day.month() !== calendarMonth.month();
+                      return (
+                        <button
+                          key={key}
+                          className={`fusion-calendar-day ${isSelected ? "selected" : ""} ${isMuted ? "muted" : ""}`}
+                          onClick={() => setSelectedCalendarDate(key)}
+                          type="button"
+                        >
+                          <span>{day.date()}</span>
+                          <span className="fusion-day-dots">
+                            {dayItems.slice(0, 3).map((task) => (
+                              <i key={task.id} style={{ background: quadrantColors[task.quadrant] }} />
+                            ))}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="fusion-day-tasks">
+                    <div className="flex items-center justify-between gap-3">
+                      <strong>{dayjs(selectedCalendarDate).format("MM 月 DD 日")}</strong>
+                      <span>{selectedCalendarTasks.length} 项</span>
+                    </div>
+                    <div className="mt-3 grid gap-2">
+                      {selectedCalendarTasks.map((task) => (
+                        <button key={task.id} className="fusion-day-task" onClick={() => { selectTask(task.id); setView("tasks"); }} type="button">
+                          <i style={{ background: quadrantColors[task.quadrant] }} />
+                          <span>{task.title}</span>
+                        </button>
+                      ))}
+                      {selectedCalendarTasks.length === 0 && <p className="rounded-lg border border-dashed border-slate-300/60 p-3 text-sm text-slate-500 dark:border-white/10 dark:text-slate-400">这一天还没有计划任务。</p>}
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -313,47 +515,41 @@ function WorkbenchView() {
 
       <aside className="workbench-side min-w-0">
         <section className="second-gen-panel">
-          <div className="flex items-center gap-2 text-slate-400">
-            <Sprout size={17} />
-            <span className="text-xs uppercase tracking-[0.18em]">Focus Garden</span>
+          <div className="flex items-center gap-2">
+            <p className="card-kicker"><Sprout size={15} /> Focus Garden</p>
           </div>
-          <div className="mt-4 flex items-end justify-between gap-4">
-            <div>
-              <div className="text-3xl font-semibold text-white">{Math.min(100, Math.round((stats?.today_minutes ?? 0) / 240 * 100))}%</div>
-              <p className="mt-1 text-sm text-slate-400">plant stage</p>
-            </div>
-            <div className="garden-sprout" aria-hidden="true">
-              <span />
-            </div>
-          </div>
-          <p className="mt-4 text-sm text-slate-500">今日专注会推动花园成长；完整奖励系统留到 Sprint 13。</p>
-        </section>
-
-        <section className="second-gen-panel">
-          <div className="mb-3 flex items-center gap-2 text-slate-400">
-            <BarChart3 size={17} />
-            <span className="text-xs uppercase tracking-[0.18em]">Quick Stats</span>
-          </div>
-          <div className="grid gap-2">
-            <SignalRow label="今日专注" value={formatMinutes(stats?.today_minutes ?? 0)} />
-            <SignalRow label="完成率" value={`${completionRate}%`} />
-            <SignalRow label="未完成" value={`${stats?.open_tasks ?? 0} 项`} />
-            <SignalRow label="今日计时" value={`${stats?.today_timer_count ?? 0} 次`} />
+          <div className="mt-4 grid justify-items-center gap-3 text-center">
+            <GardenPlant progress={gardenProgress} />
+            <div className="text-3xl font-semibold text-slate-950 dark:text-white">{gardenProgress}%</div>
+            <p className="text-sm text-slate-500 dark:text-slate-400">
+              {gardenProgress === 0 ? "播下一颗专注种子，开始第一段计时。" : "专注正在生长，继续保持今天的节奏。"}
+            </p>
           </div>
         </section>
 
         <section className="second-gen-panel">
-          <div className="mb-3 flex items-center gap-2 text-slate-400">
-            <Trophy size={17} />
-            <span className="text-xs uppercase tracking-[0.18em]">Achievements</span>
+          <div className="mb-4 flex items-center gap-2">
+            <p className="card-kicker"><BarChart3 size={15} /> Quick Stats</p>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <SignalRow icon={<Clock3 size={18} />} label="今日专注" value={formatMinutes(todayFocusMinutes)} />
+            <SignalRow icon={<Check size={18} />} label="完成率" value={`${completionRate}%`} />
+            <SignalRow icon={<ClipboardList size={18} />} label="未完成" value={`${unfinishedCount} 项`} />
+            <SignalRow icon={<BarChart3 size={18} />} label="今日计时" value={`${todayRecords.length} 次`} />
+          </div>
+        </section>
+
+        <section className="second-gen-panel">
+          <div className="mb-3 flex items-center gap-2">
+            <p className="card-kicker"><Trophy size={15} /> Achievements</p>
           </div>
           <div className="rounded-lg border border-white/10 bg-white/5 p-3">
             <div className="flex items-center justify-between text-sm">
               <span className="text-slate-200">深度专注者</span>
-              <span className="text-slate-500">{Math.min(4, stats?.today_timer_count ?? 0)}/4</span>
+              <span className="text-slate-500">{Math.min(4, todayRecords.length)}/4</span>
             </div>
             <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/10">
-              <div className="h-full rounded-full bg-blue-400" style={{ width: `${Math.min(100, ((stats?.today_timer_count ?? 0) / 4) * 100)}%` }} />
+              <div className="h-full rounded-full bg-blue-400" style={{ width: `${Math.min(100, (todayRecords.length / 4) * 100)}%` }} />
             </div>
           </div>
         </section>
@@ -366,14 +562,14 @@ function MiniPlanRing({ planned, records, minutes }: { planned: number; records:
   const plannedPct = Math.min(100, planned * 16);
   const actualPct = Math.min(100, (minutes / 360) * 100);
   return (
-    <div className="grid place-items-center rounded-lg border border-white/10 bg-slate-950/35 p-4">
+    <div className="mini-plan-ring grid place-items-center rounded-lg p-4">
       <div
         className="grid h-36 w-36 place-items-center rounded-full"
         style={{
           background: `conic-gradient(#60A5FA ${actualPct * 3.6}deg, rgba(245,158,11,.55) 0deg ${Math.max(actualPct, plannedPct) * 3.6}deg, rgba(255,255,255,.08) 0deg)`,
         }}
       >
-        <div className="grid h-28 w-28 place-items-center rounded-full bg-[#0B0F17] text-center">
+        <div className="mini-plan-ring-core grid h-28 w-28 place-items-center rounded-full text-center">
           <div>
             <div className="text-2xl font-semibold text-white">{records}</div>
             <div className="text-xs text-slate-500">records</div>
@@ -385,11 +581,45 @@ function MiniPlanRing({ planned, records, minutes }: { planned: number; records:
   );
 }
 
-function SignalRow({ label, value }: { label: string; value: string }) {
+function GardenPlant({ progress }: { progress: number }) {
+  const isSeed = progress === 0;
+  const isFlower = progress >= 60;
   return (
-    <div className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm">
-      <span className="text-slate-400">{label}</span>
-      <span className="font-medium text-white">{value}</span>
+    <svg className="garden-svg" viewBox="0 0 120 120" role="img" aria-label="Focus Garden">
+      <circle cx="60" cy="60" r="48" className="garden-svg-bg" />
+      {isSeed ? (
+        <>
+          <ellipse cx="60" cy="72" rx="14" ry="10" className="garden-seed" />
+          <path d="M46 82c10 8 24 8 34 0" className="garden-soil" />
+        </>
+      ) : (
+        <>
+          <path d="M60 88V50" className="garden-stem" />
+          <path d="M60 66c-20-4-27-17-24-28 17 1 25 11 24 28Z" className="garden-leaf" />
+          <path d="M61 74c21-6 28-19 25-31-18 1-27 13-25 31Z" className="garden-leaf garden-leaf-2" />
+          {isFlower && (
+            <>
+              <circle cx="60" cy="42" r="9" className="garden-flower-core" />
+              <circle cx="60" cy="28" r="8" className="garden-flower" />
+              <circle cx="74" cy="42" r="8" className="garden-flower" />
+              <circle cx="60" cy="56" r="8" className="garden-flower" />
+              <circle cx="46" cy="42" r="8" className="garden-flower" />
+            </>
+          )}
+        </>
+      )}
+    </svg>
+  );
+}
+
+function SignalRow({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
+  return (
+    <div className="signal-card">
+      <span className="signal-icon">{icon}</span>
+      <span className="min-w-0">
+        <span className="block text-xs text-slate-500 dark:text-slate-400">{label}</span>
+        <span className="mt-1 block truncate text-base font-semibold text-slate-950 dark:text-white">{value}</span>
+      </span>
     </div>
   );
 }
@@ -512,7 +742,7 @@ function TaskRow({ task, onSelect }: { task: Task; onSelect: () => void }) {
         >
           <Check size={16} />
         </button>
-        <strong className={done ? "task-done min-w-0 flex-1" : "min-w-0 flex-1"}>{task.title}</strong>
+        <strong className={done ? "task-title task-done min-w-0 flex-1" : "task-title min-w-0 flex-1"}>{task.title}</strong>
         <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs dark:bg-white/10">{priorityLabel(task.priority)}</span>
       </div>
       <div className="mt-2 flex items-center justify-between gap-2 text-xs opacity-70">
@@ -602,7 +832,7 @@ function TaskDetail({ task }: { task: Task | null }) {
 }
 
 function TimerView() {
-  const { timer, startTimer, pauseTimer, resetTimer, stopTimer } = useAppStore();
+  const { timer, startTimer, pauseTimer, resetTimer, stopTimer, theme } = useAppStore();
   const [mode, setMode] = useState<TimerMode>("pomodoro");
   const [topic, setTopic] = useState("自由专注");
   const [minutes, setMinutes] = useState("25");
@@ -632,10 +862,13 @@ function TimerView() {
     if (useAppStore.getState().timer.active) return;
     useAppStore.setState({ timer: idleTimerForMode(mode) });
   }, [mode, minutes]);
-  const color = timerColors[timer.mode ?? mode];
+  const currentMode = timer.mode ?? mode;
+  const color = timerModeColors[currentMode][theme];
+  const trackColor = timerModeColors[currentMode].track;
   const elapsed = timer.elapsed_seconds;
   const target = timer.target_seconds ?? (mode === "positive" ? Math.max(3600, elapsed || 3600) : Number(minutes) * 60);
   const progress = timer.mode === "positive" ? Math.min(100, (elapsed / target) * 100) : Math.min(100, ((target - (timer.remaining_seconds ?? target)) / target) * 100);
+  const visibleProgress = timer.active ? Math.max(progress, 1.5) : 6;
   const displaySeconds = timer.mode === "positive" || !timer.remaining_seconds ? elapsed : timer.remaining_seconds;
 
   return (
@@ -657,7 +890,8 @@ function TimerView() {
           <div
             className={`relative grid h-72 w-72 place-items-center rounded-full ${timer.paused ? "outline-dashed outline-2 outline-offset-4" : ""}`}
             style={{
-              background: `conic-gradient(${color} ${progress * 3.6}deg, rgba(148,163,184,.22) 0deg)`,
+              background: `conic-gradient(${color} ${visibleProgress * 3.6}deg, ${trackColor} 0deg)`,
+              border: `1px solid ${color}55`,
               boxShadow: timer.mode === "pomodoro" ? `0 0 38px ${color}55` : "none",
             }}
           >
@@ -1008,7 +1242,13 @@ function AiPanel({ embedded = false }: { embedded?: boolean }) {
   const { aiMessages, setAiOpen, sendAi } = useAppStore();
   const [input, setInput] = useState("");
   const [listening, setListening] = useState(false);
+  const [speechNotice, setSpeechNotice] = useState("");
   const streamBuffer = useRef("");
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const shortcutSpeechTimer = useRef<number | null>(null);
+  const speechNoticeTimer = useRef<number | null>(null);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -1034,40 +1274,106 @@ function AiPanel({ embedded = false }: { embedded?: boolean }) {
     return () => unlisten?.();
   }, []);
 
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    list.scrollTop = list.scrollHeight;
+  }, [aiMessages]);
+
+  useEffect(() => {
+    const onShortcut = () => {
+      if (embedded && useAppStore.getState().aiOpen) return;
+      inputRef.current?.focus();
+      if (shortcutSpeechTimer.current) window.clearTimeout(shortcutSpeechTimer.current);
+      shortcutSpeechTimer.current = window.setTimeout(() => startSpeech(), 200);
+    };
+    window.addEventListener(aiShortcutEventName, onShortcut);
+    return () => {
+      window.removeEventListener(aiShortcutEventName, onShortcut);
+      if (shortcutSpeechTimer.current) window.clearTimeout(shortcutSpeechTimer.current);
+      if (speechNoticeTimer.current) window.clearTimeout(speechNoticeTimer.current);
+    };
+  }, [embedded]);
+
+  function resetSpeechState() {
+    setListening(false);
+    recognitionRef.current = null;
+  }
+
+  function showSpeechNotice(message: string) {
+    setSpeechNotice(message);
+    if (speechNoticeTimer.current) window.clearTimeout(speechNoticeTimer.current);
+    speechNoticeTimer.current = window.setTimeout(() => setSpeechNotice(""), 1600);
+  }
+
   function startSpeech() {
+    if (listening || recognitionRef.current) return;
     const SpeechRecognition =
       (window as unknown as { SpeechRecognition?: typeof window.SpeechRecognition; webkitSpeechRecognition?: typeof window.SpeechRecognition }).SpeechRecognition ||
       (window as unknown as { webkitSpeechRecognition?: typeof window.SpeechRecognition }).webkitSpeechRecognition;
-    if (!SpeechRecognition) return;
+    if (!SpeechRecognition) {
+      window.alert("当前浏览器不支持语音识别，请使用 Chrome 或 Edge");
+      return;
+    }
     const recognition = new SpeechRecognition();
+    setSpeechNotice("");
+    recognitionRef.current = recognition;
     recognition.lang = "zh-CN";
     recognition.onstart = () => setListening(true);
-    recognition.onend = () => setListening(false);
+    recognition.onend = resetSpeechState;
+    recognition.onerror = () => {
+      setInput("语音识别失败，请手动输入");
+      resetSpeechState();
+    };
     recognition.onresult = (event) => {
       const text = event.results[0]?.[0]?.transcript ?? "";
-      setInput(text);
-      if (text) sendAi(text);
+      const message = text.trim();
+      if (!message) {
+        showSpeechNotice("未听到声音，请重试");
+        return;
+      }
+      setInput(message);
+      sendAi(message);
     };
-    recognition.start();
+    try {
+      recognition.start();
+    } catch {
+      setInput("语音识别失败，请手动输入");
+      resetSpeechState();
+    }
   }
 
   return (
-    <div className={embedded ? "h-full min-h-0" : "fixed inset-0 z-30 flex items-end justify-end bg-slate-950/25 p-2 sm:p-6"} onClick={() => !embedded && setAiOpen(false)}>
-      <aside className={`${embedded ? "ai-command-panel" : "glass"} flex min-w-0 flex-col rounded-lg p-4 ${embedded ? "h-full w-full" : "h-[min(620px,calc(100vh-16px))] w-full max-w-[420px]"}`} onClick={(event) => event.stopPropagation()}>
+    <div className={embedded ? "ai-panel-host h-full min-h-0 overflow-hidden" : "fixed inset-0 z-30 flex items-end justify-end bg-slate-950/25 p-2 sm:p-6"} onClick={() => !embedded && setAiOpen(false)}>
+      <aside className={`${embedded ? "ai-command-panel ai-command-panel-embedded" : "glass"} flex min-w-0 flex-col overflow-hidden rounded-lg p-4 ${embedded ? "h-full max-h-[300px] w-full" : "h-[min(620px,calc(100vh-16px))] w-full max-w-[420px]"}`} onClick={(event) => event.stopPropagation()}>
         <div className="mb-3 flex items-center justify-between">
           <h2 className="font-semibold">AI助手</h2>
           {!embedded && <button className="icon-btn" onClick={() => setAiOpen(false)}>×</button>}
         </div>
-        <div className="min-h-0 flex-1 space-y-3 overflow-auto">
-          {aiMessages.map((message, index) => (
-            <div key={index} className={`rounded-lg p-3 text-sm ${message.role === "user" ? "ml-12 bg-blue-600 text-white" : "mr-12 bg-white/70 dark:bg-slate-950/40"}`}>
-              {message.content}
-              {message.clarification && <div className="mt-2 rounded bg-amber-100 p-2 text-amber-900">{message.clarification}</div>}
+        <div ref={listRef} className="ai-message-list min-h-0 flex-1 space-y-3 overflow-y-auto overflow-x-hidden pr-1">
+          {aiMessages.length === 0 ? (
+            <div className="ai-guide-message">
+              <span className="ai-guide-avatar"><Sparkles size={18} /></span>
+              <span>今天想怎么安排？告诉我你想创建什么任务、开始什么计时。</span>
             </div>
-          ))}
+          ) : (
+            aiMessages.map((message, index) => (
+              <div
+                key={index}
+                className={`rounded-lg p-3 text-sm leading-6 ${
+                  message.role === "user"
+                    ? "ml-8 bg-indigo-500 text-white"
+                    : "mr-8 border border-slate-200 bg-white text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-slate-100"
+                }`}
+              >
+                {message.content || (message.role === "assistant" ? "正在思考..." : "")}
+                {message.clarification && <div className="mt-2 rounded bg-amber-100 p-2 text-amber-900">{message.clarification}</div>}
+              </div>
+            ))
+          )}
         </div>
         <form
-          className="mt-3 grid grid-cols-[auto_1fr_auto] gap-2"
+          className="ai-input-bar mt-3 grid shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] gap-2"
           onSubmit={(event) => {
             event.preventDefault();
             if (!input.trim()) return;
@@ -1075,10 +1381,16 @@ function AiPanel({ embedded = false }: { embedded?: boolean }) {
             setInput("");
           }}
         >
-          <button className={`icon-btn ${listening ? "bg-red-500 text-white" : ""}`} type="button" onClick={startSpeech} title="语音输入">
+          <button
+            className={`icon-btn ai-voice-button ${listening ? "ai-voice-button-listening animate-pulse" : ""}`}
+            type="button"
+            onClick={startSpeech}
+            title={listening ? "正在听…" : speechNotice || "语音输入"}
+          >
             <Mic size={18} />
+            {(listening || speechNotice) && <span>{listening ? "正在听…" : speechNotice}</span>}
           </button>
-          <input className="field" value={input} onChange={(e) => setInput(e.target.value)} placeholder="输入或语音描述任务" />
+          <input ref={inputRef} className="field" value={input} onChange={(e) => setInput(e.target.value)} placeholder="输入或语音描述你想做的事..." />
           <button className="btn-primary" type="submit">发送</button>
         </form>
       </aside>

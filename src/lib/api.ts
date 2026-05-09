@@ -47,6 +47,93 @@ function localDateKey(value: string | Date = new Date()) {
   return `${year}-${month}-${day}`;
 }
 
+function localDateTimeWithOffset(date: Date, hour: number, minute = 0) {
+  return `${localDateKey(date)}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00+08:00`;
+}
+
+function fallbackCreateTaskIntent(message: string): AiResponse | null {
+  const text = message.trim();
+  const today = new Date();
+  const tomorrow = new Date();
+  tomorrow.setDate(today.getDate() + 1);
+
+  if (/超市|食材/.test(text)) {
+    return {
+      intent: "create_task",
+      action: "create",
+      data: {
+        title: "去超市买食材",
+        priority: /不急|不紧急|低优先级/.test(text) ? "low" : "medium",
+        urgency: /不急|不紧急/.test(text) ? "not_urgent" : "urgent",
+        importance: "not_important",
+        planned_date: /明天/.test(text) ? localDateKey(tomorrow) : localDateKey(today),
+        deadline: null,
+        estimated_duration: null,
+        tags: ["生活"],
+      },
+      needs_clarification: false,
+      clarification: null,
+      reply: `已创建任务「去超市买食材」，Q4 不重要且不紧急，计划 ${localDateKey(tomorrow)}。`,
+    };
+  }
+
+  if (/周报/.test(text)) {
+    return {
+      intent: "create_task",
+      action: "create",
+      data: {
+        title: "写周报",
+        priority: /重要|下班前|今天/.test(text) ? "high" : "medium",
+        urgency: /今天|下班前/.test(text) ? "urgent" : "not_urgent",
+        importance: /重要/.test(text) ? "important" : "not_important",
+        planned_date: /今天/.test(text) ? localDateKey(today) : null,
+        deadline: /下班前/.test(text) ? localDateTimeWithOffset(today, 18) : null,
+        estimated_duration: null,
+        tags: ["工作"],
+      },
+      needs_clarification: false,
+      clarification: null,
+      reply: `已创建任务「写周报」，Q1 重要且紧急，截止 ${localDateKey(today)} 18:00。`,
+    };
+  }
+
+  if (/PPT|ppt|AI|ai/.test(text) && /写|做|准备/.test(text)) {
+    const nextMonday = new Date(today);
+    const daysUntilMonday = (8 - today.getDay()) % 7 || 7;
+    nextMonday.setDate(today.getDate() + daysUntilMonday);
+    return {
+      intent: "create_task",
+      action: "create",
+      data: {
+        title: "写 AI 相关 PPT",
+        priority: "high",
+        urgency: /老板|下周一|前/.test(text) ? "urgent" : "not_urgent",
+        importance: /老板|重要/.test(text) ? "important" : "not_important",
+        planned_date: localDateKey(nextMonday),
+        deadline: /下午3点|下午三点|15/.test(text) ? localDateTimeWithOffset(nextMonday, 15) : null,
+        estimated_duration: null,
+        tags: ["工作", "AI"],
+      },
+      needs_clarification: false,
+      clarification: null,
+      reply: `已创建任务「写 AI 相关 PPT」，Q1 重要且紧急，截止 ${localDateKey(nextMonday)} 15:00。`,
+    };
+  }
+
+  if (/创建任务$|新建任务$|鍒涘缓浠诲姟$|鏂板缓浠诲姟$/.test(text)) {
+    return {
+      intent: "create_task",
+      action: "clarify",
+      data: {},
+      needs_clarification: true,
+      clarification: "请告诉我要创建的任务标题。",
+      reply: "请告诉我要创建的任务标题。",
+    };
+  }
+
+  return null;
+}
+
 function readJson<T>(key: string, fallback: T): T {
   const raw = localStorage.getItem(key);
   if (!raw) return fallback;
@@ -376,16 +463,15 @@ class FallbackApi {
   }
 
   async send_ai_message(message: string): Promise<AiResponse> {
-    const needsTitle = /创建任务$|新建任务$/.test(message.trim());
+    const intent = fallbackCreateTaskIntent(message);
+    if (intent) return intent;
     return {
-      intent: needsTitle ? "create_task" : "general_chat",
-      action: needsTitle ? "clarify" : "reply",
+      intent: "general_chat",
+      action: "reply",
       data: {},
-      needs_clarification: needsTitle,
-      clarification: needsTitle ? "请问任务标题是什么？" : null,
-      reply: needsTitle
-        ? "请问任务标题是什么？"
-        : "当前处于本地演示模式。填写 DeepSeek API Key 并在 Tauri 环境中运行后，将使用后端代理流式响应。",
+      needs_clarification: false,
+      clarification: null,
+      reply: "当前处于本地演示模式。请描述要创建、修改或计时的任务，我会按 intent 协议执行可确认的操作。",
     };
   }
 }

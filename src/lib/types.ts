@@ -70,6 +70,10 @@ export interface AiResponse {
   needs_clarification: boolean;
   clarification: string | null;
   reply: string;
+  executed?: boolean;
+  created_tasks?: Task[];
+  updated_task?: Task;
+  timer?: TimerSnapshot;
 }
 
 export interface DashboardStats {

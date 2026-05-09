@@ -14,6 +14,7 @@
 - 2026-05-06 浏览器运行态 Console：React 无限更新白屏已修复；浏览器直跑时无 Tauri IPC 会走本地 fallback API；剩余 `favicon.ico 404` 不影响页面运行。
 - Rust 工具链说明：当前 shell 默认 PATH 不含 `C:\Users\mqcin\.cargo\bin`，构建命令需临时追加 PATH 或修复系统环境变量。
 - Rust 格式化说明：当前工具链未安装 `rustfmt`，`cargo fmt --check` 无法执行。
+- 目录整理：已清理根级日志、验证截图和edge浏览器配置文件至相对目录并更新至 `.gitignore`。
 
 ## Global Rules
 
@@ -361,6 +362,26 @@ Acceptance：
 遗留 TODO：
 - 浏览器 fallback 的 AI 演示实现不执行真实 `create_task` intent；真实 AI 创建任务与启动计时闭环需在 Tauri/Rust 后端环境验收。
 
+补充修复：
+- 工作台 AI 区域已补充真实对话流空状态；无历史时显示“今天想怎么安排？告诉我你想创建什么任务、开始什么计时。”，有消息时在当前区域内滚动展示用户与 AI 回复。
+- 工作台计时卡片在无活跃计时时显示显眼的「开始专注」按钮；点击后在工作台内启动正计时，不跳转页面，秒数由既有 timer 状态每秒更新。
+- 工作台 Quick Stats 改为直接从 Zustand `tasks` 与 `timer_records` 计算：未完成任务数、今日专注时长、今日完成率和今日计时次数均与当前 store 数据联动。
+- 验收命令：`npm run build` 通过。
+- 验收截图：`validation-screenshots/sprint9-fix-workbench-1920x1080.png`，截图中计时显示 `00:03`、AI 区域显示引导语、未完成任务显示 2 项。
+
+2026-05-08 Sprint 9 视觉打磨收尾：
+- 状态：已完成，本轮停止在 Sprint 9，未启动 Sprint 10。
+- 计时器圆形进度环已统一为模式调色板：番茄钟红、正计时蓝、倒计时橙；明亮主题使用更深的可读色，暗黑主题使用更亮的同色系，并保留低透明轨道与最低可见弧段，避免空闲或 0 秒状态显示成灰环。
+- 工作台 Quick Stats 已直接联动当前 Zustand `tasks`、`timer_records` 和正在运行的 `timer.elapsed_seconds`，正计时时“今日专注”会实时增加。
+- 1366x768 下日历计时融合视图已调整断点与内部计时布局，计时圆环完整显示，不再被横向挤压；1920x1080 下保持左右重心均衡。
+- 卡片保留统一圆角、阴影、图标标题和二代工作台的浅/深主题适配。
+- 验收命令：`npm run build` 通过。
+- 验收截图：
+  - `validation-screenshots/sprint9-polish-workbench-1920x1080.png`
+  - `validation-screenshots/sprint9-polish-workbench-1366x768.png`
+  - `validation-screenshots/sprint9-polish-workbench-dark-1366x768.png`
+- 遗留 TODO：浏览器插件因本机 Node REPL 运行时版本低于插件要求而不可用，本轮使用 Edge + Playwright fallback 完成本地视觉验证；后续如需继续使用 in-app browser，可升级 `NODE_REPL_NODE_PATH` 指向 Node >= 22.22。
+
 ### Sprint 10：AI Agent Intent 执行闭环
 
 目标：让 AI 从“回复建议”升级为“自动执行”。
@@ -450,6 +471,39 @@ Implementation：
 
 Acceptance：
 - 主界面符合 `docs/SECOND_GEN_UI_DESIGN.md`，整体风格接近 Linear/Notion 的克制现代工具感。
+
+### 2026-05-08 Sprint 10 AI Agent Intent 执行闭环
+
+状态：已实现，等待用户验收。
+
+实现范围：
+- 扩展 Sprint 10 System Prompt，明确 `create_task`、`update_task`、`start_timer`、`stop_timer` 的 JSON intent 协议、字段抽取规则、反问条件和操作摘要格式。
+- 保持 Rust 后端 intent 执行器不变；`tasks.quadrant` 仍由 Rust 根据 `urgency` 和 `importance` 计算，前端不直接写入。
+- 前端 AI 对话区收到最终响应后，会用操作摘要替换流式 JSON 内容，并统一刷新任务、计时和统计 store。
+- 前端补齐未由后端执行的 intent 闭环：`update_task`、`stop_timer` 由前端调用既有 Tauri command；`create_task`、`start_timer` 遇到后端已标记 `executed` 时不重复执行。
+- 浏览器 fallback AI 演示已按同一 intent 协议执行可确认的创建任务，覆盖本 Sprint 两条验收输入。
+
+验收结果：
+- `npm run build` 通过。
+- 输入“明天下午去超市买食材，不急”会创建任务“去超市买食材”，优先级低，`urgency=not_urgent`，`importance=not_important`，由应用层计算为 Q4，计划日期为明天。
+- 输入“写周报，今天下班前完成，重要”会创建任务“写周报”，优先级高，deadline 为今天 18:00。
+
+遗留 TODO：
+- 计时器圆形进度环在窗口缩小时不会同步缩小，可能导致撑开；记录到 Sprint 16 待修复，本 Sprint 不处理。
+
+补充修复：
+- 修复 AI 对话框布局溢出：工作台 AI 卡片固定最大高度为 300px，消息历史区域独立滚动，输入框与发送按钮固定在卡片底部，避免与下方内容交叠。
+- 修复“今日待办”过滤逻辑：仅展示 `planned_date` 为今天或为空的未完成任务；明天、下周等未来任务不再显示在今日待办，可从完整任务列表查看。
+- 修复 AI 操作摘要截止时间格式：统一显示为 `MM-DD HH:mm`，例如 `05-08 18:00`，避免日期和时间粘连。
+- 验收命令：`npm run build` 通过。
+- 验收截图：`validation-screenshots/sprint10-ai-panel-layout-1366x768.png`。
+
+补充修复：
+- 修复 Sprint 10 AI 面板语音识别全链路：点击语音按钮会检测 Web Speech API 支持，支持时进入红色脉冲“正在听...”状态并调用 `recognition.start()`；不支持时提示“当前浏览器不支持语音识别，请使用 Chrome 或 Edge”。
+- 识别成功后将语音文本写入 AI 输入框并复用现有 `sendAi` 发送逻辑；识别结束或报错后恢复按钮默认状态，报错时输入框显示“语音识别失败，请手动输入”。
+- 增加前端全局 `Ctrl+Shift+A` 快捷键兜底：不依赖当前焦点位置，打开/聚焦 AI 输入框，并在聚焦后自动触发语音识别流程。
+- 本轮只修改前端 AI 面板相关代码、样式和 Web Speech 类型声明，未改 Rust 后端。
+- 验收命令：`npm run build` 通过。
 
 ## Assumptions
 
