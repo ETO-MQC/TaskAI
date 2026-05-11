@@ -1,8 +1,10 @@
 # Dependencies
 node_modules/
 
-# Build outputs
+# Frontend build output
 dist/
+
+# Rust/Tauri build output
 src-tauri/target/
 src-tauri/gen/schemas/
 
@@ -19,18 +21,20 @@ pnpm-debug.log*
 .env.*
 !.env.example
 
-# Database and runtime state
+# Local databases and runtime state
 *.db
 *.db-*
 *.sqlite
 *.sqlite3
 
-# Test and validation outputs
+# Test, validation, and temporary files
 coverage/
 .nyc_output/
 validation-screenshots/
 .edge-validation-*/
 temp_edge_profiles/
+tmp/
+temp/
 
 # Editor and OS files
 .vscode/
@@ -39,7 +43,3 @@ temp_edge_profiles/
 *.swo
 .DS_Store
 Thumbs.db
-
-# Temporary files
-tmp/
-temp/
