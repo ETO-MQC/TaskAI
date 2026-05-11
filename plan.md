@@ -513,3 +513,26 @@ Acceptance：
 - DeepSeek API Key、API Base URL、Model 通过设置页保存。
 - 首版核心功能必须离线可用，AI 功能联网时才启用。
 - 不执行任何批量删除或递归删除；如需批量清理文件，停止并让用户手动处理。
+
+### 2026-05-10 SmartFocus 工作台参考设计系统适配
+
+状态：已完成，等待用户验收。
+实现范围：
+- 已逐项读取 `design-reference/styles.css`、`button.tsx`、`card.tsx`、`badge.tsx`、`progress.tsx`、`input.tsx`、`scroll-area.tsx`、`dialog.tsx`、`tooltip.tsx`，提取暗色 aurora 背景、玻璃卡片、霓虹 token、按钮/输入/标签/进度/滚动/弹窗提示视觉语言。
+- 已将参考设计 token 以 SmartFocus 专用 `--sf-*` CSS 变量合并到 `src/styles.css`，并映射到现有 `.second-gen-*`、`.workbench-*`、`.field`、`.btn-*`、`.signal-card` 等工作台样式。
+- 工作台布局、侧边栏导航数量、AI intent、Zustand store、Rust 后端和计时核心逻辑均未改动。
+- 已补充任务优先级标签、成就进度条、计时器呼吸发光、卡片 hover 上浮、深浅主题适配和滚动条视觉。
+验收结果：
+- `npm run build` 通过。
+TODO：
+- 等待用户按参考图进行视觉验收；如需继续精修，仅调整样式层。
+
+### 2026-05-12 AI 专注工作台白屏与视觉自查修复
+
+状态：已完成，等待用户验收。
+实现范围：修复 `src/App.tsx` 中工作台入口缺失导致的 `WorkbenchView is not defined` 白屏；重构首屏为 `plan.md` Sprint 9 规定的 AI Command Stream、Today Stack、Timeline + Timer、Focus Garden、Quick Stats、Achievements 四区工作台；保持 Zustand store、Tauri `timer_tick` 监听、AI stream 监听、计时器后端接口和任务 CRUD 调用不变。
+视觉适配：按 `src/styles.css` 新设计系统落地深色极光背景、半透明毛玻璃卡片、紫色霓虹按钮、三色渐变计时圆环、内部液体动画、优先级发光点、花园 SVG 发光、统计霓虹色块和成就 shimmer 进度条。
+验收结果：`npm run build` 通过；使用 Edge headless 验证 `http://127.0.0.1:1420/` 在 1366x768 与 1920x1080 可正常渲染，截图已保存：
+- `validation-screenshots/codex-workbench-check-final4-1366x768.png`
+- `validation-screenshots/codex-workbench-check-final-1920x1080.png`
+遗留说明：构建仍提示 `@custom-variant` / `@theme` 为 Tailwind v4 at-rule，当前项目构建链仍能通过；本轮已避免依赖 `--color-background`，改为直接使用 `--background` / `--foreground`，解决白底洗淡问题。
