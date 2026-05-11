@@ -205,31 +205,33 @@ function WorkbenchView() {
     timer.mode === "positive" || !timer.remaining_seconds ? timer.elapsed_seconds : timer.remaining_seconds;
 
   return (
-    <section className="relative grid h-full min-h-0 grid-cols-1 gap-5 xl:grid-cols-[minmax(760px,1fr)_minmax(360px,0.42fr)]">
-      <div className="grid min-h-0 grid-rows-[minmax(330px,0.78fr)_minmax(390px,1.22fr)] gap-5">
-        <section className="glass-card flex min-h-0 flex-col overflow-hidden p-7">
-          <div className="mb-6 flex items-start justify-between gap-4">
+    <section className="grid h-full min-h-0 grid-cols-1 gap-4 overflow-hidden xl:grid-cols-[minmax(760px,1fr)_minmax(340px,0.38fr)]">
+      <div className="grid min-h-0 grid-rows-[minmax(300px,0.38fr)_minmax(420px,0.62fr)] gap-4 overflow-hidden">
+        <section className="glass-card flex min-h-0 flex-col overflow-hidden p-5">
+          <div className="mb-4 flex shrink-0 items-start justify-between gap-4">
             <div>
               <p className="section-label flex items-center gap-2">
                 <Sparkles size={15} /> AI Agent Command Stream
               </p>
-              <h1 className="mt-6 text-[34px] font-bold leading-tight tracking-normal text-white">
+              <h1 className="mt-4 text-3xl font-bold tracking-normal text-white">
                 今天想怎么<span className="neon-text">编排?</span>
               </h1>
               <p className="mt-3 text-sm text-[var(--muted-foreground)]">
                 告诉我你想推进什么，我会拆解任务、安排专注时段并启动计时。
               </p>
             </div>
-            <button className="glass-inset shrink-0 px-5 py-2.5 text-sm [transition:var(--transition-smooth)] hover:text-[var(--neon-violet)]" onClick={() => setView("tasks")}>
+            <button className="glass-inset shrink-0 px-4 py-2 text-sm [transition:var(--transition-smooth)] hover:text-[var(--neon-violet)]" onClick={() => setView("tasks")}>
               手动创建
             </button>
           </div>
-          <AiPanel embedded />
+          <div className="min-h-0 flex-1">
+            <AiPanel embedded />
+          </div>
         </section>
 
-        <div className="grid min-h-0 gap-5 lg:grid-cols-[minmax(300px,0.41fr)_minmax(480px,0.59fr)]">
-          <section className="glass-card min-h-0 overflow-auto p-6">
-            <div className="mb-5 flex items-center justify-between">
+        <div className="grid min-h-0 gap-4 overflow-hidden lg:grid-cols-[minmax(300px,0.42fr)_minmax(440px,0.58fr)]">
+          <section className="glass-card flex min-h-0 flex-col overflow-hidden p-5">
+            <div className="mb-4 flex shrink-0 items-center justify-between">
               <div>
                 <p className="section-label flex items-center gap-2">
                   <ListTodo size={15} /> Today Stack
@@ -240,7 +242,7 @@ function WorkbenchView() {
                 查看任务 →
               </button>
             </div>
-            <div className="space-y-3">
+            <div className="min-h-0 flex-1 space-y-3 overflow-auto pr-1">
               {todayTasks.map((task) => (
                 <button
                   key={task.id}
@@ -276,8 +278,8 @@ function WorkbenchView() {
             </div>
           </section>
 
-          <section className="glass-card flex min-h-0 flex-col overflow-hidden p-6">
-            <div className="mb-5 flex items-center justify-between">
+          <section className="glass-card min-h-0 overflow-hidden p-5">
+            <div className="mb-4 flex shrink-0 items-center justify-between">
               <div>
                 <p className="section-label flex items-center gap-2">
                   <Clock3 size={15} /> Timeline + Timer
@@ -291,7 +293,7 @@ function WorkbenchView() {
                 </button>
               </div>
             </div>
-            <div className="grid min-h-0 flex-1 items-center gap-7 md:grid-cols-[minmax(270px,0.52fr)_minmax(270px,0.48fr)]">
+            <div className="grid min-h-0 items-center gap-6 md:grid-cols-[minmax(260px,0.52fr)_minmax(240px,0.48fr)]">
               <TimerOrb compact seconds={timer.active ? displaySeconds : 0} progress={timer.active ? Math.max(4, (timer.elapsed_seconds / Math.max(timer.target_seconds ?? 3600, 1)) * 100) : 8} />
               <div className="min-w-0 space-y-5">
                 <div>
@@ -350,8 +352,8 @@ function WorkbenchView() {
         </div>
       </div>
 
-      <aside className="grid min-h-0 grid-rows-[minmax(235px,0.33fr)_minmax(270px,0.35fr)_minmax(240px,0.32fr)] gap-5 overflow-hidden">
-        <section className="glass-card overflow-hidden p-6 text-center">
+      <aside className="grid min-h-0 grid-rows-[minmax(190px,0.28fr)_minmax(230px,0.34fr)_minmax(220px,0.38fr)] gap-4 overflow-hidden">
+        <section className="glass-card min-h-0 overflow-hidden p-4 text-center">
           <p className="section-label flex items-center gap-2 text-left">
             <Sprout size={15} /> Focus Garden
           </p>
@@ -363,29 +365,28 @@ function WorkbenchView() {
           <div className="neon-text mt-4 text-4xl font-bold">{gardenProgress}%</div>
           <p className="mt-2 text-xs text-[var(--muted-foreground)]">播下一颗专注种子，开始第一段计时。</p>
         </section>
-        <section className="glass-card overflow-hidden p-6">
+        <section className="glass-card min-h-0 overflow-hidden p-4">
           <p className="section-label flex items-center gap-2">
             <BarChart3 size={15} /> Quick Stats
           </p>
-          <div className="mt-5 grid grid-cols-2 gap-4">
+          <div className="mt-4 grid min-h-0 grid-cols-2 gap-3 overflow-auto pr-1">
             <MiniStat label="今日专注" value={formatSeconds(focusSeconds)} tone="blue" />
             <MiniStat label="完成率" value={`${completionRate}%`} tone="violet" />
             <MiniStat label="未完成" value={`${activeTasks.filter((task) => task.status !== "done").length} 项`} tone="pink" />
             <MiniStat label="今日计时" value={`${todayRecords.length + (timer.active ? 1 : 0)} 次`} tone="amber" />
           </div>
         </section>
-        <section className="glass-card overflow-hidden p-6">
+        <section className="glass-card min-h-0 overflow-hidden p-4">
           <p className="section-label flex items-center gap-2">
             <Trophy size={15} /> Achievements
           </p>
-          <div className="mt-4 space-y-3">
+          <div className="mt-3 min-h-0 space-y-2 overflow-auto pr-1">
             <Achievement label="深度专注者" current={Math.min(4, Math.floor(focusSeconds / 1800))} total={4} />
             <Achievement label="晨型选手" current={Math.min(5, doneToday)} total={5} />
             <Achievement label="连续 7 天" current={Math.min(7, todayRecords.length)} total={7} />
           </div>
         </section>
       </aside>
-      <div className="workbench-handle" aria-hidden />
     </section>
   );
 }
@@ -445,7 +446,7 @@ function AiPanel({ embedded = false }: { embedded?: boolean }) {
 
   const panel = (
     <aside
-      className={`${embedded ? "flex min-h-0 flex-1 flex-col gap-4" : "glass-card flex h-[min(620px,calc(100vh-32px))] w-[min(420px,calc(100vw-24px))] flex-col p-4"}`}
+      className={`${embedded ? "flex min-h-0 flex-1 flex-col" : "glass-card flex h-[min(620px,calc(100vh-32px))] w-[min(420px,calc(100vw-24px))] flex-col p-4"}`}
       onClick={(event) => event.stopPropagation()}
     >
       {!embedded && (
@@ -456,7 +457,7 @@ function AiPanel({ embedded = false }: { embedded?: boolean }) {
           </button>
         </div>
       )}
-      <div ref={listRef} className="min-h-[118px] flex-1 space-y-3 overflow-auto pr-1">
+      <div ref={listRef} className="min-h-0 flex-1 space-y-3 overflow-auto pr-1">
         {aiMessages.length === 0 ? (
           <div className="glass-inset flex min-h-[104px] items-center gap-4 p-5 text-sm leading-7">
             <span className="inline-grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[var(--neon-blue)] text-[var(--background)] shadow-[0_0_26px_var(--neon-blue)]">
@@ -474,7 +475,7 @@ function AiPanel({ embedded = false }: { embedded?: boolean }) {
         )}
       </div>
       <form
-        className="grid shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] gap-3 rounded-[var(--radius-2xl)] border border-white/10 bg-black/20 p-2 shadow-[inset_0_1px_0_oklch(1_0_0_/_0.05)]"
+        className="mt-3 grid shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] gap-2"
         onSubmit={(event) => {
           event.preventDefault();
           if (!input.trim()) return;
@@ -482,11 +483,11 @@ function AiPanel({ embedded = false }: { embedded?: boolean }) {
           setInput("");
         }}
       >
-        <button className={`grid h-11 w-11 place-items-center rounded-full border border-white/10 text-[var(--muted-foreground)] [transition:var(--transition-smooth)] hover:text-[var(--neon-violet)] ${listening ? "text-[var(--neon-pink)] shadow-[var(--shadow-glow-violet)]" : ""}`} type="button" onClick={startSpeech} title="语音输入">
+        <button className={`grid h-10 w-10 place-items-center rounded-full border border-white/10 text-[var(--muted-foreground)] [transition:var(--transition-smooth)] hover:text-[var(--neon-violet)] ${listening ? "text-[var(--neon-pink)] shadow-[var(--shadow-glow-violet)]" : ""}`} type="button" onClick={startSpeech} title="语音输入">
           <Mic size={18} />
         </button>
-        <input className="min-w-0 rounded-xl bg-transparent px-3 py-2 text-sm outline-none [transition:var(--transition-smooth)] placeholder:text-[var(--muted-foreground)] focus:text-white" value={input} onChange={(e) => setInput(e.target.value)} placeholder="输入或语音描述你想做的事..." />
-        <button className="btn-glow grid h-11 w-16 place-items-center rounded-xl text-sm font-semibold" type="submit" title="发送">
+        <input className="glass-inset min-w-0 px-3 py-2 text-sm outline-none [transition:var(--transition-smooth)] focus:border-[var(--ring)]" value={input} onChange={(e) => setInput(e.target.value)} placeholder="输入或语音描述你想做的事..." />
+        <button className="btn-glow grid h-10 w-12 place-items-center rounded-xl text-sm font-semibold" type="submit" title="发送">
           <Send size={17} />
         </button>
       </form>
