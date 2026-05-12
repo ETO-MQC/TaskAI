@@ -57,9 +57,9 @@
 
   /* Gradients & shadows */
   --gradient-aurora:
-    radial-gradient(1100px 560px at 92% 2%, oklch(0.78 0.13 242 / 0.24), transparent 68%),
-    radial-gradient(760px 440px at 8% 96%, oklch(0.78 0.1 238 / 0.14), transparent 72%),
-    radial-gradient(860px 480px at 54% 82%, oklch(0.82 0.12 318 / 0.14), transparent 72%),
+    radial-gradient(980px 540px at 94% 0%, oklch(0.66 0.18 276 / 0.22), transparent 62%),
+    radial-gradient(780px 460px at 18% 8%, oklch(0.68 0.12 244 / 0.08), transparent 72%),
+    radial-gradient(840px 480px at 50% 100%, oklch(0.7 0.16 318 / 0.1), transparent 76%),
     linear-gradient(180deg, oklch(0.985 0.008 275), oklch(0.94 0.016 275));
   --gradient-violet: linear-gradient(135deg, oklch(0.7 0.24 295), oklch(0.6 0.22 260));
   --gradient-ring: conic-gradient(from 220deg, oklch(0.7 0.24 295), oklch(0.72 0.2 240), oklch(0.72 0.26 350), oklch(0.7 0.24 295));
@@ -81,8 +81,8 @@
   --sidebar-ring: oklch(0.7 0.24 295 / 60%);
 
   --glass-card-bg:
-    linear-gradient(180deg, oklch(1 0 0 / 0.78), oklch(1 0 0 / 0.52) 48%, oklch(0.93 0.018 275 / 0.36)),
-    radial-gradient(720px 260px at 50% -18%, oklch(0.78 0.12 285 / 0.2), transparent 72%);
+    radial-gradient(520px 240px at 88% -12%, oklch(0.74 0.18 282 / 0.16), transparent 68%),
+    linear-gradient(180deg, oklch(1 0 0 / 0.58), oklch(0.98 0.012 282 / 0.42) 48%, oklch(0.92 0.018 275 / 0.34));
   --glass-card-border: oklch(0.22 0.025 270 / 0.12);
   --glass-card-border-hover: oklch(0.22 0.025 270 / 0.18);
   --glass-inset-bg: linear-gradient(180deg, oklch(1 0 0 / 0.6), oklch(1 0 0 / 0.34));
@@ -147,9 +147,9 @@
   --border: oklch(1 0 0 / 8%);
   --input: oklch(1 0 0 / 10%);
   --gradient-aurora:
-    radial-gradient(1220px 620px at 92% 0%, oklch(0.52 0.18 242 / 0.32), transparent 68%),
-    radial-gradient(840px 480px at 4% 104%, oklch(0.48 0.16 238 / 0.18), transparent 72%),
-    radial-gradient(980px 540px at 52% 88%, oklch(0.5 0.2 318 / 0.2), transparent 72%),
+    radial-gradient(1160px 620px at 94% -2%, oklch(0.54 0.22 276 / 0.36), transparent 60%),
+    radial-gradient(820px 480px at 12% 6%, oklch(0.46 0.17 244 / 0.14), transparent 74%),
+    radial-gradient(960px 540px at 52% 102%, oklch(0.48 0.2 318 / 0.14), transparent 76%),
     linear-gradient(180deg, oklch(0.145 0.023 270), oklch(0.102 0.018 270));
   --shadow-soft: 0 1px 0 oklch(1 0 0 / 6%) inset, 0 18px 50px -24px oklch(0 0 0 / 0.72), 0 0 42px -34px oklch(0.7 0.24 295 / 0.9);
   --shadow-elevated: 0 1px 0 oklch(1 0 0 / 8%) inset, 0 28px 70px -26px oklch(0 0 0 / 0.74), 0 0 58px -34px oklch(0.7 0.24 295 / 0.9);
@@ -160,8 +160,8 @@
   --sidebar-accent-foreground: oklch(0.96 0.005 260);
   --sidebar-border: oklch(1 0 0 / 8%);
   --glass-card-bg:
-    linear-gradient(180deg, oklch(1 0 0 / 0.105), oklch(1 0 0 / 0.04) 46%, oklch(0 0 0 / 0.065)),
-    radial-gradient(760px 280px at 50% -22%, oklch(0.64 0.2 285 / 0.18), transparent 72%);
+    radial-gradient(560px 260px at 88% -12%, oklch(0.57 0.22 282 / 0.16), transparent 68%),
+    linear-gradient(180deg, oklch(0.28 0.035 276 / 0.38), oklch(0.19 0.026 270 / 0.28) 48%, oklch(0.08 0.018 270 / 0.18));
   --glass-card-border: oklch(1 0 0 / 0.1);
   --glass-card-border-hover: oklch(1 0 0 / 0.16);
   --glass-inset-bg: linear-gradient(180deg, oklch(1 0 0 / 0.058), oklch(1 0 0 / 0.022));
@@ -219,9 +219,9 @@
     z-index: -1;
     content: "";
     background:
-      radial-gradient(860px 460px at 88% 6%, oklch(0.64 0.18 246 / 0.16), transparent 74%),
-      radial-gradient(700px 420px at 8% 96%, oklch(0.6 0.14 238 / 0.1), transparent 76%),
-      radial-gradient(760px 420px at 54% 84%, oklch(0.62 0.2 318 / 0.11), transparent 76%);
+      radial-gradient(760px 420px at 92% 4%, oklch(0.56 0.22 276 / 0.18), transparent 66%),
+      radial-gradient(640px 380px at 16% 8%, oklch(0.48 0.16 246 / 0.08), transparent 76%),
+      radial-gradient(780px 460px at 56% 96%, oklch(0.5 0.2 318 / 0.075), transparent 78%);
     pointer-events: none;
   }
 }
@@ -340,10 +340,13 @@
     border-radius: inherit;
     content: "";
     pointer-events: none;
-    box-shadow: inset 0 1px 0 var(--glass-inner-line), inset 0 -1px 0 var(--glass-inner-lowlight);
+    box-shadow:
+      inset 0 1px 0 var(--glass-inner-line),
+      inset -1px 0 0 oklch(0.66 0.22 282 / 0.08),
+      inset 0 -1px 0 var(--glass-inner-lowlight);
     background:
-      linear-gradient(180deg, oklch(1 0 0 / 0.045), transparent 30%),
-      radial-gradient(420px 120px at 50% 0%, oklch(1 0 0 / 0.055), transparent 72%);
+      radial-gradient(420px 150px at 88% 0%, oklch(0.66 0.22 282 / 0.075), transparent 70%),
+      radial-gradient(320px 120px at 72% 10%, oklch(0.58 0.16 244 / 0.045), transparent 74%);
   }
   .glass-card::after {
     position: absolute;
@@ -353,10 +356,33 @@
     content: "";
     pointer-events: none;
     background:
-      linear-gradient(180deg, oklch(1 0 0 / 0.05), transparent 24%),
-      radial-gradient(340px 80px at 50% 0%, oklch(1 0 0 / 0.09), transparent 74%);
-    opacity: 0.86;
+      radial-gradient(340px 100px at 86% 0%, oklch(0.66 0.22 282 / 0.105), transparent 72%),
+      radial-gradient(220px 80px at 96% 12%, oklch(0.62 0.18 246 / 0.075), transparent 78%);
+    opacity: 0.78;
     mix-blend-mode: screen;
+  }
+  [data-ui-region="ai-command"]::before {
+    box-shadow:
+      inset 0 1px 0 oklch(0.72 0.2 286 / 0.18),
+      inset -1px 0 0 oklch(0.68 0.22 276 / 0.16),
+      inset 0 -1px 0 var(--glass-inner-lowlight);
+    background:
+      radial-gradient(760px 300px at 92% -8%, oklch(0.66 0.24 286 / 0.18), transparent 60%),
+      radial-gradient(500px 220px at 78% 10%, oklch(0.54 0.18 246 / 0.09), transparent 72%);
+  }
+  [data-ui-region="ai-command"]::after {
+    background:
+      radial-gradient(620px 240px at 91% -6%, oklch(0.68 0.25 286 / 0.24), transparent 58%),
+      radial-gradient(360px 160px at 78% 12%, oklch(0.58 0.18 246 / 0.1), transparent 74%);
+    opacity: 0.9;
+  }
+  [data-ui-region="focus-garden"]::after,
+  [data-ui-region="quick-stats"]::after,
+  [data-ui-region="achievements"]::after {
+    background:
+      radial-gradient(280px 100px at 88% 0%, oklch(0.62 0.2 286 / 0.075), transparent 74%),
+      radial-gradient(180px 80px at 96% 16%, oklch(0.54 0.16 246 / 0.04), transparent 80%);
+    opacity: 0.68;
   }
   .glass-card > * {
     position: relative;
