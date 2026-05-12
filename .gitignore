@@ -33,6 +33,7 @@ coverage/
 validation-screenshots/
 .edge-validation-*/
 temp_edge_profiles/
+.codex-edge-profile/
 tmp/
 temp/
 

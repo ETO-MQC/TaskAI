@@ -128,10 +128,10 @@ function App() {
   }, []);
 
   return (
-    <div className="h-screen min-w-[320px] overflow-x-auto overflow-y-hidden p-3 text-[var(--foreground)] md:p-4">
-      <div className="flex h-full min-w-[320px] gap-3 md:gap-4">
+    <div className="min-h-screen min-w-[320px] overflow-x-auto overflow-y-auto p-3 text-[var(--foreground)] md:p-4 xl:h-screen xl:overflow-hidden">
+      <div className="flex min-h-[calc(100vh-1.5rem)] min-w-[320px] gap-3 md:min-h-[calc(100vh-2rem)] md:gap-4 xl:h-full xl:min-h-0">
         <Sidebar />
-        <main className="min-w-[320px] flex-1 overflow-hidden">
+        <main className="min-w-[320px] flex-1 overflow-visible xl:overflow-hidden">
           {store.view === "workbench" && <WorkbenchView />}
           {store.view === "tasks" && <TasksView />}
           {store.view === "timer" && <TimerView />}
@@ -187,6 +187,8 @@ function Sidebar() {
 function WorkbenchView() {
   const { tasks, timer, records, selectTask, startFocus, startTimer, pauseTimer, resetTimer, stopTimer, setView } = useAppStore();
   const [timerMode, setTimerMode] = useState<TimerMode>("positive");
+  const [centerPanel, setCenterPanel] = useState<"timer" | "calendar">("timer");
+  const [selectedWorkbenchDate, setSelectedWorkbenchDate] = useState(dayjs().format("YYYY-MM-DD"));
   const today = dayjs().format("YYYY-MM-DD");
   const activeTasks = tasks.filter((task) => task.status !== "archived");
   const todayTasks = activeTasks
@@ -203,11 +205,44 @@ function WorkbenchView() {
   const currentTopic = timer.topic || todayTasks[0]?.title || "自由专注";
   const displaySeconds =
     timer.mode === "positive" || !timer.remaining_seconds ? timer.elapsed_seconds : timer.remaining_seconds;
+  const workbenchDate = dayjs(selectedWorkbenchDate);
+  const workbenchWeekDays = useMemo(() => Array.from({ length: 7 }, (_, index) => dayjs().startOf("week").add(index, "day")), []);
+  const selectedWorkbenchTasks = activeTasks.filter((task) => task.planned_date === selectedWorkbenchDate);
+  const taskDotColor = (task: Task) => `var(--prio-p${task.quadrant})`;
+
+  useEffect(() => {
+    const checkUiOverlap = () => {
+      const nodes = [...document.querySelectorAll("[data-ui-region]")];
+      const rects = nodes.map((node) => ({
+        name: node.getAttribute("data-ui-region"),
+        rect: node.getBoundingClientRect(),
+      }));
+
+      for (let i = 0; i < rects.length; i++) {
+        for (let j = i + 1; j < rects.length; j++) {
+          const a = rects[i];
+          const b = rects[j];
+          const overlap =
+            a.rect.left < b.rect.right &&
+            a.rect.right > b.rect.left &&
+            a.rect.top < b.rect.bottom &&
+            a.rect.bottom > b.rect.top;
+
+          if (overlap) {
+            console.warn("UI OVERLAP:", a.name, b.name, a.rect, b.rect);
+          }
+        }
+      }
+    };
+
+    (window as typeof window & { checkUiOverlap?: () => void }).checkUiOverlap = checkUiOverlap;
+    window.setTimeout(checkUiOverlap, 0);
+  }, [centerPanel, tasks.length, timer.active, timer.elapsed_seconds]);
 
   return (
-    <section className="grid h-full min-h-0 grid-cols-1 gap-4 overflow-hidden xl:grid-cols-[minmax(760px,1fr)_minmax(340px,0.38fr)]">
-      <div className="grid min-h-0 grid-rows-[minmax(300px,0.38fr)_minmax(420px,0.62fr)] gap-4 overflow-hidden">
-        <section className="glass-card flex min-h-0 flex-col overflow-hidden p-5">
+    <section className="flex min-h-0 flex-col gap-4 overflow-visible xl:h-full xl:grid xl:grid-cols-[minmax(720px,0.72fr)_minmax(320px,0.28fr)] xl:overflow-hidden">
+      <div className="grid min-h-0 gap-4 overflow-visible xl:h-full xl:grid-rows-[minmax(240px,0.35fr)_minmax(420px,0.65fr)] xl:overflow-hidden">
+        <section data-ui-region="ai-command" className="glass-card flex min-h-[300px] flex-col overflow-hidden p-5 xl:min-h-0">
           <div className="mb-4 flex shrink-0 items-start justify-between gap-4">
             <div>
               <p className="section-label flex items-center gap-2">
@@ -229,8 +264,8 @@ function WorkbenchView() {
           </div>
         </section>
 
-        <div className="grid min-h-0 gap-4 overflow-hidden lg:grid-cols-[minmax(300px,0.42fr)_minmax(440px,0.58fr)]">
-          <section className="glass-card flex min-h-0 flex-col overflow-hidden p-5">
+        <div className="grid min-h-0 gap-4 overflow-visible lg:grid-cols-[minmax(300px,0.4fr)_minmax(440px,0.6fr)] xl:overflow-hidden">
+          <section data-ui-region="today-stack" className="glass-card flex min-h-[360px] flex-col overflow-hidden p-5 xl:min-h-0">
             <div className="mb-4 flex shrink-0 items-center justify-between">
               <div>
                 <p className="section-label flex items-center gap-2">
@@ -246,7 +281,7 @@ function WorkbenchView() {
               {todayTasks.map((task) => (
                 <button
                   key={task.id}
-                  className="glass-inset flex w-full items-center gap-3 p-3 text-left [transition:var(--transition-smooth)] hover:border-[var(--ring)]"
+                  className="glass-inset interactive-card flex w-full items-center gap-3 p-3 text-left hover:border-[var(--ring)]"
                   onClick={() => {
                     selectTask(task.id);
                     setView("tasks");
@@ -278,7 +313,7 @@ function WorkbenchView() {
             </div>
           </section>
 
-          <section className="glass-card min-h-0 overflow-hidden p-5">
+          <section data-ui-region="timeline-timer" className="glass-card flex min-h-[430px] flex-col overflow-hidden p-5 xl:min-h-0">
             <div className="mb-4 flex shrink-0 items-center justify-between">
               <div>
                 <p className="section-label flex items-center gap-2">
@@ -286,16 +321,19 @@ function WorkbenchView() {
                 </p>
                 <h2 className="mt-3 text-2xl font-bold">日历计时融合视图</h2>
               </div>
-              <div className="glass-inset flex shrink-0 p-1 text-sm">
+              <div className="glass-inset flex shrink-0 p-1 text-sm" onClick={() => setCenterPanel("timer")}>
                 <button className="btn-glow rounded-lg px-4 py-1.5 font-medium">计时</button>
-                <button className="rounded-lg px-4 py-1.5 text-[var(--muted-foreground)] [transition:var(--transition-smooth)] hover:text-[var(--neon-blue)]" onClick={() => setView("calendar")}>
+                <button className={`rounded-lg px-4 py-1.5 [transition:var(--transition-smooth)] ${centerPanel === "calendar" ? "btn-glow font-medium" : "text-[var(--muted-foreground)] hover:text-[var(--neon-blue)]"}`} onClick={(event) => { event.stopPropagation(); setCenterPanel("calendar"); }}>
                   日历
                 </button>
               </div>
             </div>
-            <div className="grid min-h-0 items-center gap-6 md:grid-cols-[minmax(260px,0.52fr)_minmax(240px,0.48fr)]">
-              <TimerOrb compact seconds={timer.active ? displaySeconds : 0} progress={timer.active ? Math.max(4, (timer.elapsed_seconds / Math.max(timer.target_seconds ?? 3600, 1)) * 100) : 8} />
-              <div className="min-w-0 space-y-5">
+            {centerPanel === "timer" ? (
+            <div className="grid min-h-0 flex-1 items-center gap-6 overflow-hidden md:grid-cols-[minmax(230px,0.52fr)_minmax(240px,0.48fr)]">
+              <div className="flex min-h-0 items-center justify-center">
+                <TimerOrb compact seconds={timer.active ? displaySeconds : 0} progress={timer.active ? Math.max(4, (timer.elapsed_seconds / Math.max(timer.target_seconds ?? 3600, 1)) * 100) : 8} />
+              </div>
+              <div className="min-w-0 space-y-4 self-center">
                 <div>
                   <p className="text-sm text-[var(--muted-foreground)]">当前主题</p>
                   <h3 className="mt-1 text-lg font-bold leading-snug">{currentTopic}</h3>
@@ -303,7 +341,7 @@ function WorkbenchView() {
                 <div className="glass-inset p-3 text-xs leading-6 text-[var(--muted-foreground)]">
                   正计时无需设置时长，点击开始后自动向上计时；番茄钟与倒计时由 Rust 后端管理核心状态。
                 </div>
-                <div className="flex flex-wrap gap-3">
+                <div className="flex flex-wrap justify-center gap-3 md:justify-start">
                   {!timer.active ? (
                     <button
                       className="btn-glow flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold"
@@ -332,7 +370,7 @@ function WorkbenchView() {
                     <RotateCcw size={17} /> 重置
                   </button>
                 </div>
-                <button className="text-sm text-[var(--muted-foreground)] [transition:var(--transition-smooth)] hover:text-[var(--neon-blue)]" onClick={() => setView("timer")}>
+                <button className="hidden" type="button">
                   打开完整计时页
                 </button>
                 <div className="glass-inset inline-flex p-1 text-sm">
@@ -348,12 +386,53 @@ function WorkbenchView() {
                 </div>
               </div>
             </div>
+            ) : (
+              <div className="grid min-h-0 flex-1 gap-4 overflow-hidden md:grid-cols-[minmax(0,1fr)_minmax(220px,0.42fr)]">
+                <div className="grid min-h-0 grid-cols-7 gap-2">
+                  {workbenchWeekDays.map((date) => {
+                    const key = date.format("YYYY-MM-DD");
+                    const dayItems = activeTasks.filter((task) => task.planned_date === key);
+                    return (
+                      <button
+                        key={key}
+                        className={`glass-inset min-h-[104px] p-2 text-left [transition:var(--transition-smooth)] hover:border-[var(--ring)] ${selectedWorkbenchDate === key ? "ring-2 ring-[var(--ring)]" : ""}`}
+                        onClick={() => setSelectedWorkbenchDate(key)}
+                      >
+                        <span className="block text-xs text-[var(--muted-foreground)]">{date.format("ddd")}</span>
+                        <span className="mt-1 block text-lg font-bold">{date.date()}</span>
+                        <span className="mt-3 flex min-h-4 flex-wrap gap-1">
+                          {dayItems.slice(0, 5).map((task) => (
+                            <span key={task.id} className="h-2 w-2 rounded-full" style={{ background: taskDotColor(task), boxShadow: `0 0 12px ${taskDotColor(task)}` }} />
+                          ))}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <aside className="glass-inset min-h-0 overflow-auto p-3">
+                  <p className="text-xs text-[var(--muted-foreground)]">{workbenchDate.format("YYYY-MM-DD")}</p>
+                  <h3 className="mt-1 font-semibold">浠婃棩鏃ョ▼</h3>
+                  <div className="mt-3 space-y-2">
+                    {selectedWorkbenchTasks.map((task) => (
+                      <button key={task.id} className="flex w-full items-center gap-2 rounded-lg border border-white/10 p-2 text-left text-sm" onClick={() => {
+                        selectTask(task.id);
+                        setView("tasks");
+                      }}>
+                        <PriorityDot quadrant={task.quadrant} />
+                        <span className="min-w-0 flex-1 truncate">{task.title}</span>
+                      </button>
+                    ))}
+                    {selectedWorkbenchTasks.length === 0 && <p className="text-sm text-[var(--muted-foreground)]">杩欏ぉ杩樻病鏈夊畨鎺掋€?</p>}
+                  </div>
+                </aside>
+              </div>
+            )}
           </section>
         </div>
       </div>
 
-      <aside className="grid min-h-0 grid-rows-[minmax(190px,0.28fr)_minmax(230px,0.34fr)_minmax(220px,0.38fr)] gap-4 overflow-hidden">
-        <section className="glass-card min-h-0 overflow-hidden p-4 text-center">
+      <aside className="flex min-h-0 flex-col gap-4 overflow-hidden">
+        <section data-ui-region="focus-garden" className="glass-card flex min-h-[190px] shrink-0 basis-[27%] flex-col overflow-hidden p-4 text-center">
           <p className="section-label flex items-center gap-2 text-left">
             <Sprout size={15} /> Focus Garden
           </p>
@@ -365,22 +444,22 @@ function WorkbenchView() {
           <div className="neon-text mt-4 text-4xl font-bold">{gardenProgress}%</div>
           <p className="mt-2 text-xs text-[var(--muted-foreground)]">播下一颗专注种子，开始第一段计时。</p>
         </section>
-        <section className="glass-card min-h-0 overflow-hidden p-4">
+        <section data-ui-region="quick-stats" className="glass-card min-h-[230px] shrink-0 basis-[32%] overflow-hidden p-4">
           <p className="section-label flex items-center gap-2">
             <BarChart3 size={15} /> Quick Stats
           </p>
-          <div className="mt-4 grid min-h-0 grid-cols-2 gap-3 overflow-auto pr-1">
+          <div className="mt-4 grid grid-cols-2 gap-3">
             <MiniStat label="今日专注" value={formatSeconds(focusSeconds)} tone="blue" />
             <MiniStat label="完成率" value={`${completionRate}%`} tone="violet" />
             <MiniStat label="未完成" value={`${activeTasks.filter((task) => task.status !== "done").length} 项`} tone="pink" />
             <MiniStat label="今日计时" value={`${todayRecords.length + (timer.active ? 1 : 0)} 次`} tone="amber" />
           </div>
         </section>
-        <section className="glass-card min-h-0 overflow-hidden p-4">
+        <section data-ui-region="achievements" className="glass-card flex min-h-[220px] flex-1 flex-col overflow-hidden p-4">
           <p className="section-label flex items-center gap-2">
             <Trophy size={15} /> Achievements
           </p>
-          <div className="mt-3 min-h-0 space-y-2 overflow-auto pr-1">
+          <div className="mt-3 flex min-h-0 flex-1 flex-col justify-evenly gap-3 pr-1">
             <Achievement label="深度专注者" current={Math.min(4, Math.floor(focusSeconds / 1800))} total={4} />
             <Achievement label="晨型选手" current={Math.min(5, doneToday)} total={5} />
             <Achievement label="连续 7 天" current={Math.min(7, todayRecords.length)} total={7} />
@@ -1066,12 +1145,12 @@ function StatCard({ label, value }: { label: string; value: number | string }) {
 function MiniStat({ label, value, tone }: { label: string; value: string; tone: "blue" | "violet" | "pink" | "amber" }) {
   const color = tone === "blue" ? "var(--neon-blue)" : tone === "pink" ? "var(--neon-pink)" : tone === "amber" ? "var(--neon-amber)" : "var(--neon-violet)";
   return (
-    <div className="glass-inset p-4 [transition:var(--transition-smooth)] hover:-translate-y-0.5 hover:border-[var(--ring)]">
-      <div className="mb-4 grid h-10 w-10 place-items-center rounded-full text-[var(--background)]" style={{ background: color, boxShadow: `0 0 30px ${color}` }}>
+    <div className="glass-inset interactive-card min-h-[76px] p-2 hover:border-[var(--ring)]">
+      <div className="mb-1 grid h-7 w-7 place-items-center rounded-full text-[var(--background)]" style={{ background: color, boxShadow: `0 0 24px ${color}` }}>
         <BarChart3 size={15} />
       </div>
-      <div className="text-xs text-[var(--muted-foreground)]">{label}</div>
-      <div className="neon-text mt-2 font-mono text-xl font-bold">{value}</div>
+      <div className="text-[10px] leading-tight text-[var(--muted-foreground)]">{label}</div>
+      <div className="neon-text mt-1 font-mono text-base font-bold leading-tight">{value}</div>
     </div>
   );
 }
@@ -1112,21 +1191,26 @@ function PriorityDot({ quadrant }: { quadrant: number }) {
 }
 
 function TimerOrb({ seconds, progress, paused = false, compact = false }: { seconds: number; progress: number; paused?: boolean; compact?: boolean }) {
+  const progressDegrees = Math.min(100, Math.max(0, progress)) * 3.6;
   return (
     <div
-      className={`workbench-timer-ring relative grid ${compact ? "h-64 w-64" : "h-72 w-72"} place-items-center rounded-full animate-[pulse-glow_3s_ease-in-out_infinite] p-5 ${paused ? "outline-dashed outline-2 outline-offset-4 outline-[var(--ring)]" : ""}`}
-      style={{
-        background: `radial-gradient(circle at 50% 50%, oklch(0.2 0.035 270 / 0.92), oklch(0.09 0.02 270 / 0.96) 58%, transparent 59%), conic-gradient(from 220deg, var(--neon-violet) ${progress * 1.15}deg, var(--neon-blue) ${progress * 2.35}deg, var(--neon-pink) ${progress * 3.6}deg, rgba(148,163,184,.2) 0deg)`,
-        boxShadow: "0 0 0 1px oklch(0.7 0.24 295 / 0.35), 0 0 70px -12px oklch(0.7 0.24 295 / 0.75), inset 0 0 28px oklch(0 0 0 / 0.5)",
-      }}
+      className={`timer-orb relative grid ${compact ? "h-60 w-60 xl:h-64 xl:w-64" : "h-72 w-72"} place-items-center overflow-visible rounded-full ${paused ? "outline-dashed outline-2 outline-offset-4 outline-[var(--ring)]" : ""}`}
     >
-      <div className={`glass-inset relative grid ${compact ? "h-44 w-44" : "h-56 w-56"} overflow-hidden rounded-full border-[12px] border-[oklch(0.08_0.018_270)] shadow-[inset_0_0_30px_oklch(0_0_0_/_0.55)]`}>
-        <div className={`absolute left-1/2 top-1/2 ${compact ? "h-36 w-64" : "h-48 w-72"} animate-[liquid_8s_ease-in-out_infinite] rounded-[45%] bg-[linear-gradient(135deg,oklch(0.7_0.24_295_/_0.52),oklch(0.72_0.2_240_/_0.42))]`} />
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_32%,oklch(1_0_0_/_0.09),transparent_34%)]" />
-        <div className="relative z-10 text-center">
-          <div className={`font-mono ${compact ? "text-[38px]" : "text-[46px]"} font-bold leading-none text-white drop-shadow-[0_0_16px_var(--neon-violet)]`}>{formatSeconds(seconds)}</div>
-          <div className="mt-1 text-sm opacity-65">{seconds > 0 ? "专注中" : "等待开始"}</div>
+      <div className="timer-orb-glow absolute -inset-5 rounded-full" />
+      <div
+        className="timer-orb-ring absolute inset-0 rounded-full"
+        style={{
+          background: `radial-gradient(circle at 50% 50%, oklch(0.12 0.025 270 / 0.95), oklch(0.08 0.018 270 / 0.98) 58%, transparent 59%), conic-gradient(from 220deg, var(--neon-violet) 0deg, var(--neon-blue) ${progressDegrees * 0.55}deg, var(--neon-pink) ${progressDegrees}deg, rgba(148,163,184,.18) ${progressDegrees}deg 360deg)`,
+        }}
+      />
+      <div className="timer-orb-core absolute inset-[14%] rounded-full">
+        <div className="timer-orb-liquid animate-[liquid_8s_ease-in-out_infinite]" />
+      </div>
+      <div className="absolute inset-0 z-10 flex flex-col items-center justify-center text-center">
+        <div className={`font-mono tabular-nums ${compact ? "text-[38px]" : "text-[46px]"} font-bold leading-none tracking-wider text-white drop-shadow-[0_0_16px_var(--neon-violet)]`}>
+          {formatSeconds(seconds)}
         </div>
+        <div className="mt-2 text-sm opacity-65">{seconds > 0 ? "专注中" : "等待开始"}</div>
       </div>
     </div>
   );

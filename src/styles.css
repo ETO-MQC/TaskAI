@@ -189,6 +189,17 @@
   .glass-card:hover {
     border-color: oklch(1 0 0 / 0.16);
     box-shadow: var(--shadow-elevated);
+  }
+  .interactive-card {
+    position: relative;
+    isolation: isolate;
+    transition:
+      transform 0.22s ease,
+      border-color 0.22s ease,
+      box-shadow 0.22s ease;
+  }
+  .interactive-card:hover {
+    z-index: 20;
     transform: translateY(-2px);
   }
   .glass-inset {
@@ -263,6 +274,37 @@
   }
   .garden-svg {
     filter: drop-shadow(0 0 26px oklch(0.82 0.18 75 / 0.55));
+  }
+  .timer-orb {
+    isolation: isolate;
+  }
+  .timer-orb-glow {
+    background: radial-gradient(circle, oklch(0.7 0.24 295 / 0.22), transparent 68%);
+    filter: blur(18px);
+  }
+  .timer-orb-ring {
+    box-shadow:
+      0 0 0 1px oklch(0.7 0.24 295 / 0.35),
+      0 0 64px -18px oklch(0.7 0.24 295 / 0.78),
+      inset 0 0 28px oklch(0 0 0 / 0.5);
+  }
+  .timer-orb-core {
+    overflow: hidden;
+    background:
+      radial-gradient(circle at 50% 28%, oklch(1 0 0 / 0.08), transparent 35%),
+      linear-gradient(180deg, oklch(0.12 0.025 270), oklch(0.09 0.02 270));
+    border: 12px solid oklch(0.07 0.016 270);
+    box-shadow: inset 0 0 32px oklch(0 0 0 / 0.58);
+  }
+  .timer-orb-liquid {
+    position: absolute;
+    left: 50%;
+    top: 58%;
+    width: 145%;
+    height: 55%;
+    border-radius: 45%;
+    background: linear-gradient(135deg, oklch(0.7 0.24 295 / 0.5), oklch(0.72 0.2 240 / 0.4));
+    transform: translateX(-50%);
   }
   .workbench-handle {
     position: absolute;
