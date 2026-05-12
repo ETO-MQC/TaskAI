@@ -361,7 +361,7 @@
     opacity: 0.78;
     mix-blend-mode: screen;
   }
-  [data-ui-region="ai-command"]::before {
+  .hero-card-light::before {
     box-shadow:
       inset 0 1px 0 oklch(0.72 0.2 286 / 0.18),
       inset -1px 0 0 oklch(0.68 0.22 276 / 0.16),
@@ -370,19 +370,37 @@
       radial-gradient(760px 300px at 92% -8%, oklch(0.66 0.24 286 / 0.18), transparent 60%),
       radial-gradient(500px 220px at 78% 10%, oklch(0.54 0.18 246 / 0.09), transparent 72%);
   }
-  [data-ui-region="ai-command"]::after {
+  .hero-card-light::after {
     background:
       radial-gradient(620px 240px at 91% -6%, oklch(0.68 0.25 286 / 0.24), transparent 58%),
       radial-gradient(360px 160px at 78% 12%, oklch(0.58 0.18 246 / 0.1), transparent 74%);
     opacity: 0.9;
   }
-  [data-ui-region="focus-garden"]::after,
-  [data-ui-region="quick-stats"]::after,
-  [data-ui-region="achievements"]::after {
+  .panel-card-light::before {
+    box-shadow:
+      inset 0 1px 0 oklch(0.68 0.18 286 / 0.12),
+      inset -1px 0 0 oklch(0.64 0.2 276 / 0.1),
+      inset 0 -1px 0 var(--glass-inner-lowlight);
     background:
-      radial-gradient(280px 100px at 88% 0%, oklch(0.62 0.2 286 / 0.075), transparent 74%),
-      radial-gradient(180px 80px at 96% 16%, oklch(0.54 0.16 246 / 0.04), transparent 80%);
-    opacity: 0.68;
+      radial-gradient(480px 180px at 90% -4%, oklch(0.62 0.22 286 / 0.11), transparent 68%),
+      radial-gradient(280px 120px at 82% 10%, oklch(0.54 0.16 246 / 0.055), transparent 78%);
+  }
+  .panel-card-light::after {
+    background:
+      radial-gradient(360px 130px at 88% 0%, oklch(0.62 0.2 286 / 0.12), transparent 70%),
+      radial-gradient(220px 90px at 96% 16%, oklch(0.54 0.16 246 / 0.06), transparent 80%);
+    opacity: 0.72;
+  }
+  .subtle-card-light::before {
+    background:
+      radial-gradient(320px 120px at 88% 0%, oklch(0.62 0.2 286 / 0.052), transparent 74%),
+      radial-gradient(220px 90px at 78% 12%, oklch(0.54 0.16 246 / 0.032), transparent 80%);
+  }
+  .subtle-card-light::after {
+    background:
+      radial-gradient(260px 90px at 88% 0%, oklch(0.62 0.2 286 / 0.06), transparent 76%),
+      radial-gradient(170px 70px at 96% 16%, oklch(0.54 0.16 246 / 0.032), transparent 82%);
+    opacity: 0.52;
   }
   .glass-card > * {
     position: relative;
@@ -397,7 +415,10 @@
   }
   .lift-card:hover {
     z-index: 1;
-    transform: translateY(-1px) scale(1.002);
+    transform: translateY(-1px);
+  }
+  .lift-card:hover::after {
+    opacity: 0.88;
   }
   .interactive-card {
     position: relative;
@@ -423,6 +444,26 @@
     box-shadow:
       0 14px 36px -18px oklch(0 0 0 / 0.65),
       0 0 24px -18px var(--neon-violet);
+  }
+  .achievement-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: oklch(0.62 0.08 286 / 0.34) transparent;
+  }
+  .achievement-scroll::-webkit-scrollbar {
+    width: 5px;
+  }
+  .achievement-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .achievement-scroll::-webkit-scrollbar-thumb {
+    background: oklch(0.62 0.08 286 / 0.28);
+    border-radius: 999px;
+  }
+  .achievement-scroll::-webkit-scrollbar-thumb:hover {
+    background: oklch(0.68 0.1 286 / 0.46);
+  }
+  .timer-card-body {
+    align-content: center;
   }
   .glass-inset {
     background: var(--glass-inset-bg);

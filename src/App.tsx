@@ -253,7 +253,7 @@ function WorkbenchView() {
   return (
     <section className="workbench-grid min-h-0 gap-4 overflow-visible">
       <div className="workbench-main grid min-h-0 gap-4 overflow-visible">
-        <section data-ui-region="ai-command" className="glass-card lift-card flex min-h-[320px] flex-col overflow-hidden p-5">
+        <section data-ui-region="ai-command" className="glass-card hero-card-light lift-card flex min-h-[320px] flex-col overflow-hidden p-5">
           <div className="mb-4 flex shrink-0 items-start justify-between gap-4">
             <div>
               <p className="section-label flex items-center gap-2">
@@ -276,7 +276,7 @@ function WorkbenchView() {
         </section>
 
         <div className="workbench-lower grid min-h-0 gap-4 overflow-visible">
-          <section data-ui-region="today-stack" className="glass-card lift-card flex min-h-[340px] flex-col overflow-hidden p-5">
+          <section data-ui-region="today-stack" className="glass-card subtle-card-light lift-card flex min-h-[340px] flex-col overflow-hidden p-5">
             <div className="mb-4 flex shrink-0 items-center justify-between">
               <div>
                 <p className="section-label flex items-center gap-2">
@@ -324,7 +324,7 @@ function WorkbenchView() {
             </div>
           </section>
 
-          <section data-ui-region="timeline-timer" className="glass-card lift-card flex min-h-[430px] flex-col overflow-hidden p-5">
+          <section data-ui-region="timeline-timer" className="glass-card panel-card-light lift-card flex min-h-[430px] flex-col overflow-hidden p-5">
             <div className="mb-4 flex shrink-0 items-center justify-between">
               <div>
                 <p className="section-label flex items-center gap-2">
@@ -342,11 +342,11 @@ function WorkbenchView() {
               </div>
             </div>
             {centerPanel === "timer" ? (
-            <div className="grid min-h-0 flex-1 items-center gap-5 overflow-auto pr-1 md:grid-cols-[minmax(210px,0.5fr)_minmax(240px,0.5fr)]">
-              <div className="flex min-h-0 items-center justify-center">
+            <div className="timer-card-body grid min-h-0 flex-1 items-center gap-6 overflow-auto pr-1 md:grid-cols-[minmax(220px,0.48fr)_minmax(260px,0.52fr)]">
+              <div className="flex min-h-0 items-center justify-center md:justify-end">
                 <TimerOrb compact seconds={timer.active ? displaySeconds : 0} progress={timer.active ? Math.max(4, (timer.elapsed_seconds / Math.max(timer.target_seconds ?? 3600, 1)) * 100) : 8} />
               </div>
-              <div className="min-w-0 space-y-4 self-center">
+              <div className="min-w-0 space-y-4 self-center md:max-w-[390px]">
                 <div>
                   <p className="text-sm text-[var(--muted-foreground)]">当前主题</p>
                   <h3 className="mt-1 text-lg font-bold leading-snug">{currentTopic}</h3>
@@ -463,7 +463,7 @@ function WorkbenchView() {
       </div>
 
       <aside className="workbench-right-rail flex min-h-0 flex-col gap-4 overflow-visible">
-        <section data-ui-region="focus-garden" className="glass-card lift-card flex min-h-[180px] shrink-0 flex-col items-center overflow-hidden p-4 text-center">
+        <section data-ui-region="focus-garden" className="glass-card panel-card-light lift-card flex min-h-[180px] shrink-0 flex-col items-center overflow-hidden p-4 text-center">
           <p className="section-label flex w-full items-center gap-2 text-left">
             <Sprout size={15} /> Focus Garden
           </p>
@@ -475,7 +475,7 @@ function WorkbenchView() {
           <div className="neon-text mt-4 text-4xl font-bold">{gardenProgress}%</div>
           <p className="mt-2 text-xs text-[var(--muted-foreground)]">播下一颗专注种子，开始第一段计时。</p>
         </section>
-        <section data-ui-region="quick-stats" className="glass-card lift-card quick-stats-panel shrink-0 overflow-visible p-4">
+        <section data-ui-region="quick-stats" className="glass-card subtle-card-light lift-card quick-stats-panel shrink-0 overflow-visible p-4">
           <p className="section-label flex items-center gap-2">
             <BarChart3 size={15} /> Quick Stats
           </p>
@@ -486,11 +486,11 @@ function WorkbenchView() {
             <MiniStat label="今日计时" value={`${todayRecords.length + (timer.active ? 1 : 0)} 次`} tone="amber" />
           </div>
         </section>
-        <section data-ui-region="achievements" className="glass-card lift-card flex min-h-[180px] flex-1 flex-col overflow-hidden p-4">
+        <section data-ui-region="achievements" className="glass-card subtle-card-light lift-card flex min-h-[180px] flex-1 flex-col overflow-hidden p-4">
           <p className="section-label flex items-center gap-2">
             <Trophy size={15} /> Achievements
           </p>
-          <div className="mt-3 min-h-0 flex-1 space-y-2 overflow-y-auto px-1 pb-1 pr-2">
+          <div className="achievement-scroll mt-3 min-h-0 flex-1 space-y-2 overflow-y-auto px-1 pb-1 pr-2">
             <Achievement label="深度专注者" current={Math.min(4, Math.floor(focusSeconds / 1800))} total={4} />
             <Achievement label="晨型选手" current={Math.min(5, doneToday)} total={5} />
             <Achievement label="连续 7 天" current={Math.min(7, todayRecords.length)} total={7} />
@@ -588,7 +588,7 @@ function AiPanel({ embedded = false }: { embedded?: boolean }) {
         )}
       </div>
       <form
-        className="mt-4 mb-1 grid shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] gap-2"
+        className="mt-4 mb-2 grid shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] gap-2"
         onSubmit={(event) => {
           event.preventDefault();
           if (!input.trim()) return;
