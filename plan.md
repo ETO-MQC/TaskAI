@@ -612,3 +612,41 @@ TODO：
 验收结果：
 - `npm run build` 通过。
 - 构建仍有现有 Vite chunk size 与 ineffective dynamic import warning，不影响本次导航和 AI 入口验收。
+
+### 2026-05-12 Workbench 响应式与玻璃质感收口
+
+状态：已完成，等待用户验收。
+
+实现范围：
+- 仅修改 `src/App.tsx` 与 `src/styles.css`，未修改 Zustand store、Tauri/Rust 计时核心、AI intent、任务 CRUD、数据库迁移、左侧导航 view 结构或 Workbench 内部计时/日历局部切换逻辑。
+- 建立 Workbench 响应式规则：默认允许页面纵向滚动；`>=1280px` 启用左右 dashboard；`>=1280px` 且高度 `>=820px` 锁定一屏 dashboard；`<1280px` 转为更自然的纵向/主区堆叠；`<640px` 保持主内容最小可用宽度，允许横向滚动而不挤压控件。
+- 低高度窗口（如 1366x768、1280x720）不再强制 `h-screen` 一屏塞下所有卡片，页面纵向滚动，卡片内部列表独立滚动，避免 AI 输入区、Quick Stats 和 Achievements 互相覆盖。
+- `data-ui-region` 覆盖 6 个主区域：`ai-command`、`today-stack`、`timeline-timer`、`focus-garden`、`quick-stats`、`achievements`；开发模式暴露 `window.checkWorkbenchOverlap()`，使用 `getBoundingClientRect` 检测并输出 `WORKBENCH_OVERLAP`。
+- AI 输入区改为稳定 flex 布局：消息列表 `flex-1 min-h-0 overflow-auto`，输入条 `shrink-0 mt-4 mb-1`，卡片底部通过父级 padding 与内部 bottom margin 保留 16px 以上视觉间距。
+- 新增并应用 `.lift-card` 作为大卡片安全 hover，仅 `translateY(-1px) scale(1.002)` 并增强边框/阴影；`.interactive-surface` 保留给任务条目、日期格、Quick Stats 小卡片和 Achievement 行，允许更明显的 `translateY(-2px)`。
+- 增强二代玻璃打光：背景增加右上紫蓝、左下弱蓝、底部粉紫三层柔和 radial light；`glass-card` 使用上亮下暗渐变、1px 边缘高光、`::before` 内侧反光、`::after` 顶部微光，并提升 blur + saturate；浅色主题保持轻玻璃和淡阴影。
+- Achievements 改为 6 条紧凑列表：深度专注者、晨型选手、连续 7 天、番茄达人、今日终结者、计划守护者；列表区域 `overflow-y-auto`，进度条更细，不再用 `justify-evenly` 撑满高度。
+
+验收结果：
+- `npm run build` 通过。
+- 使用 Edge headless + CDP 检查以下视口，均无主区域 overlap，console 中无 `WORKBENCH_OVERLAP`：
+  - `1920x1080`
+  - `1536x864`
+  - `1440x900`
+  - `1366x768`
+  - `1280x720`
+  - `1024x768`
+  - `768x900`
+  - `390x844`
+- 验收截图：
+  - `validation-screenshots/workbench-responsive-1920x1080.png`
+  - `validation-screenshots/workbench-responsive-1536x864.png`
+  - `validation-screenshots/workbench-responsive-1440x900.png`
+  - `validation-screenshots/workbench-responsive-1366x768.png`
+  - `validation-screenshots/workbench-responsive-1280x720.png`
+  - `validation-screenshots/workbench-responsive-1024x768.png`
+  - `validation-screenshots/workbench-responsive-768x900.png`
+  - `validation-screenshots/workbench-responsive-390x844.png`
+
+遗留说明：
+- `npm run build` 仍有现有 Vite chunk size 与 ineffective dynamic import warning，不影响本次 UI 稳定验收。

@@ -132,10 +132,10 @@ function App() {
   }, []);
 
   return (
-    <div className="min-h-screen min-w-[320px] overflow-x-auto overflow-y-auto p-3 text-[var(--foreground)] md:p-4 xl:h-screen xl:overflow-hidden">
-      <div className="flex min-h-[calc(100vh-1.5rem)] min-w-[320px] gap-3 md:min-h-[calc(100vh-2rem)] md:gap-4 xl:h-full xl:min-h-0">
+    <div className="app-shell min-h-screen min-w-[320px] overflow-x-auto overflow-y-auto p-3 text-[var(--foreground)] md:p-4">
+      <div className="app-frame flex min-h-[calc(100vh-1.5rem)] min-w-[320px] gap-3 md:min-h-[calc(100vh-2rem)] md:gap-4">
         <Sidebar />
-        <main className="min-w-[320px] flex-1 overflow-visible xl:overflow-hidden">
+        <main className="app-main min-w-[320px] flex-1 overflow-visible">
           {store.view === "workbench" && <WorkbenchView />}
           {store.view === "tasks" && <TasksView />}
           {store.view === "timer" && <TimerView />}
@@ -220,7 +220,9 @@ function WorkbenchView() {
   const taskDotColor = (task: Task) => `var(--prio-p${task.quadrant})`;
 
   useEffect(() => {
-    const checkUiOverlap = () => {
+    if (!import.meta.env.DEV) return;
+
+    const checkWorkbenchOverlap = () => {
       const nodes = [...document.querySelectorAll("[data-ui-region]")];
       const rects = nodes.map((node) => ({
         name: node.getAttribute("data-ui-region"),
@@ -238,20 +240,20 @@ function WorkbenchView() {
             a.rect.bottom > b.rect.top;
 
           if (overlap) {
-            console.warn("UI OVERLAP:", a.name, b.name, a.rect, b.rect);
+            console.warn("WORKBENCH_OVERLAP:", a.name, b.name, a.rect, b.rect);
           }
         }
       }
     };
 
-    (window as typeof window & { checkUiOverlap?: () => void }).checkUiOverlap = checkUiOverlap;
-    window.setTimeout(checkUiOverlap, 0);
+    (window as typeof window & { checkWorkbenchOverlap?: () => void }).checkWorkbenchOverlap = checkWorkbenchOverlap;
+    window.setTimeout(checkWorkbenchOverlap, 0);
   }, [centerPanel, tasks.length, timer.active, timer.elapsed_seconds]);
 
   return (
-    <section className="flex min-h-0 flex-col gap-4 overflow-visible xl:h-full xl:grid xl:grid-cols-[minmax(720px,0.72fr)_minmax(320px,0.28fr)] xl:overflow-hidden">
-      <div className="grid min-h-0 gap-4 overflow-visible xl:h-full xl:grid-rows-[minmax(240px,0.35fr)_minmax(420px,0.65fr)] xl:overflow-hidden">
-        <section data-ui-region="ai-command" className="glass-card flex min-h-[300px] flex-col overflow-hidden p-5 pb-6 xl:min-h-0">
+    <section className="workbench-grid min-h-0 gap-4 overflow-visible">
+      <div className="workbench-main grid min-h-0 gap-4 overflow-visible">
+        <section data-ui-region="ai-command" className="glass-card lift-card flex min-h-[320px] flex-col overflow-hidden p-5">
           <div className="mb-4 flex shrink-0 items-start justify-between gap-4">
             <div>
               <p className="section-label flex items-center gap-2">
@@ -268,13 +270,13 @@ function WorkbenchView() {
               手动创建
             </button>
           </div>
-          <div className="min-h-0 flex-1">
+          <div className="min-h-0 flex-1 pb-1">
             <AiPanel embedded />
           </div>
         </section>
 
-        <div className="grid min-h-0 gap-4 overflow-visible lg:grid-cols-[minmax(300px,0.4fr)_minmax(440px,0.6fr)] xl:overflow-hidden">
-          <section data-ui-region="today-stack" className="glass-card flex min-h-[360px] flex-col overflow-hidden p-5 xl:min-h-0">
+        <div className="workbench-lower grid min-h-0 gap-4 overflow-visible">
+          <section data-ui-region="today-stack" className="glass-card lift-card flex min-h-[340px] flex-col overflow-hidden p-5">
             <div className="mb-4 flex shrink-0 items-center justify-between">
               <div>
                 <p className="section-label flex items-center gap-2">
@@ -322,7 +324,7 @@ function WorkbenchView() {
             </div>
           </section>
 
-          <section data-ui-region="timeline-timer" className="glass-card flex min-h-[430px] flex-col overflow-hidden p-5 xl:min-h-0">
+          <section data-ui-region="timeline-timer" className="glass-card lift-card flex min-h-[430px] flex-col overflow-hidden p-5">
             <div className="mb-4 flex shrink-0 items-center justify-between">
               <div>
                 <p className="section-label flex items-center gap-2">
@@ -460,8 +462,8 @@ function WorkbenchView() {
         </div>
       </div>
 
-      <aside className="flex min-h-0 flex-col gap-4 overflow-visible xl:overflow-hidden">
-        <section data-ui-region="focus-garden" className="glass-card flex min-h-[190px] shrink-0 basis-[27%] flex-col items-center overflow-hidden p-4 text-center">
+      <aside className="workbench-right-rail flex min-h-0 flex-col gap-4 overflow-visible">
+        <section data-ui-region="focus-garden" className="glass-card lift-card flex min-h-[180px] shrink-0 flex-col items-center overflow-hidden p-4 text-center">
           <p className="section-label flex w-full items-center gap-2 text-left">
             <Sprout size={15} /> Focus Garden
           </p>
@@ -473,7 +475,7 @@ function WorkbenchView() {
           <div className="neon-text mt-4 text-4xl font-bold">{gardenProgress}%</div>
           <p className="mt-2 text-xs text-[var(--muted-foreground)]">播下一颗专注种子，开始第一段计时。</p>
         </section>
-        <section data-ui-region="quick-stats" className="glass-card quick-stats-panel shrink-0 basis-[30%] overflow-visible p-4">
+        <section data-ui-region="quick-stats" className="glass-card lift-card quick-stats-panel shrink-0 overflow-visible p-4">
           <p className="section-label flex items-center gap-2">
             <BarChart3 size={15} /> Quick Stats
           </p>
@@ -484,14 +486,17 @@ function WorkbenchView() {
             <MiniStat label="今日计时" value={`${todayRecords.length + (timer.active ? 1 : 0)} 次`} tone="amber" />
           </div>
         </section>
-        <section data-ui-region="achievements" className="glass-card flex min-h-[220px] flex-1 flex-col overflow-hidden p-4">
+        <section data-ui-region="achievements" className="glass-card lift-card flex min-h-[180px] flex-1 flex-col overflow-hidden p-4">
           <p className="section-label flex items-center gap-2">
             <Trophy size={15} /> Achievements
           </p>
-          <div className="mt-3 flex min-h-0 flex-1 flex-col justify-evenly gap-3 px-1 pb-1">
+          <div className="mt-3 min-h-0 flex-1 space-y-2 overflow-y-auto px-1 pb-1 pr-2">
             <Achievement label="深度专注者" current={Math.min(4, Math.floor(focusSeconds / 1800))} total={4} />
             <Achievement label="晨型选手" current={Math.min(5, doneToday)} total={5} />
             <Achievement label="连续 7 天" current={Math.min(7, todayRecords.length)} total={7} />
+            <Achievement label="番茄达人" current={Math.min(6, todayRecords.filter((record) => record.mode === "pomodoro").length)} total={6} />
+            <Achievement label="今日终结者" current={Math.min(5, doneToday)} total={5} />
+            <Achievement label="计划守护者" current={Math.min(6, todayTasks.length + doneToday)} total={6} />
           </div>
         </section>
       </aside>
@@ -554,7 +559,7 @@ function AiPanel({ embedded = false }: { embedded?: boolean }) {
 
   const panel = (
     <aside
-      className={`${embedded ? "flex min-h-0 flex-1 flex-col" : "glass-card flex h-[min(620px,calc(100vh-32px))] w-[min(420px,calc(100vw-24px))] flex-col p-4"}`}
+      className={`${embedded ? "ai-panel-embedded flex min-h-0 flex-1 flex-col" : "glass-card ai-panel-floating flex h-[min(620px,calc(100vh-48px))] w-[min(420px,calc(100vw-24px))] flex-col p-5"}`}
       onClick={(event) => event.stopPropagation()}
     >
       {!embedded && (
@@ -583,7 +588,7 @@ function AiPanel({ embedded = false }: { embedded?: boolean }) {
         )}
       </div>
       <form
-        className="mt-3 grid shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] gap-2"
+        className="mt-4 mb-1 grid shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] gap-2"
         onSubmit={(event) => {
           event.preventDefault();
           if (!input.trim()) return;
@@ -1201,12 +1206,12 @@ function MiniStat({ label, value, tone }: { label: string; value: string; tone: 
 function Achievement({ label, current, total }: { label: string; current: number; total: number }) {
   const progress = total ? Math.min(100, (current / total) * 100) : 0;
   return (
-    <div className="glass-inset interactive-surface p-3">
-      <div className="mb-2 flex items-center justify-between text-xs">
+    <div className="glass-inset interactive-surface p-2.5">
+      <div className="mb-1.5 flex items-center justify-between gap-3 text-xs">
         <span className="font-medium">{label}</span>
         <span className="text-[var(--muted-foreground)]">{current}/{total}</span>
       </div>
-      <div className="h-1.5 overflow-hidden rounded-full bg-[var(--muted)] shadow-[inset_0_1px_2px_oklch(0_0_0_/_0.2)]">
+      <div className="h-1 overflow-hidden rounded-full bg-[var(--muted)] shadow-[inset_0_1px_2px_oklch(0_0_0_/_0.2)]">
         <div
           className="h-full animate-shimmer animate-[shimmer_2.4s_linear_infinite] rounded-full bg-[linear-gradient(90deg,var(--neon-violet),var(--neon-blue),var(--neon-pink),var(--neon-violet))] bg-[length:200%_100%] shadow-[0_0_18px_var(--neon-violet)]"
           style={{ width: `${progress}%` }}
