@@ -536,3 +536,34 @@ TODO：
 - `validation-screenshots/codex-workbench-check-final4-1366x768.png`
 - `validation-screenshots/codex-workbench-check-final-1920x1080.png`
 遗留说明：构建仍提示 `@custom-variant` / `@theme` 为 Tailwind v4 at-rule，当前项目构建链仍能通过；本轮已避免依赖 `--color-background`，改为直接使用 `--background` / `--foreground`，解决白底洗淡问题。
+
+### 2026-05-12 Workbench 结构恢复与首页 UI/UX 修复
+
+状态：已完成，等待用户验收。
+
+验收依据：
+- `plan.md` Sprint 9 要求首页为一体化工作台 dashboard：AI Command Stream、Today Stack、Timeline + Timer、Focus Garden、Quick Stats、Achievements 同屏分层展示。
+- `plan.md` Sprint 7 要求设置页支持深浅主题切换。
+- Workbench 内的 Timeline + Timer 应作为融合卡片承载计时和小型日历，不应把日历按钮作为跳转整页 `CalendarView` 的主交互。
+
+实现范围：
+- 仅修改 `src/App.tsx` 和 `src/styles.css`，未修改 Zustand store、Tauri/Rust 后端、AI intent、任务 CRUD、计时器后端接口、数据库迁移或业务规则。
+- Workbench `Timeline + Timer` 卡片使用局部状态 `centerPanel: "timer" | "calendar"` 切换“计时 / 日历”，移除 tab 容器点击误触逻辑；Workbench 内未使用 `setView("calendar")` 作为日历主交互。
+- Mini Calendar 改为卡片内小型周视图，日期数字缩小，今日/选中日期高亮，右侧显示当日任务或中文空态提示；内容限制在当前卡片内，空间不足时内部滚动。
+- `TimerOrb` 重做为固定合理范围的 clamp 尺寸：compact 模式 `clamp(170px, 16vw, 230px)`，普通模式 `clamp(180px, 18vw, 250px)`；视觉层级为最外层 glow、半透明外环、进度环、玻璃内芯、中心数字和状态文字，避免纯黑大圆和过度缩放。
+- 新增 `.interactive-surface`，只用于任务条目、日期小卡片、Quick Stats 小卡片和 Achievement 进度区域等小元素；未恢复主卡片整体上浮，`.glass-card:hover` 只调整边框和阴影，不做 transform。
+- Quick Stats 改为横向 mini stat 结构：左侧发光图标，右侧 label/value 两行；窄侧栏单列，大屏可自动转为 2 列，避免数字和标签挤压。
+- 补齐浅色/深色双主题 token：`:root/.light` 提供可读浅色主题，`.dark` 保留当前深色玻璃霓虹风；`glass-card`、`glass-inset`、`field`、`btn-glow` 等组件样式改为基于 CSS variables。
+- 设置页主题按钮增加当前主题高亮，继续复用既有 `setTheme("light" | "dark")`，不改变保存逻辑。
+
+验收结果：
+- `npm run build` 通过。
+- `npm run dev -- --host 127.0.0.1` 可启动；因 1420/1421 已被占用，Vite 自动切换到 `http://127.0.0.1:1422/`。
+- 使用 Edge headless + Playwright 检查 1366x768 深色和浅色主题，6 个 Workbench 主区域无重叠，交互控件无裁切，页面文本无 replacement-character 乱码。
+- 验收截图：
+  - `validation-screenshots/codex-workbench-dark-1366x768.png`
+  - `validation-screenshots/codex-workbench-light-1366x768.png`
+
+遗留说明：
+- `npm run build` 仍有 Vite chunk size 与 ineffective dynamic import warning，属于现有构建提示，不影响本次 Workbench UI 验收。
+- 本轮不处理完整 `CalendarView` 月/日视图业务能力，也不调整 Rust/Tauri 计时核心。

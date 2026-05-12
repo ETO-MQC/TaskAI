@@ -242,13 +242,13 @@ function WorkbenchView() {
   return (
     <section className="flex min-h-0 flex-col gap-4 overflow-visible xl:h-full xl:grid xl:grid-cols-[minmax(720px,0.72fr)_minmax(320px,0.28fr)] xl:overflow-hidden">
       <div className="grid min-h-0 gap-4 overflow-visible xl:h-full xl:grid-rows-[minmax(240px,0.35fr)_minmax(420px,0.65fr)] xl:overflow-hidden">
-        <section data-ui-region="ai-command" className="glass-card flex min-h-[300px] flex-col overflow-hidden p-5 xl:min-h-0">
+        <section data-ui-region="ai-command" className="glass-card flex min-h-[300px] flex-col overflow-hidden p-5 pb-6 xl:min-h-0">
           <div className="mb-4 flex shrink-0 items-start justify-between gap-4">
             <div>
               <p className="section-label flex items-center gap-2">
                 <Sparkles size={15} /> AI Agent Command Stream
               </p>
-              <h1 className="mt-4 text-3xl font-bold tracking-normal text-white">
+              <h1 className="mt-3 text-2xl font-bold tracking-normal text-[var(--foreground)] md:text-3xl">
                 今天想怎么<span className="neon-text">编排?</span>
               </h1>
               <p className="mt-3 text-sm text-[var(--muted-foreground)]">
@@ -277,11 +277,11 @@ function WorkbenchView() {
                 查看任务 →
               </button>
             </div>
-            <div className="min-h-0 flex-1 space-y-3 overflow-auto pr-1">
+            <div className="min-h-0 flex-1 space-y-3 overflow-auto px-1 pb-1">
               {todayTasks.map((task) => (
                 <button
                   key={task.id}
-                  className="glass-inset interactive-card flex w-full items-center gap-3 p-3 text-left hover:border-[var(--ring)]"
+                  className="glass-inset interactive-surface flex w-full items-center gap-3 p-3 text-left hover:border-[var(--ring)]"
                   onClick={() => {
                     selectTask(task.id);
                     setView("tasks");
@@ -321,15 +321,17 @@ function WorkbenchView() {
                 </p>
                 <h2 className="mt-3 text-2xl font-bold">日历计时融合视图</h2>
               </div>
-              <div className="glass-inset flex shrink-0 p-1 text-sm" onClick={() => setCenterPanel("timer")}>
-                <button className="btn-glow rounded-lg px-4 py-1.5 font-medium">计时</button>
-                <button className={`rounded-lg px-4 py-1.5 [transition:var(--transition-smooth)] ${centerPanel === "calendar" ? "btn-glow font-medium" : "text-[var(--muted-foreground)] hover:text-[var(--neon-blue)]"}`} onClick={(event) => { event.stopPropagation(); setCenterPanel("calendar"); }}>
+              <div className="glass-inset flex shrink-0 p-1 text-sm">
+                <button className={`rounded-lg px-4 py-1.5 [transition:var(--transition-smooth)] ${centerPanel === "timer" ? "btn-glow font-medium" : "text-[var(--muted-foreground)] hover:text-[var(--neon-blue)]"}`} onClick={() => setCenterPanel("timer")}>
+                  计时
+                </button>
+                <button className={`rounded-lg px-4 py-1.5 [transition:var(--transition-smooth)] ${centerPanel === "calendar" ? "btn-glow font-medium" : "text-[var(--muted-foreground)] hover:text-[var(--neon-blue)]"}`} onClick={() => setCenterPanel("calendar")}>
                   日历
                 </button>
               </div>
             </div>
             {centerPanel === "timer" ? (
-            <div className="grid min-h-0 flex-1 items-center gap-6 overflow-hidden md:grid-cols-[minmax(230px,0.52fr)_minmax(240px,0.48fr)]">
+            <div className="grid min-h-0 flex-1 items-center gap-5 overflow-auto pr-1 md:grid-cols-[minmax(210px,0.5fr)_minmax(240px,0.5fr)]">
               <div className="flex min-h-0 items-center justify-center">
                 <TimerOrb compact seconds={timer.active ? displaySeconds : 0} progress={timer.active ? Math.max(4, (timer.elapsed_seconds / Math.max(timer.target_seconds ?? 3600, 1)) * 100) : 8} />
               </div>
@@ -370,9 +372,6 @@ function WorkbenchView() {
                     <RotateCcw size={17} /> 重置
                   </button>
                 </div>
-                <button className="hidden" type="button">
-                  打开完整计时页
-                </button>
                 <div className="glass-inset inline-flex p-1 text-sm">
                   {(["positive", "pomodoro", "countdown"] as TimerMode[]).map((mode) => (
                     <button
@@ -388,19 +387,19 @@ function WorkbenchView() {
             </div>
             ) : (
               <div className="grid min-h-0 flex-1 gap-4 overflow-hidden md:grid-cols-[minmax(0,1fr)_minmax(220px,0.42fr)]">
-                <div className="grid min-h-0 grid-cols-7 gap-2">
+                <div className="grid min-h-0 grid-cols-7 gap-2 overflow-auto p-1">
                   {workbenchWeekDays.map((date) => {
                     const key = date.format("YYYY-MM-DD");
                     const dayItems = activeTasks.filter((task) => task.planned_date === key);
                     return (
                       <button
                         key={key}
-                        className={`glass-inset min-h-[104px] p-2 text-left [transition:var(--transition-smooth)] hover:border-[var(--ring)] ${selectedWorkbenchDate === key ? "ring-2 ring-[var(--ring)]" : ""}`}
+                        className={`glass-inset interactive-surface min-h-[78px] p-2 text-left hover:border-[var(--ring)] ${selectedWorkbenchDate === key ? "ring-2 ring-[var(--ring)]" : ""}`}
                         onClick={() => setSelectedWorkbenchDate(key)}
                       >
-                        <span className="block text-xs text-[var(--muted-foreground)]">{date.format("ddd")}</span>
-                        <span className="mt-1 block text-lg font-bold">{date.date()}</span>
-                        <span className="mt-3 flex min-h-4 flex-wrap gap-1">
+                        <span className="block text-[10px] text-[var(--muted-foreground)]">周{["日", "一", "二", "三", "四", "五", "六"][date.day()]}</span>
+                        <span className="mt-1 block text-base font-semibold">{date.date()}</span>
+                        <span className="mt-2 flex min-h-3 flex-wrap gap-1">
                           {dayItems.slice(0, 5).map((task) => (
                             <span key={task.id} className="h-2 w-2 rounded-full" style={{ background: taskDotColor(task), boxShadow: `0 0 12px ${taskDotColor(task)}` }} />
                           ))}
@@ -411,10 +410,10 @@ function WorkbenchView() {
                 </div>
                 <aside className="glass-inset min-h-0 overflow-auto p-3">
                   <p className="text-xs text-[var(--muted-foreground)]">{workbenchDate.format("YYYY-MM-DD")}</p>
-                  <h3 className="mt-1 font-semibold">浠婃棩鏃ョ▼</h3>
+                  <h3 className="mt-1 font-semibold">当日任务</h3>
                   <div className="mt-3 space-y-2">
                     {selectedWorkbenchTasks.map((task) => (
-                      <button key={task.id} className="flex w-full items-center gap-2 rounded-lg border border-white/10 p-2 text-left text-sm" onClick={() => {
+                      <button key={task.id} className="interactive-surface flex w-full items-center gap-2 rounded-lg border border-white/10 p-2 text-left text-sm" onClick={() => {
                         selectTask(task.id);
                         setView("tasks");
                       }}>
@@ -422,7 +421,7 @@ function WorkbenchView() {
                         <span className="min-w-0 flex-1 truncate">{task.title}</span>
                       </button>
                     ))}
-                    {selectedWorkbenchTasks.length === 0 && <p className="text-sm text-[var(--muted-foreground)]">杩欏ぉ杩樻病鏈夊畨鎺掋€?</p>}
+                    {selectedWorkbenchTasks.length === 0 && <p className="text-sm text-[var(--muted-foreground)]">这天还没有安排。</p>}
                   </div>
                 </aside>
               </div>
@@ -431,9 +430,9 @@ function WorkbenchView() {
         </div>
       </div>
 
-      <aside className="flex min-h-0 flex-col gap-4 overflow-hidden">
-        <section data-ui-region="focus-garden" className="glass-card flex min-h-[190px] shrink-0 basis-[27%] flex-col overflow-hidden p-4 text-center">
-          <p className="section-label flex items-center gap-2 text-left">
+      <aside className="flex min-h-0 flex-col gap-4 overflow-visible xl:overflow-hidden">
+        <section data-ui-region="focus-garden" className="glass-card flex min-h-[190px] shrink-0 basis-[27%] flex-col items-center overflow-hidden p-4 text-center">
+          <p className="section-label flex w-full items-center gap-2 text-left">
             <Sprout size={15} /> Focus Garden
           </p>
           <svg className="garden-svg mx-auto mt-5 h-32 w-32 text-[var(--neon-amber)]" viewBox="0 0 120 120" aria-hidden>
@@ -444,11 +443,11 @@ function WorkbenchView() {
           <div className="neon-text mt-4 text-4xl font-bold">{gardenProgress}%</div>
           <p className="mt-2 text-xs text-[var(--muted-foreground)]">播下一颗专注种子，开始第一段计时。</p>
         </section>
-        <section data-ui-region="quick-stats" className="glass-card min-h-[230px] shrink-0 basis-[32%] overflow-hidden p-4">
+        <section data-ui-region="quick-stats" className="glass-card min-h-[230px] shrink-0 basis-[32%] overflow-visible p-4">
           <p className="section-label flex items-center gap-2">
             <BarChart3 size={15} /> Quick Stats
           </p>
-          <div className="mt-4 grid grid-cols-2 gap-3">
+          <div className="mt-4 grid grid-cols-1 gap-3 2xl:grid-cols-2">
             <MiniStat label="今日专注" value={formatSeconds(focusSeconds)} tone="blue" />
             <MiniStat label="完成率" value={`${completionRate}%`} tone="violet" />
             <MiniStat label="未完成" value={`${activeTasks.filter((task) => task.status !== "done").length} 项`} tone="pink" />
@@ -459,7 +458,7 @@ function WorkbenchView() {
           <p className="section-label flex items-center gap-2">
             <Trophy size={15} /> Achievements
           </p>
-          <div className="mt-3 flex min-h-0 flex-1 flex-col justify-evenly gap-3 pr-1">
+          <div className="mt-3 flex min-h-0 flex-1 flex-col justify-evenly gap-3 px-1 pb-1">
             <Achievement label="深度专注者" current={Math.min(4, Math.floor(focusSeconds / 1800))} total={4} />
             <Achievement label="晨型选手" current={Math.min(5, doneToday)} total={5} />
             <Achievement label="连续 7 天" current={Math.min(7, todayRecords.length)} total={7} />
@@ -1062,8 +1061,8 @@ function SettingsView() {
         <div>
           <span className="mb-2 block text-sm font-medium">主题</span>
           <div className="flex gap-2">
-            <button className="glass-inset px-4 py-2 text-sm" onClick={() => setTheme("light")}>浅色</button>
-            <button className="glass-inset px-4 py-2 text-sm" onClick={() => setTheme("dark")}>深色</button>
+            <button className={`glass-inset px-4 py-2 text-sm ${theme === "light" ? "btn-glow font-semibold" : ""}`} onClick={() => setTheme("light")}>浅色</button>
+            <button className={`glass-inset px-4 py-2 text-sm ${theme === "dark" ? "btn-glow font-semibold" : ""}`} onClick={() => setTheme("dark")}>深色</button>
             <span className="self-center text-sm opacity-70">当前：{theme}</span>
           </div>
         </div>
@@ -1145,12 +1144,14 @@ function StatCard({ label, value }: { label: string; value: number | string }) {
 function MiniStat({ label, value, tone }: { label: string; value: string; tone: "blue" | "violet" | "pink" | "amber" }) {
   const color = tone === "blue" ? "var(--neon-blue)" : tone === "pink" ? "var(--neon-pink)" : tone === "amber" ? "var(--neon-amber)" : "var(--neon-violet)";
   return (
-    <div className="glass-inset interactive-card min-h-[76px] p-2 hover:border-[var(--ring)]">
-      <div className="mb-1 grid h-7 w-7 place-items-center rounded-full text-[var(--background)]" style={{ background: color, boxShadow: `0 0 24px ${color}` }}>
+    <div className="glass-inset interactive-surface flex min-h-[68px] items-center gap-3 p-3 hover:border-[var(--ring)]">
+      <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-[var(--background)]" style={{ background: color, boxShadow: `0 0 24px -4px ${color}` }}>
         <BarChart3 size={15} />
       </div>
-      <div className="text-[10px] leading-tight text-[var(--muted-foreground)]">{label}</div>
-      <div className="neon-text mt-1 font-mono text-base font-bold leading-tight">{value}</div>
+      <div className="min-w-0">
+        <div className="truncate text-xs leading-tight text-[var(--muted-foreground)]">{label}</div>
+        <div className="mt-1 truncate font-mono text-base font-semibold leading-tight tabular-nums">{value}</div>
+      </div>
     </div>
   );
 }
@@ -1158,12 +1159,12 @@ function MiniStat({ label, value, tone }: { label: string; value: string; tone: 
 function Achievement({ label, current, total }: { label: string; current: number; total: number }) {
   const progress = total ? Math.min(100, (current / total) * 100) : 0;
   return (
-    <div className="glass-inset p-3">
+    <div className="glass-inset interactive-surface p-3">
       <div className="mb-2 flex items-center justify-between text-xs">
         <span className="font-medium">{label}</span>
         <span className="text-[var(--muted-foreground)]">{current}/{total}</span>
       </div>
-      <div className="h-1.5 overflow-hidden rounded-full bg-black/35 shadow-[inset_0_1px_2px_oklch(0_0_0_/_0.55)]">
+      <div className="h-1.5 overflow-hidden rounded-full bg-[var(--muted)] shadow-[inset_0_1px_2px_oklch(0_0_0_/_0.2)]">
         <div
           className="h-full animate-shimmer animate-[shimmer_2.4s_linear_infinite] rounded-full bg-[linear-gradient(90deg,var(--neon-violet),var(--neon-blue),var(--neon-pink),var(--neon-violet))] bg-[length:200%_100%] shadow-[0_0_18px_var(--neon-violet)]"
           style={{ width: `${progress}%` }}
@@ -1194,23 +1195,28 @@ function TimerOrb({ seconds, progress, paused = false, compact = false }: { seco
   const progressDegrees = Math.min(100, Math.max(0, progress)) * 3.6;
   return (
     <div
-      className={`timer-orb relative grid ${compact ? "h-60 w-60 xl:h-64 xl:w-64" : "h-72 w-72"} place-items-center overflow-visible rounded-full ${paused ? "outline-dashed outline-2 outline-offset-4 outline-[var(--ring)]" : ""}`}
+      className={`timer-orb relative mx-auto grid place-items-center overflow-visible rounded-full ${paused ? "outline-dashed outline-2 outline-offset-4 outline-[var(--ring)]" : ""}`}
+      style={{
+        width: compact ? "clamp(170px, 16vw, 230px)" : "clamp(180px, 18vw, 250px)",
+        height: compact ? "clamp(170px, 16vw, 230px)" : "clamp(180px, 18vw, 250px)",
+      }}
     >
-      <div className="timer-orb-glow absolute -inset-5 rounded-full" />
+      <div className="timer-orb-glow absolute inset-0 rounded-full" />
+      <div className="timer-orb-shell absolute inset-[3%] rounded-full" />
       <div
-        className="timer-orb-ring absolute inset-0 rounded-full"
+        className="timer-orb-progress absolute inset-[6%] rounded-full"
         style={{
-          background: `radial-gradient(circle at 50% 50%, oklch(0.12 0.025 270 / 0.95), oklch(0.08 0.018 270 / 0.98) 58%, transparent 59%), conic-gradient(from 220deg, var(--neon-violet) 0deg, var(--neon-blue) ${progressDegrees * 0.55}deg, var(--neon-pink) ${progressDegrees}deg, rgba(148,163,184,.18) ${progressDegrees}deg 360deg)`,
+          background: `conic-gradient(from 220deg, var(--neon-violet) 0deg, var(--neon-blue) ${progressDegrees * 0.55}deg, var(--neon-pink) ${progressDegrees}deg, transparent ${progressDegrees}deg 360deg)`,
         }}
       />
-      <div className="timer-orb-core absolute inset-[14%] rounded-full">
+      <div className="timer-orb-core absolute inset-[18%] rounded-full">
         <div className="timer-orb-liquid animate-[liquid_8s_ease-in-out_infinite]" />
       </div>
-      <div className="absolute inset-0 z-10 flex flex-col items-center justify-center text-center">
-        <div className={`font-mono tabular-nums ${compact ? "text-[38px]" : "text-[46px]"} font-bold leading-none tracking-wider text-white drop-shadow-[0_0_16px_var(--neon-violet)]`}>
+      <div className="relative z-10 flex flex-col items-center justify-center text-center">
+        <div className={`font-mono tabular-nums ${compact ? "text-[32px] md:text-[36px]" : "text-[38px] md:text-[42px]"} font-bold leading-none tracking-wider text-[var(--foreground)] drop-shadow-[0_0_14px_var(--neon-violet)]`}>
           {formatSeconds(seconds)}
         </div>
-        <div className="mt-2 text-sm opacity-65">{seconds > 0 ? "专注中" : "等待开始"}</div>
+        <div className="mt-2 text-xs text-[var(--muted-foreground)]">{seconds > 0 ? "专注中" : "等待开始"}</div>
       </div>
     </div>
   );
