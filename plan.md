@@ -567,3 +567,48 @@ TODO：
 遗留说明：
 - `npm run build` 仍有 Vite chunk size 与 ineffective dynamic import warning，属于现有构建提示，不影响本次 Workbench UI 验收。
 - 本轮不处理完整 `CalendarView` 月/日视图业务能力，也不调整 Rust/Tauri 计时核心。
+
+### 2026-05-12 Workbench 定点优化：Quick Stats、月历、任务跳转与玻璃打光
+
+状态：已完成，等待用户验收。
+
+实现范围：
+- 仅修改 `src/App.tsx` 和 `src/styles.css`，未重写页面，未修改 Zustand store、Tauri/Rust 后端、任务 CRUD、计时器核心、AI intent 或数据库迁移。
+- Quick Stats 增加 `quick-stats-panel`、`quick-stats-grid`、`quick-stat-card`，使用 CSS container query 按父容器宽度适配；常规右侧栏保持紧凑 2x2，极窄容器才切单列。每个 stat 卡片保持左侧图标、右侧 label/value 的 `flex items-center gap-3` 结构，并使用 `min-w-0` 防止文字撑爆。
+- Workbench 内 `Timeline + Timer` 的“日历”局部 tab 改为小型月历优先：7 列、最多 6 行共 42 格，当前日期高亮，有任务日期显示小圆点；右侧继续显示选中日期的任务摘要。预留 `calendarPanelMode: "month" | "week" | "day"` 结构，当前固定为月视图。
+- 修复 Today Stack 右上角“查看任务”进入任务页面的问题：点击事件仍走 `setView("tasks")`，实际失效原因是进入 `TasksView` 后 `TaskDetail` 的 Zustand selector 每次返回新数组，触发 React `Maximum update depth exceeded` 并清空 root。本轮改为先选择 `state.records`，再用 `useMemo` 按 `task_id` 过滤，避免重复更新。
+- 精修 iOS/玻璃打光：深色主题背景使用更柔和的紫、蓝、粉 radial glow，右上角和中部增加轻微氛围光；`glass-card` 改为上亮下暗的通透渐变，`glass-card::before` 增加自然边缘高光。浅色主题保持可读和层次，未破坏 light/dark 切换。
+- 灵动感继续限制在小元素：任务条目、Quick Stats 小卡片、按钮等；大卡片 `.glass-card:hover` 不做整体上浮。
+
+验收结果：
+- `npm run build` 通过。
+- 使用 Edge headless + Playwright 验证：
+  - 1440 / 1366 / 1280 宽度下 Quick Stats 4 个小卡片不溢出父容器，不覆盖 Achievements。
+  - Workbench “日历”tab 在当前卡片内显示 42 格月历，不跳转整页。
+  - “查看任务 →” 可进入原 tasks 视图，任务页不再因 `TaskDetail` selector 触发无限更新。
+  - dark / light 主题均可正常渲染，无 replacement-character 乱码。
+- 验收截图：
+  - `validation-screenshots/codex-workbench-final-dark-1440.png`
+  - `validation-screenshots/codex-workbench-final-dark-1366.png`
+  - `validation-screenshots/codex-workbench-final-dark-1280.png`
+
+遗留说明：
+- `npm run build` 仍有现有 Vite chunk size 与 ineffective dynamic import warning，不影响本次定点 UI/UX 验收。
+- 本轮只做 Workbench 定点优化，不处理完整 `CalendarView` 的月/周/日三级视图，也不调整后端计时逻辑。
+
+### 2026-05-12 信息架构整理：完整功能页导航与 AI 入口
+
+状态：已完成，等待用户验收。
+
+实现范围：
+- 读取并确认 `src/lib/store.ts` 的 `View` 类型已包含 `workbench`、`tasks`、`timer`、`calendar`、`stats`、`ai`、`settings`，未修改 Zustand store。
+- 扩展 `src/App.tsx` 左侧 `navItems` 为正式功能导航：工作台、任务、计时、日历、统计、AI、设置。
+- 修复 Sidebar 当前项高亮逻辑：改为严格匹配当前 `view`，进入 tasks/timer/calendar/stats 时不再错误高亮 workbench。
+- 将 `store.view === "ai"` 从错误复用 `WorkbenchView` 改为渲染独立 `AiView`，复用现有 `AiPanel embedded` 作为 AI 工作区入口。
+- 保留 Workbench 内 `centerPanel: "timer" | "calendar"` 局部切换逻辑；“计时 / 日历”tab 仍只切换首页小组件，不跳转完整 TimerView / CalendarView。
+- Today Stack “查看任务”和任务条目继续使用 `setView("tasks")` 进入完整任务页。
+- 浮动 AI 对话框容器底部留白从 `p-3` 调整为 `p-4 pb-8`，避免贴近窗口底部。
+
+验收结果：
+- `npm run build` 通过。
+- 构建仍有现有 Vite chunk size 与 ineffective dynamic import warning，不影响本次导航和 AI 入口验收。

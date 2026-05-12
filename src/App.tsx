@@ -48,6 +48,10 @@ import {
 
 const navItems = [
   { id: "workbench", label: "工作台", icon: LayoutDashboard },
+  { id: "tasks", label: "任务", icon: ListTodo },
+  { id: "timer", label: "计时", icon: Clock3 },
+  { id: "calendar", label: "日历", icon: CalendarDays },
+  { id: "stats", label: "统计", icon: BarChart3 },
   { id: "ai", label: "AI", icon: Bot },
   { id: "settings", label: "设置", icon: Settings },
 ] as const;
@@ -138,10 +142,10 @@ function App() {
           {store.view === "calendar" && <CalendarView />}
           {store.view === "stats" && <StatsView />}
           {store.view === "settings" && <SettingsView />}
-          {store.view === "ai" && <WorkbenchView />}
+          {store.view === "ai" && <AiView />}
         </main>
       </div>
-      {store.view !== "workbench" && (
+      {store.view !== "workbench" && store.view !== "ai" && (
         <button
           className="btn-glow fixed bottom-6 right-6 z-20 grid h-14 w-14 place-items-center rounded-full text-[var(--primary-foreground)]"
           onClick={() => store.setAiOpen(true)}
@@ -165,7 +169,7 @@ function Sidebar() {
       </div>
       {navItems.map((item) => {
         const Icon = item.icon;
-        const active = view === item.id || (item.id === "workbench" && ["tasks", "timer", "calendar", "stats"].includes(view));
+        const active = view === item.id;
         return (
           <button
             key={item.id}
@@ -206,7 +210,12 @@ function WorkbenchView() {
   const displaySeconds =
     timer.mode === "positive" || !timer.remaining_seconds ? timer.elapsed_seconds : timer.remaining_seconds;
   const workbenchDate = dayjs(selectedWorkbenchDate);
-  const workbenchWeekDays = useMemo(() => Array.from({ length: 7 }, (_, index) => dayjs().startOf("week").add(index, "day")), []);
+  const calendarPanelMode: "month" | "week" | "day" = "month";
+  const workbenchMonthDays = useMemo(() => {
+    const selectedMonth = dayjs(selectedWorkbenchDate).startOf("month");
+    const gridStart = selectedMonth.startOf("week");
+    return Array.from({ length: 42 }, (_, index) => gridStart.add(index, "day"));
+  }, [selectedWorkbenchDate]);
   const selectedWorkbenchTasks = activeTasks.filter((task) => task.planned_date === selectedWorkbenchDate);
   const taskDotColor = (task: Task) => `var(--prio-p${task.quadrant})`;
 
@@ -255,7 +264,7 @@ function WorkbenchView() {
                 告诉我你想推进什么，我会拆解任务、安排专注时段并启动计时。
               </p>
             </div>
-            <button className="glass-inset shrink-0 px-4 py-2 text-sm [transition:var(--transition-smooth)] hover:text-[var(--neon-violet)]" onClick={() => setView("tasks")}>
+            <button type="button" className="glass-inset shrink-0 px-4 py-2 text-sm [transition:var(--transition-smooth)] hover:text-[var(--neon-violet)]" onClick={() => setView("tasks")}>
               手动创建
             </button>
           </div>
@@ -273,7 +282,7 @@ function WorkbenchView() {
                 </p>
                 <h2 className="mt-3 text-2xl font-bold">今日待办</h2>
               </div>
-              <button className="text-sm text-[var(--muted-foreground)] [transition:var(--transition-smooth)] hover:text-[var(--neon-blue)]" onClick={() => setView("tasks")}>
+              <button type="button" className="text-sm text-[var(--muted-foreground)] [transition:var(--transition-smooth)] hover:text-[var(--neon-blue)]" onClick={() => setView("tasks")}>
                 查看任务 →
               </button>
             </div>
@@ -387,33 +396,54 @@ function WorkbenchView() {
             </div>
             ) : (
               <div className="grid min-h-0 flex-1 gap-4 overflow-hidden md:grid-cols-[minmax(0,1fr)_minmax(220px,0.42fr)]">
-                <div className="grid min-h-0 grid-cols-7 gap-2 overflow-auto p-1">
-                  {workbenchWeekDays.map((date) => {
+                <div className="min-h-0 overflow-auto p-1">
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs text-[var(--muted-foreground)]">月历总览</p>
+                      <h3 className="text-sm font-semibold">{workbenchDate.format("YYYY 年 M 月")}</h3>
+                    </div>
+                    <span className="glass-inset px-2 py-1 text-[10px] text-[var(--muted-foreground)]">
+                      {calendarPanelMode === "month" ? "月" : calendarPanelMode === "week" ? "周" : "日"}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-7 gap-1.5 text-center text-[10px] text-[var(--muted-foreground)]">
+                    {["日", "一", "二", "三", "四", "五", "六"].map((day) => (
+                      <span key={day}>周{day}</span>
+                    ))}
+                  </div>
+                  <div className="mt-1.5 grid grid-cols-7 gap-1.5">
+                  {workbenchMonthDays.map((date) => {
                     const key = date.format("YYYY-MM-DD");
                     const dayItems = activeTasks.filter((task) => task.planned_date === key);
+                    const isToday = key === today;
+                    const isSelected = selectedWorkbenchDate === key;
+                    const isOutsideMonth = date.month() !== workbenchDate.month();
                     return (
                       <button
                         key={key}
-                        className={`glass-inset interactive-surface min-h-[78px] p-2 text-left hover:border-[var(--ring)] ${selectedWorkbenchDate === key ? "ring-2 ring-[var(--ring)]" : ""}`}
+                        type="button"
+                        className={`glass-inset interactive-surface min-h-[42px] min-w-0 p-1.5 text-left hover:border-[var(--ring)] ${isSelected ? "ring-2 ring-[var(--ring)]" : ""} ${isOutsideMonth ? "opacity-45" : ""}`}
                         onClick={() => setSelectedWorkbenchDate(key)}
                       >
-                        <span className="block text-[10px] text-[var(--muted-foreground)]">周{["日", "一", "二", "三", "四", "五", "六"][date.day()]}</span>
-                        <span className="mt-1 block text-base font-semibold">{date.date()}</span>
-                        <span className="mt-2 flex min-h-3 flex-wrap gap-1">
-                          {dayItems.slice(0, 5).map((task) => (
-                            <span key={task.id} className="h-2 w-2 rounded-full" style={{ background: taskDotColor(task), boxShadow: `0 0 12px ${taskDotColor(task)}` }} />
+                        <span className={`grid h-5 w-5 place-items-center rounded-full text-xs font-semibold ${isToday ? "bg-[var(--neon-violet)] text-[var(--primary-foreground)] shadow-[var(--shadow-glow-violet)]" : ""}`}>
+                          {date.date()}
+                        </span>
+                        <span className="mt-1 flex min-h-2 flex-wrap gap-0.5">
+                          {dayItems.slice(0, 3).map((task) => (
+                            <span key={task.id} className="h-1.5 w-1.5 rounded-full" style={{ background: taskDotColor(task), boxShadow: `0 0 8px ${taskDotColor(task)}` }} />
                           ))}
                         </span>
                       </button>
                     );
                   })}
+                  </div>
                 </div>
                 <aside className="glass-inset min-h-0 overflow-auto p-3">
                   <p className="text-xs text-[var(--muted-foreground)]">{workbenchDate.format("YYYY-MM-DD")}</p>
                   <h3 className="mt-1 font-semibold">当日任务</h3>
                   <div className="mt-3 space-y-2">
                     {selectedWorkbenchTasks.map((task) => (
-                      <button key={task.id} className="interactive-surface flex w-full items-center gap-2 rounded-lg border border-white/10 p-2 text-left text-sm" onClick={() => {
+                      <button key={task.id} type="button" className="interactive-surface flex w-full items-center gap-2 rounded-lg border border-white/10 p-2 text-left text-sm" onClick={() => {
                         selectTask(task.id);
                         setView("tasks");
                       }}>
@@ -443,11 +473,11 @@ function WorkbenchView() {
           <div className="neon-text mt-4 text-4xl font-bold">{gardenProgress}%</div>
           <p className="mt-2 text-xs text-[var(--muted-foreground)]">播下一颗专注种子，开始第一段计时。</p>
         </section>
-        <section data-ui-region="quick-stats" className="glass-card min-h-[230px] shrink-0 basis-[32%] overflow-visible p-4">
+        <section data-ui-region="quick-stats" className="glass-card quick-stats-panel shrink-0 basis-[30%] overflow-visible p-4">
           <p className="section-label flex items-center gap-2">
             <BarChart3 size={15} /> Quick Stats
           </p>
-          <div className="mt-4 grid grid-cols-1 gap-3 2xl:grid-cols-2">
+          <div className="quick-stats-grid mt-4">
             <MiniStat label="今日专注" value={formatSeconds(focusSeconds)} tone="blue" />
             <MiniStat label="完成率" value={`${completionRate}%`} tone="violet" />
             <MiniStat label="未完成" value={`${activeTasks.filter((task) => task.status !== "done").length} 项`} tone="pink" />
@@ -574,9 +604,20 @@ function AiPanel({ embedded = false }: { embedded?: boolean }) {
 
   if (embedded) return panel;
   return (
-    <div className="fixed inset-0 z-30 flex items-end justify-end bg-slate-950/40 p-3 backdrop-blur-sm" onClick={() => setAiOpen(false)}>
+    <div className="fixed inset-0 z-30 flex items-end justify-end bg-slate-950/40 p-4 pb-8 backdrop-blur-sm" onClick={() => setAiOpen(false)}>
       {panel}
     </div>
+  );
+}
+
+function AiView() {
+  return (
+    <section className="glass-card flex h-full min-h-0 flex-col overflow-hidden p-5">
+      <Header title="AI 助手" subtitle="任务拆解、日程安排和计时指令入口" />
+      <div className="min-h-0 flex-1">
+        <AiPanel embedded />
+      </div>
+    </section>
   );
 }
 
@@ -715,7 +756,8 @@ function TaskRow({ task, onSelect }: { task: Task; onSelect: () => void }) {
 }
 
 function TaskDetail({ task }: { task: Task | null }) {
-  const records = useAppStore((state) => state.records.filter((record) => record.task_id === task?.id));
+  const allRecords = useAppStore((state) => state.records);
+  const records = useMemo(() => allRecords.filter((record) => record.task_id === task?.id), [allRecords, task?.id]);
   if (!task) return <aside className="glass-card w-[360px] border-dashed p-5 opacity-70">还没有任务，对 AI 说一句话试试看。</aside>;
   return (
     <aside className="glass-card hidden w-[380px] flex-col overflow-auto p-5 xl:flex">
@@ -1144,7 +1186,7 @@ function StatCard({ label, value }: { label: string; value: number | string }) {
 function MiniStat({ label, value, tone }: { label: string; value: string; tone: "blue" | "violet" | "pink" | "amber" }) {
   const color = tone === "blue" ? "var(--neon-blue)" : tone === "pink" ? "var(--neon-pink)" : tone === "amber" ? "var(--neon-amber)" : "var(--neon-violet)";
   return (
-    <div className="glass-inset interactive-surface flex min-h-[68px] items-center gap-3 p-3 hover:border-[var(--ring)]">
+    <div className="glass-inset interactive-surface quick-stat-card flex min-h-[64px] min-w-0 items-center gap-3 p-3 hover:border-[var(--ring)]">
       <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-[var(--background)]" style={{ background: color, boxShadow: `0 0 24px -4px ${color}` }}>
         <BarChart3 size={15} />
       </div>

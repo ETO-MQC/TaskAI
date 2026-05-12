@@ -57,10 +57,10 @@
 
   /* Gradients & shadows */
   --gradient-aurora:
-    radial-gradient(1200px 620px at 12% -12%, oklch(0.82 0.11 295 / 0.35), transparent 62%),
-    radial-gradient(980px 560px at 92% 4%, oklch(0.8 0.09 240 / 0.28), transparent 62%),
-    radial-gradient(820px 440px at 48% 108%, oklch(0.84 0.12 350 / 0.18), transparent 64%),
-    linear-gradient(180deg, oklch(0.98 0.009 275), oklch(0.93 0.018 275));
+    radial-gradient(980px 520px at 88% 6%, oklch(0.78 0.1 242 / 0.2), transparent 66%),
+    radial-gradient(860px 460px at 44% 38%, oklch(0.82 0.1 294 / 0.18), transparent 68%),
+    radial-gradient(760px 420px at 18% 96%, oklch(0.86 0.11 350 / 0.12), transparent 70%),
+    linear-gradient(180deg, oklch(0.985 0.008 275), oklch(0.94 0.016 275));
   --gradient-violet: linear-gradient(135deg, oklch(0.7 0.24 295), oklch(0.6 0.22 260));
   --gradient-ring: conic-gradient(from 220deg, oklch(0.7 0.24 295), oklch(0.72 0.2 240), oklch(0.72 0.26 350), oklch(0.7 0.24 295));
 
@@ -81,11 +81,11 @@
   --sidebar-ring: oklch(0.7 0.24 295 / 60%);
 
   --glass-card-bg:
-    linear-gradient(180deg, oklch(1 0 0 / 0.72), oklch(1 0 0 / 0.46)),
-    radial-gradient(680px 260px at 50% -18%, oklch(0.76 0.12 285 / 0.2), transparent 68%);
+    linear-gradient(180deg, oklch(1 0 0 / 0.76), oklch(1 0 0 / 0.5) 46%, oklch(0.93 0.018 275 / 0.38)),
+    radial-gradient(680px 260px at 50% -18%, oklch(0.78 0.1 285 / 0.18), transparent 70%);
   --glass-card-border: oklch(0.22 0.025 270 / 0.12);
   --glass-card-border-hover: oklch(0.22 0.025 270 / 0.18);
-  --glass-inset-bg: linear-gradient(180deg, oklch(1 0 0 / 0.56), oklch(1 0 0 / 0.3));
+  --glass-inset-bg: linear-gradient(180deg, oklch(1 0 0 / 0.6), oklch(1 0 0 / 0.34));
   --glass-inset-border: oklch(0.22 0.025 270 / 0.1);
   --glass-inner-line: oklch(1 0 0 / 0.65);
   --glass-inner-lowlight: oklch(0.22 0.025 270 / 0.1);
@@ -147,10 +147,10 @@
   --border: oklch(1 0 0 / 8%);
   --input: oklch(1 0 0 / 10%);
   --gradient-aurora:
-    radial-gradient(1200px 620px at 12% -12%, oklch(0.48 0.21 295 / 0.38), transparent 62%),
-    radial-gradient(980px 560px at 92% 4%, oklch(0.48 0.18 240 / 0.32), transparent 62%),
-    radial-gradient(820px 440px at 48% 108%, oklch(0.46 0.2 350 / 0.2), transparent 64%),
-    linear-gradient(180deg, oklch(0.14 0.022 270), oklch(0.105 0.018 270));
+    radial-gradient(1080px 560px at 88% 2%, oklch(0.5 0.17 238 / 0.28), transparent 66%),
+    radial-gradient(920px 500px at 46% 38%, oklch(0.48 0.2 294 / 0.26), transparent 68%),
+    radial-gradient(760px 420px at 18% 102%, oklch(0.48 0.2 350 / 0.16), transparent 70%),
+    linear-gradient(180deg, oklch(0.145 0.023 270), oklch(0.102 0.018 270));
   --shadow-soft: 0 1px 0 oklch(1 0 0 / 6%) inset, 0 18px 50px -24px oklch(0 0 0 / 0.72), 0 0 42px -34px oklch(0.7 0.24 295 / 0.9);
   --shadow-elevated: 0 1px 0 oklch(1 0 0 / 8%) inset, 0 28px 70px -26px oklch(0 0 0 / 0.74), 0 0 58px -34px oklch(0.7 0.24 295 / 0.9);
   --sidebar: oklch(0.2 0.02 270);
@@ -160,11 +160,11 @@
   --sidebar-accent-foreground: oklch(0.96 0.005 260);
   --sidebar-border: oklch(1 0 0 / 8%);
   --glass-card-bg:
-    linear-gradient(180deg, oklch(1 0 0 / 0.065), oklch(1 0 0 / 0.018)),
-    radial-gradient(680px 260px at 50% -18%, oklch(0.62 0.2 285 / 0.12), transparent 68%);
+    linear-gradient(180deg, oklch(1 0 0 / 0.088), oklch(1 0 0 / 0.034) 45%, oklch(0 0 0 / 0.055)),
+    radial-gradient(720px 280px at 50% -20%, oklch(0.64 0.19 285 / 0.14), transparent 70%);
   --glass-card-border: oklch(1 0 0 / 0.1);
   --glass-card-border-hover: oklch(1 0 0 / 0.16);
-  --glass-inset-bg: linear-gradient(180deg, oklch(1 0 0 / 0.045), oklch(1 0 0 / 0.02));
+  --glass-inset-bg: linear-gradient(180deg, oklch(1 0 0 / 0.058), oklch(1 0 0 / 0.022));
   --glass-inset-border: oklch(1 0 0 / 0.075);
   --glass-inner-line: oklch(1 0 0 / 0.08);
   --glass-inner-lowlight: oklch(0 0 0 / 0.22);
@@ -219,9 +219,9 @@
     z-index: -1;
     content: "";
     background:
-      radial-gradient(720px 380px at 34% 11%, oklch(0.62 0.23 292 / 0.14), transparent 72%),
-      radial-gradient(520px 340px at 76% 24%, oklch(0.58 0.18 235 / 0.11), transparent 70%),
-      radial-gradient(480px 260px at 53% 92%, oklch(0.62 0.25 340 / 0.08), transparent 72%);
+      radial-gradient(760px 420px at 82% 12%, oklch(0.62 0.18 238 / 0.12), transparent 74%),
+      radial-gradient(720px 380px at 48% 42%, oklch(0.62 0.2 292 / 0.12), transparent 72%),
+      radial-gradient(520px 300px at 28% 92%, oklch(0.62 0.22 340 / 0.08), transparent 74%);
     pointer-events: none;
   }
 }
@@ -244,6 +244,9 @@
     content: "";
     pointer-events: none;
     box-shadow: inset 0 1px 0 var(--glass-inner-line), inset 0 -1px 0 var(--glass-inner-lowlight);
+    background:
+      linear-gradient(180deg, oklch(1 0 0 / 0.045), transparent 30%),
+      radial-gradient(420px 120px at 50% 0%, oklch(1 0 0 / 0.055), transparent 72%);
   }
   .glass-card:hover {
     border-color: var(--glass-card-border-hover);
@@ -279,6 +282,36 @@
     border: 1px solid var(--glass-inset-border);
     border-radius: var(--radius-xl);
     box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.045), 0 12px 36px -30px oklch(0 0 0 / 0.85);
+  }
+  .quick-stats-panel {
+    container-type: inline-size;
+    min-height: 0;
+  }
+  .quick-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+  }
+  .quick-stat-card {
+    min-width: 0;
+  }
+  .quick-stat-card > div:last-child {
+    min-width: 0;
+  }
+  @container (max-width: 260px) {
+    .quick-stats-grid {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 0.625rem;
+    }
+    .quick-stat-card {
+      min-height: 58px;
+      padding: 0.625rem;
+    }
+    .quick-stat-card > div:first-child {
+      width: 2rem;
+      height: 2rem;
+      border-radius: 0.75rem;
+    }
   }
   .neon-text {
     background: var(--gradient-violet);
