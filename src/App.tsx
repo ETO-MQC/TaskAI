@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { DragEvent } from "react";
+import type { CSSProperties, DragEvent } from "react";
 import ReactMarkdown from "react-markdown";
 import {
   BarChart3,
@@ -25,6 +25,8 @@ import {
 import {
   Area,
   AreaChart,
+  Bar,
+  BarChart,
   Cell,
   Pie,
   PieChart,
@@ -67,6 +69,42 @@ const emptyDraft = {
   estimated_duration: "",
   tags: "",
 };
+
+function defaultTaskDate() {
+  return dayjs().format("YYYY-MM-DD");
+}
+
+function defaultTaskTime() {
+  return dayjs().format("HH:mm");
+}
+
+function combineLocalDateTime(date: string, time: string) {
+  if (!date) return "";
+  return `${date}T${time || "00:00"}`;
+}
+
+function splitLocalDateTime(value?: string | null) {
+  const parsed = value ? dayjs(value) : null;
+  return {
+    date: parsed?.isValid() ? parsed.format("YYYY-MM-DD") : defaultTaskDate(),
+    time: parsed?.isValid() ? parsed.format("HH:mm") : defaultTaskTime(),
+  };
+}
+
+function modeTargetSeconds(mode: TimerMode, minutes = 25) {
+  if (mode === "positive") return null;
+  return Math.max(1, Math.round(minutes)) * 60;
+}
+
+function modeIdleSeconds(mode: TimerMode, minutes = 25) {
+  return mode === "positive" ? 0 : Math.max(1, Math.round(minutes)) * 60;
+}
+
+function modeDescription(mode: TimerMode) {
+  if (mode === "pomodoro") return "番茄钟默认 25 分钟倒数，结束后进入记录与关联任务流程。";
+  if (mode === "countdown") return "倒计时按自定义时长向下计时，适合限定时间块。";
+  return "正计时从 00:00 向上累计，适合自由专注。";
+}
 
 const aiShortcutEventName = "smartfocus_ai_shortcut";
 
@@ -209,8 +247,18 @@ function WorkbenchView() {
   const currentTopic = timer.topic || todayTasks[0]?.title || "自由专注";
   const displaySeconds =
     timer.mode === "positive" || !timer.remaining_seconds ? timer.elapsed_seconds : timer.remaining_seconds;
+  const selectedTimerMinutes = timerMode === "pomodoro" ? 25 : 30;
+  const workbenchTimerActiveMode = timer.active && timer.mode ? timer.mode : timerMode;
+  const workbenchTimerTarget = timer.target_seconds ?? modeIdleSeconds(timerMode, selectedTimerMinutes);
+  const workbenchTimerSeconds = timer.active ? displaySeconds : modeIdleSeconds(timerMode, selectedTimerMinutes);
+  const workbenchTimerProgress = timer.active
+    ? timer.mode === "positive"
+      ? Math.max(4, (timer.elapsed_seconds / Math.max(timer.target_seconds ?? 3600, 1)) * 100)
+      : Math.max(4, ((Math.max(timer.target_seconds ?? workbenchTimerTarget, 1) - (timer.remaining_seconds ?? 0)) / Math.max(timer.target_seconds ?? workbenchTimerTarget, 1)) * 100)
+    : timerMode === "positive"
+      ? 8
+      : 100;
   const workbenchDate = dayjs(selectedWorkbenchDate);
-  const calendarPanelMode: "month" | "week" | "day" = "month";
   const workbenchMonthDays = useMemo(() => {
     const selectedMonth = dayjs(selectedWorkbenchDate).startOf("month");
     const gridStart = selectedMonth.startOf("week");
@@ -344,7 +392,7 @@ function WorkbenchView() {
             {centerPanel === "timer" ? (
             <div className="timer-card-body grid min-h-0 flex-1 items-center gap-6 overflow-auto pr-1 md:grid-cols-[minmax(220px,0.48fr)_minmax(260px,0.52fr)]">
               <div className="flex min-h-0 items-center justify-center md:justify-end">
-                <TimerOrb compact seconds={timer.active ? displaySeconds : 0} progress={timer.active ? Math.max(4, (timer.elapsed_seconds / Math.max(timer.target_seconds ?? 3600, 1)) * 100) : 8} />
+                <TimerOrb compact seconds={workbenchTimerSeconds} progress={workbenchTimerProgress} mode={workbenchTimerActiveMode} />
               </div>
               <div className="min-w-0 space-y-4 self-center md:max-w-[390px]">
                 <div>
@@ -352,7 +400,7 @@ function WorkbenchView() {
                   <h3 className="mt-1 text-lg font-bold leading-snug">{currentTopic}</h3>
                 </div>
                 <div className="glass-inset p-3 text-xs leading-6 text-[var(--muted-foreground)]">
-                  正计时无需设置时长，点击开始后自动向上计时；番茄钟与倒计时由 Rust 后端管理核心状态。
+                  {modeDescription(timerMode)}
                 </div>
                 <div className="flex flex-wrap justify-center gap-3 md:justify-start">
                   {!timer.active ? (
@@ -363,7 +411,7 @@ function WorkbenchView() {
                           topic: currentTopic,
                           mode: timerMode,
                           task_id: todayTasks[0]?.id ?? null,
-                          target_seconds: timerMode === "positive" ? null : timerMode === "pomodoro" ? 25 * 60 : 30 * 60,
+                          target_seconds: modeTargetSeconds(timerMode, selectedTimerMinutes),
                         })
                       }
                     >
@@ -400,13 +448,16 @@ function WorkbenchView() {
               <div className="grid min-h-0 flex-1 gap-4 overflow-hidden md:grid-cols-[minmax(0,1fr)_minmax(220px,0.42fr)]">
                 <div className="min-h-0 overflow-auto p-1">
                   <div className="mb-2 flex items-center justify-between gap-3">
+                    <button type="button" className="glass-inset interactive-surface grid h-8 w-8 place-items-center text-sm" onClick={() => setSelectedWorkbenchDate(workbenchDate.subtract(1, "month").format("YYYY-MM-DD"))} aria-label="上个月">
+                      ‹
+                    </button>
                     <div>
                       <p className="text-xs text-[var(--muted-foreground)]">月历总览</p>
                       <h3 className="text-sm font-semibold">{workbenchDate.format("YYYY 年 M 月")}</h3>
                     </div>
-                    <span className="glass-inset px-2 py-1 text-[10px] text-[var(--muted-foreground)]">
-                      {calendarPanelMode === "month" ? "月" : calendarPanelMode === "week" ? "周" : "日"}
-                    </span>
+                    <button type="button" className="glass-inset interactive-surface grid h-8 w-8 place-items-center text-sm" onClick={() => setSelectedWorkbenchDate(workbenchDate.add(1, "month").format("YYYY-MM-DD"))} aria-label="下个月">
+                      ›
+                    </button>
                   </div>
                   <div className="grid grid-cols-7 gap-1.5 text-center text-[10px] text-[var(--muted-foreground)]">
                     {["日", "一", "二", "三", "四", "五", "六"].map((day) => (
@@ -440,7 +491,7 @@ function WorkbenchView() {
                   })}
                   </div>
                 </div>
-                <aside className="glass-inset min-h-0 overflow-auto p-3">
+                <aside className="glass-inset mini-calendar-scroll min-h-0 overflow-auto p-3">
                   <p className="text-xs text-[var(--muted-foreground)]">{workbenchDate.format("YYYY-MM-DD")}</p>
                   <h3 className="mt-1 font-semibold">当日任务</h3>
                   <div className="mt-3 space-y-2">
@@ -653,6 +704,8 @@ function TasksView() {
 function TaskForm() {
   const createTask = useAppStore((state) => state.createTask);
   const [draft, setDraft] = useState(emptyDraft);
+  const [taskDate, setTaskDate] = useState(defaultTaskDate);
+  const [taskTime, setTaskTime] = useState(defaultTaskTime);
   const update = (key: keyof typeof draft, value: string) => setDraft((prev) => ({ ...prev, [key]: value }));
 
   return (
@@ -661,8 +714,14 @@ function TaskForm() {
       onSubmit={async (event) => {
         event.preventDefault();
         if (!draft.title.trim()) return;
-        await createTask(draft);
+        await createTask({
+          ...draft,
+          deadline: combineLocalDateTime(taskDate, taskTime),
+          planned_date: taskDate,
+        });
         setDraft(emptyDraft);
+        setTaskDate(defaultTaskDate());
+        setTaskTime(defaultTaskTime());
       }}
     >
       <input className="field" value={draft.title} onChange={(e) => update("title", e.target.value)} placeholder="输入任务标题" />
@@ -683,8 +742,8 @@ function TaskForm() {
         创建
       </button>
       <textarea className="field min-h-16 xl:col-span-2" value={draft.description} onChange={(e) => update("description", e.target.value)} placeholder="备注支持 Markdown：列表、加粗、链接" />
-      <input className="field" type="datetime-local" value={draft.deadline} onChange={(e) => update("deadline", e.target.value)} />
-      <input className="field" type="date" value={draft.planned_date} onChange={(e) => update("planned_date", e.target.value)} />
+      <input className="field" type="date" value={taskDate} onChange={(e) => setTaskDate(e.target.value)} />
+      <input className="field" type="time" value={taskTime} onChange={(e) => setTaskTime(e.target.value)} />
       <input className="field" value={draft.tags} onChange={(e) => update("tags", e.target.value)} placeholder="标签，逗号分隔" />
     </form>
   );
@@ -762,7 +821,18 @@ function TaskRow({ task, onSelect }: { task: Task; onSelect: () => void }) {
 
 function TaskDetail({ task }: { task: Task | null }) {
   const allRecords = useAppStore((state) => state.records);
+  const updateTask = useAppStore((state) => state.updateTask);
   const records = useMemo(() => allRecords.filter((record) => record.task_id === task?.id), [allRecords, task?.id]);
+  const [editDate, setEditDate] = useState(defaultTaskDate);
+  const [editTime, setEditTime] = useState(defaultTaskTime);
+
+  useEffect(() => {
+    if (!task) return;
+    const deadline = splitLocalDateTime(task.deadline);
+    setEditDate(task.planned_date || deadline.date);
+    setEditTime(deadline.time);
+  }, [task?.id, task?.deadline, task?.planned_date]);
+
   if (!task) return <aside className="glass-card w-[360px] border-dashed p-5 opacity-70">还没有任务，对 AI 说一句话试试看。</aside>;
   return (
     <aside className="glass-card hidden w-[380px] flex-col overflow-auto p-5 xl:flex">
@@ -775,6 +845,23 @@ function TaskDetail({ task }: { task: Task | null }) {
         <Info label="象限" value={`Q${task.quadrant} ${quadrantLabels[task.quadrant]}`} />
         <Info label="截止" value={task.deadline ? dayjs(task.deadline).format("YYYY-MM-DD HH:mm") : "未设置"} />
         <Info label="计划日" value={task.planned_date || "未设置"} />
+      </div>
+      <div className="glass-inset mt-3 grid grid-cols-[1fr_1fr_auto] gap-2 p-3">
+        <input className="field" type="date" value={editDate} onChange={(event) => setEditDate(event.target.value)} />
+        <input className="field" type="time" value={editTime} onChange={(event) => setEditTime(event.target.value)} />
+        <button
+          type="button"
+          className="btn-glow rounded-xl px-3 py-2 text-sm font-semibold"
+          onClick={() =>
+            updateTask({
+              id: task.id,
+              planned_date: editDate,
+              deadline: combineLocalDateTime(editDate, editTime),
+            })
+          }
+        >
+          更新
+        </button>
       </div>
       <div className="mt-5">
         <h3 className="mb-2 font-semibold">备注</h3>
@@ -804,10 +891,38 @@ function TimerView() {
   const [mode, setMode] = useState<TimerMode>("pomodoro");
   const [topic, setTopic] = useState("自由专注");
   const [minutes, setMinutes] = useState("25");
+  const autoStoppedRef = useRef(false);
   const elapsed = timer.elapsed_seconds;
-  const target = timer.target_seconds ?? (mode === "positive" ? Math.max(3600, elapsed || 3600) : Number(minutes) * 60);
-  const progress = timer.mode === "positive" ? Math.min(100, (elapsed / target) * 100) : Math.min(100, ((target - (timer.remaining_seconds ?? target)) / target) * 100);
-  const displaySeconds = timer.mode === "positive" || !timer.remaining_seconds ? elapsed : timer.remaining_seconds;
+  const selectedMinutes = Math.max(1, Number(minutes) || 25);
+  const activeMode = timer.active && timer.mode ? timer.mode : mode;
+  const target = timer.target_seconds ?? (activeMode === "positive" ? Math.max(3600, elapsed || 3600) : selectedMinutes * 60);
+  const progress =
+    activeMode === "positive"
+      ? Math.min(100, (elapsed / target) * 100)
+      : timer.active
+        ? Math.min(100, ((target - (timer.remaining_seconds ?? target)) / target) * 100)
+        : 0;
+  const displaySeconds = timer.active
+    ? activeMode === "positive" || timer.remaining_seconds == null
+      ? elapsed
+      : timer.remaining_seconds
+    : modeIdleSeconds(mode, selectedMinutes);
+
+  useEffect(() => {
+    if (!timer.active || timer.paused || timer.mode === "positive" || timer.remaining_seconds == null || timer.remaining_seconds > 0) {
+      if (!timer.active) autoStoppedRef.current = false;
+      return;
+    }
+    if (autoStoppedRef.current) return;
+    autoStoppedRef.current = true;
+    stopTimer(timer.task_id ?? null);
+  }, [timer.active, timer.paused, timer.mode, timer.remaining_seconds, timer.task_id, stopTimer]);
+
+  const switchMode = (nextMode: TimerMode) => {
+    setMode(nextMode);
+    if (nextMode === "pomodoro") setMinutes("25");
+    if (nextMode === "countdown" && mode !== "countdown") setMinutes("30");
+  };
 
   return (
     <section className="glass-card flex h-full flex-col p-5">
@@ -816,19 +931,20 @@ function TimerView() {
         <div className="flex w-full max-w-4xl flex-col items-center gap-6">
           <div className="flex gap-2">
             {(["positive", "pomodoro", "countdown"] as TimerMode[]).map((item) => (
-              <button key={item} className={`rounded-xl px-4 py-2 text-sm [transition:var(--transition-smooth)] ${mode === item ? "btn-glow" : "glass-inset text-[var(--muted-foreground)]"}`} onClick={() => setMode(item)}>
+              <button key={item} className={`rounded-xl px-4 py-2 text-sm [transition:var(--transition-smooth)] ${mode === item ? "btn-glow" : "glass-inset text-[var(--muted-foreground)]"}`} onClick={() => switchMode(item)}>
                 {modeLabel(item)}
               </button>
             ))}
           </div>
-          <TimerOrb seconds={displaySeconds} progress={progress} paused={timer.paused} />
+          <TimerOrb seconds={displaySeconds} progress={progress} paused={timer.paused} mode={activeMode} />
+          <p className="max-w-xl text-center text-sm text-[var(--muted-foreground)]">{modeDescription(mode)}</p>
           <div className="grid w-full max-w-2xl grid-cols-[1fr_120px] gap-2">
             <input className="field" value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="当前专注主题" />
-            <input className="field" value={minutes} onChange={(e) => setMinutes(e.target.value)} type="number" min="1" />
+            <input className="field" value={minutes} onChange={(e) => setMinutes(e.target.value)} type="number" min="1" disabled={mode === "positive"} title={mode === "positive" ? "正计时不需要目标时长" : "目标分钟数"} />
           </div>
           <div className="flex gap-3">
             {!timer.active ? (
-              <button className="btn-glow flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold" onClick={() => startTimer({ topic, mode, target_seconds: mode === "positive" ? null : Number(minutes) * 60 })}>
+              <button className="btn-glow flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold" onClick={() => startTimer({ topic, mode, target_seconds: modeTargetSeconds(mode, selectedMinutes) })}>
                 <Play size={18} /> 开始
               </button>
             ) : (
@@ -885,37 +1001,104 @@ function LinkRecordPanel() {
 }
 
 function StatsView() {
-  const stats = useAppStore((state) => state.stats);
-  const data = stats?.quadrant_counts ?? [];
-  const trend = stats?.trend ?? [];
+  const { stats, tasks, records, timer } = useAppStore();
+  const today = dayjs().format("YYYY-MM-DD");
+  const recentDays = useMemo(() => Array.from({ length: 7 }, (_, index) => dayjs().subtract(6 - index, "day")), []);
+  const todayTasks = tasks.filter((task) => task.status !== "archived" && (!task.planned_date || task.planned_date === today));
+  const completedToday = todayTasks.filter((task) => task.status === "done").length;
+  const openToday = todayTasks.filter((task) => task.status !== "done").length;
+  const todayRecords = records.filter((record) => dayjs(record.started_at).format("YYYY-MM-DD") === today);
+  const liveMinutes = timer.active ? timer.elapsed_seconds / 60 : 0;
+  const todayMinutes = todayRecords.reduce((sum, record) => sum + record.duration, 0) + liveMinutes;
+  const pomodoroCount = todayRecords.filter((record) => record.mode === "pomodoro").length + (timer.active && timer.mode === "pomodoro" ? 1 : 0);
+  const trend = recentDays.map((day) => {
+    const key = day.format("YYYY-MM-DD");
+    return {
+      day: day.format("MM-DD"),
+      minutes: Math.round(records.filter((record) => dayjs(record.started_at).format("YYYY-MM-DD") === key).reduce((sum, record) => sum + record.duration, 0)),
+      completed: tasks.filter((task) => task.status === "done" && dayjs(task.updated_at).format("YYYY-MM-DD") === key).length,
+    };
+  });
+  const quadrantData = [1, 2, 3, 4].map((quadrant) => ({
+    quadrant,
+    label: `Q${quadrant}`,
+    count: tasks.filter((task) => task.status !== "archived" && task.quadrant === quadrant).length,
+  }));
+  const statusData = [
+    { name: "已完成", value: tasks.filter((task) => task.status === "done").length },
+    { name: "未完成", value: tasks.filter((task) => task.status !== "done" && task.status !== "archived").length },
+  ];
+  const activeDays = new Set(records.map((record) => dayjs(record.started_at).format("YYYY-MM-DD")));
+  let streak = 0;
+  for (let index = 0; index < 365; index++) {
+    if (!activeDays.has(dayjs().subtract(index, "day").format("YYYY-MM-DD"))) break;
+    streak += 1;
+  }
+  const completionRate = todayTasks.length ? Math.round((completedToday / todayTasks.length) * 100) : 0;
+  const averageFocus = records.length ? records.reduce((sum, record) => sum + record.duration, 0) / records.length : 0;
   return (
     <section className="glass-card flex h-full flex-col p-5">
-      <Header title="今日数据" subtitle="日环进度圈、四象限饼图、趋势折线图、统计卡片" />
-      <div className="grid flex-1 grid-cols-1 gap-5 overflow-auto lg:grid-cols-2">
-        <div className="grid grid-cols-3 gap-3">
-          <StatCard label="未完成任务" value={stats?.open_tasks ?? 0} />
-          <StatCard label="今日完成" value={stats?.completed_today ?? 0} />
-          <StatCard label="总任务" value={stats?.total_tasks ?? 0} />
-          <div className="glass-card col-span-3 h-64 p-4">
+      <Header title="统计" subtitle="今日概览、7 天趋势、任务分布和效率指标" />
+      <div className="grid flex-1 grid-cols-1 gap-5 overflow-auto xl:grid-cols-2">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+          <StatCard label="今日总任务" value={todayTasks.length} />
+          <StatCard label="今日完成" value={completedToday} />
+          <StatCard label="今日未完成" value={openToday} />
+          <StatCard label="今日专注" value={formatMinutes(todayMinutes)} />
+          <StatCard label="今日番茄" value={pomodoroCount} />
+          <StatCard label="达成率" value={`${completionRate}%`} />
+          <div className="glass-card col-span-2 h-72 p-4 md:col-span-3">
+            <h3 className="mb-3 text-sm font-semibold">最近 7 天专注时长</h3>
+            <ResponsiveContainer>
+              <AreaChart data={trend}>
+                <XAxis dataKey="day" />
+                <YAxis />
+                <Tooltip />
+                <Area type="monotone" dataKey="minutes" name="分钟" stroke="var(--neon-blue)" fill="oklch(0.72 0.2 240 / 0.22)" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="glass-card col-span-2 h-72 p-4 md:col-span-3">
+            <h3 className="mb-3 text-sm font-semibold">最近 7 天完成任务数</h3>
+            <ResponsiveContainer>
+              <BarChart data={trend}>
+                <XAxis dataKey="day" />
+                <YAxis allowDecimals={false} />
+                <Tooltip />
+                <Bar dataKey="completed" name="完成数" fill="var(--neon-violet)" radius={[6, 6, 2, 2]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 gap-5">
+          <div className="glass-card h-72 p-4">
+            <h3 className="mb-3 text-sm font-semibold">四象限任务分布</h3>
             <ResponsiveContainer>
               <PieChart>
-                <Pie data={data} dataKey="count" nameKey="quadrant" innerRadius={52} outerRadius={86}>
-                  {data.map((entry) => <Cell key={entry.quadrant} fill={quadrantColors[entry.quadrant]} />)}
+                <Pie data={quadrantData} dataKey="count" nameKey="label" innerRadius={54} outerRadius={88}>
+                  {quadrantData.map((entry) => <Cell key={entry.quadrant} fill={quadrantColors[entry.quadrant]} />)}
                 </Pie>
                 <Tooltip />
               </PieChart>
             </ResponsiveContainer>
           </div>
-        </div>
-        <div className="glass-card h-72 p-4">
-          <ResponsiveContainer>
-            <AreaChart data={trend}>
-              <XAxis dataKey="day" />
-              <YAxis />
-              <Tooltip />
-              <Area type="monotone" dataKey="minutes" stroke="var(--neon-blue)" fill="oklch(0.72 0.2 240 / 0.22)" />
-            </AreaChart>
-          </ResponsiveContainer>
+          <div className="glass-card h-72 p-4">
+            <h3 className="mb-3 text-sm font-semibold">完成 / 未完成分布</h3>
+            <ResponsiveContainer>
+              <PieChart>
+                <Pie data={statusData} dataKey="value" nameKey="name" innerRadius={54} outerRadius={88}>
+                  <Cell fill="var(--neon-blue)" />
+                  <Cell fill="var(--neon-pink)" />
+                </Pie>
+                <Tooltip />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <StatCard label="连续专注" value={`${streak} 天`} />
+            <StatCard label="平均单次" value={formatMinutes(averageFocus)} />
+            <StatCard label="本周完成率" value={`${stats?.weekly_completion_rate ?? 0}%`} />
+          </div>
         </div>
       </div>
     </section>
@@ -1238,8 +1421,10 @@ function PriorityDot({ quadrant }: { quadrant: number }) {
   );
 }
 
-function TimerOrb({ seconds, progress, paused = false, compact = false }: { seconds: number; progress: number; paused?: boolean; compact?: boolean }) {
+function TimerOrb({ seconds, progress, paused = false, compact = false, mode = "positive" }: { seconds: number; progress: number; paused?: boolean; compact?: boolean; mode?: TimerMode }) {
   const progressDegrees = Math.min(100, Math.max(0, progress)) * 3.6;
+  const waveLevel = 84 - Math.min(100, Math.max(0, progress)) * 0.52;
+  const modeColor = mode === "pomodoro" ? "var(--prio-p1)" : mode === "countdown" ? "var(--neon-amber)" : "var(--neon-blue)";
   return (
     <div
       className={`timer-orb relative mx-auto grid place-items-center overflow-visible rounded-full ${paused ? "outline-dashed outline-2 outline-offset-4 outline-[var(--ring)]" : ""}`}
@@ -1257,7 +1442,10 @@ function TimerOrb({ seconds, progress, paused = false, compact = false }: { seco
         }}
       />
       <div className="timer-orb-core absolute inset-[18%] rounded-full">
-        <div className="timer-orb-liquid animate-[liquid_8s_ease-in-out_infinite]" />
+        <div className="timer-orb-wave" style={{ top: `${waveLevel}%`, "--wave-color": modeColor } as CSSProperties}>
+          <span />
+          <span />
+        </div>
       </div>
       <div className="relative z-10 flex flex-col items-center justify-center text-center">
         <div className={`font-mono tabular-nums ${compact ? "text-[32px] md:text-[36px]" : "text-[38px] md:text-[42px]"} font-bold leading-none tracking-wider text-[var(--foreground)] drop-shadow-[0_0_14px_var(--neon-violet)]`}>

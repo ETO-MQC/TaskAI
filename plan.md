@@ -650,3 +650,25 @@ TODO：
 
 遗留说明：
 - `npm run build` 仍有现有 Vite chunk size 与 ineffective dynamic import warning，不影响本次 UI 稳定验收。
+
+### 2026-05-13 功能修复、数据增强与计时器交互优化
+
+状态：已完成，等待用户验收。
+
+实现范围：
+- 仅修改 `src/App.tsx` 与 `src/styles.css`，未修改 Zustand store、Tauri/Rust 计时核心、AI intent、任务 CRUD 命令、数据库迁移、Sidebar 导航结构或 Workbench 主布局。
+- 修复任务创建区时间输入：将原 `datetime-local` + `date` 改为原生 `type="date"` 与 `type="time"` 两个输入，默认值为当前本地日期和时间；提交时组合为 `deadline: YYYY-MM-DDTHH:mm`，并同步写入 `planned_date`。
+- 增强任务详情编辑：任务详情侧栏增加日期、时间回显和更新按钮，可修改 `deadline` 与 `planned_date`；截止时间继续在任务卡片和详情中格式化展示。
+- 优化 Workbench 卡片内月历：保持 Timeline + Timer 卡片内部局部切换，月历头部新增上个月/下个月小箭头，点击后更新 `selectedWorkbenchDate` 并刷新 42 格月历；右侧任务详情区保留，并使用 `mini-calendar-scroll` 暗色细滚动条。
+- 恢复计时器三模式交互：正计时、番茄钟、倒计时按钮切换会同步高亮、显示时间、说明文案和启动参数；正计时从 `00:00` 累计，番茄钟默认 `25:00`，倒计时默认 `30:00` 且计时页可输入分钟数；倒计时/番茄剩余为 0 时触发现有 `stopTimer` 完成流程。
+- 增强统计页：从真实 `tasks`、`records` 与当前 `timer` 派生今日总任务、今日完成、今日未完成、今日专注、今日番茄、达成率、连续专注天数、平均单次专注时长和本周完成率。
+- 统计页新增图表：最近 7 天专注时长面积图、最近 7 天完成任务柱状图、四象限任务分布环图、已完成/未完成分布环图。
+- 优化 TimerOrb 内部动画：移除椭圆旋转块，改为 `timer-orb-wave` 液面波浪；波浪高度随进度变化，两层轻微横向波动，数字保持居中清晰。
+
+验收结果：
+- `npm run build` 通过。
+- 构建仍有现有 Vite chunk size、ineffective dynamic import 与 plugin timing warning，不影响本次功能修复和 UI 交互验收。
+
+遗留说明：
+- 本轮未新增数据库字段；时间仍复用现有 `deadline` 与 `planned_date` 字段。
+- 统计页连续专注天数按已有 `timer_records.started_at` 本地日期连续性计算；无记录时为 0。
