@@ -49,7 +49,7 @@ interface AppStore {
   setAiOpen: (open: boolean) => void;
   setTheme: (theme: "light" | "dark") => Promise<void>;
   load: () => Promise<void>;
-  createTask: (draft: TaskDraft) => Promise<void>;
+  createTask: (draft: TaskDraft) => Promise<Task>;
   updateTask: (patch: Partial<Task> & { id: string }) => Promise<void>;
   deleteTask: (id: string) => Promise<void>;
   selectTask: (id: string | null) => void;
@@ -260,8 +260,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ tasks, timer, records, stats, theme: normalizedTheme });
   },
   createTask: async (draft) => {
-    await api<Task>("create_task", { input: draftToInput(draft) });
+    const task = await api<Task>("create_task", { input: draftToInput(draft) });
     await get().load();
+    set({ selectedTaskId: task.id });
+    return task;
   },
   updateTask: async (patch) => {
     await api<Task>("update_task", { patch });

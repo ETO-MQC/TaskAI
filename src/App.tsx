@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, DragEvent } from "react";
+import type { CSSProperties, DragEvent, ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import {
   BarChart3,
@@ -36,6 +36,7 @@ import {
   YAxis,
 } from "recharts";
 import dayjs from "dayjs";
+import isBetween from "dayjs/plugin/isBetween";
 import { useAppStore } from "./lib/store";
 import type { Importance, Priority, Task, TimerMode, Urgency } from "./lib/types";
 import {
@@ -47,6 +48,8 @@ import {
   quadrantColors,
   quadrantLabels,
 } from "./lib/domain";
+
+dayjs.extend(isBetween);
 
 const navItems = [
   { id: "workbench", label: "工作台", icon: LayoutDashboard },
@@ -104,6 +107,35 @@ function modeDescription(mode: TimerMode) {
   if (mode === "pomodoro") return "番茄钟默认 25 分钟倒数，结束后进入记录与关联任务流程。";
   if (mode === "countdown") return "倒计时按自定义时长向下计时，适合限定时间块。";
   return "正计时从 00:00 向上累计，适合自由专注。";
+}
+
+type TaskDateFilter = "today" | "tomorrow" | "week" | "all" | "custom";
+
+function taskDateKey(task: Task) {
+  if (task.planned_date) return task.planned_date.slice(0, 10);
+  if (task.deadline) return dayjs(task.deadline).format("YYYY-MM-DD");
+  return "";
+}
+
+function isTaskVisibleForDateFilter(task: Task, filter: TaskDateFilter, customDate: string) {
+  if (task.status === "archived") return false;
+  if (filter === "all") return true;
+  const today = dayjs().startOf("day");
+  const dateKey = taskDateKey(task);
+  const date = dateKey ? dayjs(dateKey) : null;
+  if (filter === "custom") return dateKey === customDate;
+  if (filter === "tomorrow") return dateKey === today.add(1, "day").format("YYYY-MM-DD");
+  if (filter === "week") return !!date && date.isBetween(today.subtract(1, "millisecond"), today.endOf("week"), null, "[]");
+  if (!dateKey) return task.status !== "done";
+  if (dateKey === today.format("YYYY-MM-DD")) return true;
+  const overdue = date?.isBefore(today, "day") && task.status !== "done";
+  return !!overdue && (task.importance === "important" || task.urgency === "urgent");
+}
+
+function taskOverdueLabel(task: Task) {
+  const key = taskDateKey(task);
+  if (!key || task.status === "done") return null;
+  return dayjs(key).isBefore(dayjs().startOf("day"), "day") ? "逾期" : null;
 }
 
 const aiShortcutEventName = "smartfocus_ai_shortcut";
@@ -299,8 +331,8 @@ function WorkbenchView() {
   }, [centerPanel, tasks.length, timer.active, timer.elapsed_seconds]);
 
   return (
-    <section className="workbench-grid min-h-0 gap-4 overflow-visible">
-      <div className="workbench-main grid min-h-0 gap-4 overflow-visible">
+    <section className="workbench-grid animate-rise min-h-0 gap-4 overflow-visible">
+      <div className="workbench-main workbench-left-grid grid min-h-0 gap-4 overflow-visible">
         <section data-ui-region="ai-command" className="glass-card hero-card-light lift-card flex min-h-[320px] flex-col overflow-hidden p-5">
           <div className="mb-4 flex shrink-0 items-start justify-between gap-4">
             <div>
@@ -314,9 +346,14 @@ function WorkbenchView() {
                 告诉我你想推进什么，我会拆解任务、安排专注时段并启动计时。
               </p>
             </div>
-            <button type="button" className="glass-inset shrink-0 px-4 py-2 text-sm [transition:var(--transition-smooth)] hover:text-[var(--neon-violet)]" onClick={() => setView("tasks")}>
+            <div className="flex shrink-0 flex-col gap-2">
+              <button type="button" className="btn-glow rounded-xl px-4 py-2 text-sm font-semibold" onClick={() => setView("ai")}>
+                打开 AI 工作区
+              </button>
+            <button type="button" className="glass-inset px-4 py-2 text-sm [transition:var(--transition-smooth)] hover:text-[var(--neon-violet)]" onClick={() => setView("tasks")}>
               手动创建
             </button>
+            </div>
           </div>
           <div className="min-h-0 flex-1 pb-1">
             <AiPanel embedded />
@@ -336,7 +373,7 @@ function WorkbenchView() {
                 查看任务 →
               </button>
             </div>
-            <div className="min-h-0 flex-1 space-y-3 overflow-auto px-1 pb-1">
+            <div className="thin-scrollbar min-h-0 flex-1 space-y-3 overflow-auto px-1 pb-1">
               {todayTasks.map((task) => (
                 <button
                   key={task.id}
@@ -390,7 +427,7 @@ function WorkbenchView() {
               </div>
             </div>
             {centerPanel === "timer" ? (
-            <div className="timer-card-body grid min-h-0 flex-1 items-center gap-6 overflow-auto pr-1 md:grid-cols-[minmax(220px,0.48fr)_minmax(260px,0.52fr)]">
+            <div className="timer-card-body thin-scrollbar grid min-h-0 flex-1 items-center gap-6 overflow-auto pr-1 md:grid-cols-[minmax(220px,0.48fr)_minmax(260px,0.52fr)]">
               <div className="flex min-h-0 items-center justify-center md:justify-end">
                 <TimerOrb compact seconds={workbenchTimerSeconds} progress={workbenchTimerProgress} mode={workbenchTimerActiveMode} />
               </div>
@@ -446,7 +483,7 @@ function WorkbenchView() {
             </div>
             ) : (
               <div className="grid min-h-0 flex-1 gap-4 overflow-hidden md:grid-cols-[minmax(0,1fr)_minmax(220px,0.42fr)]">
-                <div className="min-h-0 overflow-auto p-1">
+                <div className="thin-scrollbar min-h-0 overflow-auto p-1">
                   <div className="mb-2 flex items-center justify-between gap-3">
                     <button type="button" className="glass-inset interactive-surface grid h-8 w-8 place-items-center text-sm" onClick={() => setSelectedWorkbenchDate(workbenchDate.subtract(1, "month").format("YYYY-MM-DD"))} aria-label="上个月">
                       ‹
@@ -621,7 +658,7 @@ function AiPanel({ embedded = false }: { embedded?: boolean }) {
           </button>
         </div>
       )}
-      <div ref={listRef} className="min-h-0 flex-1 space-y-3 overflow-auto pr-1">
+      <div ref={listRef} className="thin-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto overflow-x-hidden pr-1">
         {aiMessages.length === 0 ? (
           <div className="glass-inset flex min-h-[104px] items-center gap-4 p-5 text-sm leading-7">
             <span className="inline-grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[var(--neon-blue)] text-[var(--background)] shadow-[0_0_26px_var(--neon-blue)]">
@@ -670,8 +707,28 @@ function AiView() {
   return (
     <section className="glass-card flex h-full min-h-0 flex-col overflow-hidden p-5">
       <Header title="AI 助手" subtitle="任务拆解、日程安排和计时指令入口" />
-      <div className="min-h-0 flex-1">
-        <AiPanel embedded />
+      <div className="grid min-h-0 flex-1 gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="glass-inset flex min-h-[420px] flex-col overflow-hidden p-4">
+          <AiPanel embedded />
+        </div>
+        <aside className="thin-scrollbar grid min-h-0 gap-4 overflow-y-auto pr-1">
+          <div className="glass-inset p-4">
+            <p className="section-label">Result Preview</p>
+            <h3 className="mt-2 font-semibold">AI 生成结果预览区</h3>
+            <p className="mt-2 text-sm text-[var(--muted-foreground)]">任务拆解、计划草案和资料整理结果会先显示在这里，确认后再写入本地数据。</p>
+          </div>
+          <button className="glass-inset interactive-surface p-4 text-left" type="button">
+            <p className="section-label">Upload</p>
+            <h3 className="mt-2 font-semibold">文件上传入口</h3>
+            <p className="mt-2 text-sm text-[var(--muted-foreground)]">预留资料、课件、PDF 和笔记导入。</p>
+          </button>
+          {["学习规划", "考研 / 考公规划", "资料规划"].map((label) => (
+            <button key={label} className="glass-inset interactive-surface p-4 text-left" type="button">
+              <h3 className="font-semibold">{label}</h3>
+              <p className="mt-2 text-sm text-[var(--muted-foreground)]">预留模板入口，本轮只稳定工作区结构。</p>
+            </button>
+          ))}
+        </aside>
       </div>
     </section>
   );
@@ -679,18 +736,43 @@ function AiView() {
 
 function TasksView() {
   const { tasks, selectedTaskId, selectTask } = useAppStore();
+  const [dateFilter, setDateFilter] = useState<TaskDateFilter>("today");
+  const [customDate, setCustomDate] = useState(defaultTaskDate);
   const selected = tasks.find((task) => task.id === selectedTaskId) ?? tasks[0] ?? null;
+  const visibleTasks = tasks.filter((task) => isTaskVisibleForDateFilter(task, dateFilter, customDate));
   return (
     <section className="glass-card flex h-full min-h-0 gap-5 overflow-hidden p-5">
       <div className="flex min-w-0 flex-1 flex-col">
         <Header title="任务列表" subtitle="未完成 / 已完成 / 四象限" />
         <TaskForm />
+        <div className="glass-inset mt-3 flex flex-wrap items-center gap-2 p-2 text-sm">
+          {[
+            ["today", "今天"],
+            ["tomorrow", "明天"],
+            ["week", "本周"],
+            ["all", "全部"],
+            ["custom", "自定义"],
+          ].map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              className={`rounded-lg px-3 py-1.5 [transition:var(--transition-smooth)] ${dateFilter === value ? "btn-glow" : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"}`}
+              onClick={() => setDateFilter(value as TaskDateFilter)}
+            >
+              {label}
+            </button>
+          ))}
+          {dateFilter === "custom" && (
+            <input className="field py-1.5" type="date" value={customDate} onChange={(event) => setCustomDate(event.target.value)} />
+          )}
+          <span className="ml-auto text-xs text-[var(--muted-foreground)]">今日视图顺延重要或紧急的逾期未完成任务</span>
+        </div>
         <div className="mt-4 grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-auto pr-1 lg:grid-cols-2">
           {[1, 2, 3, 4].map((quadrant) => (
             <QuadrantColumn
               key={quadrant}
               quadrant={quadrant}
-              tasks={tasks.filter((task) => task.quadrant === quadrant && task.status !== "archived")}
+              tasks={visibleTasks.filter((task) => task.quadrant === quadrant)}
               onSelect={selectTask}
             />
           ))}
@@ -753,10 +835,10 @@ function QuadrantColumn({ quadrant, tasks, onSelect }: { quadrant: number; tasks
   return (
     <div className="glass-card p-3 [transition:var(--transition-smooth)]">
       <div className="mb-3 flex items-center justify-between">
-        <h3 className="section-label" style={{ color: quadrantColors[quadrant] }}>
+        <h3 className="text-lg font-semibold" style={{ color: quadrantColors[quadrant] }}>
           Q{quadrant} {quadrantLabels[quadrant]}
         </h3>
-        <span className="text-xs opacity-70">{tasks.length}</span>
+        <span className="glass-inset px-2 py-0.5 text-xs opacity-80">{tasks.length}</span>
       </div>
       <div className="space-y-2">
         {tasks.map((task) => (
@@ -771,6 +853,7 @@ function QuadrantColumn({ quadrant, tasks, onSelect }: { quadrant: number; tasks
 function TaskRow({ task, onSelect }: { task: Task; onSelect: () => void }) {
   const { updateTask, deleteTask, startFocus } = useAppStore();
   const done = task.status === "done";
+  const overdue = taskOverdueLabel(task);
   return (
     <div className="glass-inset group p-3 text-sm [transition:var(--transition-smooth)] hover:-translate-y-0.5 hover:border-[var(--ring)]" onClick={onSelect}>
       <div className="flex items-center gap-2">
@@ -890,12 +973,19 @@ function TimerView() {
   const { timer, startTimer, pauseTimer, resetTimer, stopTimer } = useAppStore();
   const [mode, setMode] = useState<TimerMode>("pomodoro");
   const [topic, setTopic] = useState("自由专注");
-  const [minutes, setMinutes] = useState("25");
+  const [pomodoroMinutes, setPomodoroMinutes] = useState("25");
+  const [countdownHours, setCountdownHours] = useState("0");
+  const [countdownMinutes, setCountdownMinutes] = useState("30");
+  const [lastCountdownSeconds, setLastCountdownSeconds] = useState(30 * 60);
   const autoStoppedRef = useRef(false);
   const elapsed = timer.elapsed_seconds;
-  const selectedMinutes = Math.max(1, Number(minutes) || 25);
+  const selectedPomodoroMinutes = Math.max(1, Number(pomodoroMinutes) || 25);
+  const countdownSeconds = Math.max(60, (Math.max(0, Number(countdownHours) || 0) * 60 + Math.max(0, Number(countdownMinutes) || 0)) * 60);
+  const selectedSeconds = mode === "pomodoro" ? selectedPomodoroMinutes * 60 : mode === "countdown" ? countdownSeconds : 0;
+  const minutes = mode === "countdown" ? String(Math.round(countdownSeconds / 60)) : pomodoroMinutes;
+  const setMinutes = mode === "countdown" ? (value: string) => setCountdownMinutes(value) : setPomodoroMinutes;
   const activeMode = timer.active && timer.mode ? timer.mode : mode;
-  const target = timer.target_seconds ?? (activeMode === "positive" ? Math.max(3600, elapsed || 3600) : selectedMinutes * 60);
+  const target = timer.target_seconds ?? (activeMode === "positive" ? Math.max(3600, elapsed || 3600) : selectedSeconds);
   const progress =
     activeMode === "positive"
       ? Math.min(100, (elapsed / target) * 100)
@@ -906,7 +996,11 @@ function TimerView() {
     ? activeMode === "positive" || timer.remaining_seconds == null
       ? elapsed
       : timer.remaining_seconds
-    : modeIdleSeconds(mode, selectedMinutes);
+    : mode === "positive"
+      ? 0
+      : mode === "pomodoro"
+        ? selectedPomodoroMinutes * 60
+        : lastCountdownSeconds;
 
   useEffect(() => {
     if (!timer.active || timer.paused || timer.mode === "positive" || timer.remaining_seconds == null || timer.remaining_seconds > 0) {
@@ -920,12 +1014,23 @@ function TimerView() {
 
   const switchMode = (nextMode: TimerMode) => {
     setMode(nextMode);
-    if (nextMode === "pomodoro") setMinutes("25");
-    if (nextMode === "countdown" && mode !== "countdown") setMinutes("30");
+    if (nextMode === "pomodoro" && !pomodoroMinutes) setPomodoroMinutes("25");
+    if (nextMode === "countdown") {
+      const hours = Math.floor(lastCountdownSeconds / 3600);
+      const minutes = Math.round((lastCountdownSeconds % 3600) / 60);
+      setCountdownHours(String(hours));
+      setCountdownMinutes(String(minutes));
+    }
+  };
+
+  const startCurrentTimer = () => {
+    const target_seconds = mode === "positive" ? null : mode === "pomodoro" ? selectedPomodoroMinutes * 60 : countdownSeconds;
+    if (mode === "countdown") setLastCountdownSeconds(countdownSeconds);
+    startTimer({ topic, mode, target_seconds });
   };
 
   return (
-    <section className="glass-card flex h-full flex-col p-5">
+    <section className="glass-card animate-fade-in flex h-full min-h-0 flex-col p-5">
       <Header title="专注计时" subtitle="Rust 后端 Instant 管理起止时间，前端消费后端秒级状态" />
       <div className="grid flex-1 place-items-center">
         <div className="flex w-full max-w-4xl flex-col items-center gap-6">
@@ -938,13 +1043,35 @@ function TimerView() {
           </div>
           <TimerOrb seconds={displaySeconds} progress={progress} paused={timer.paused} mode={activeMode} />
           <p className="max-w-xl text-center text-sm text-[var(--muted-foreground)]">{modeDescription(mode)}</p>
-          <div className="grid w-full max-w-2xl grid-cols-[1fr_120px] gap-2">
+          <div className="grid w-full max-w-2xl grid-cols-1 gap-2 md:grid-cols-[1fr_auto]">
             <input className="field" value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="当前专注主题" />
             <input className="field" value={minutes} onChange={(e) => setMinutes(e.target.value)} type="number" min="1" disabled={mode === "positive"} title={mode === "positive" ? "正计时不需要目标时长" : "目标分钟数"} />
           </div>
-          <div className="flex gap-3">
+          {mode === "pomodoro" && (
+            <div className="flex flex-wrap justify-center gap-2">
+              {[15, 25, 30, 45, 60].map((preset) => (
+                <button key={preset} type="button" className={`glass-inset px-3 py-2 text-sm ${Number(pomodoroMinutes) === preset ? "btn-glow" : ""}`} onClick={() => setPomodoroMinutes(String(preset))}>
+                  {preset}m
+                </button>
+              ))}
+            </div>
+          )}
+          {mode === "countdown" && (
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <input className="field w-24" value={countdownHours} onChange={(e) => setCountdownHours(e.target.value)} type="number" min="0" title="小时" />
+              <span className="text-sm text-[var(--muted-foreground)]">小时</span>
+              <input className="field w-24" value={countdownMinutes} onChange={(e) => setCountdownMinutes(e.target.value)} type="number" min="0" max="59" title="分钟" />
+              <span className="text-sm text-[var(--muted-foreground)]">分钟</span>
+            </div>
+          )}
+          <div className="flex flex-wrap justify-center gap-3">
+            {!timer.active && (
+              <button className="glass-inset flex items-center gap-2 px-4 py-2 text-sm" onClick={resetTimer}>
+                <RotateCcw size={18} /> 重置
+              </button>
+            )}
             {!timer.active ? (
-              <button className="btn-glow flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold" onClick={() => startTimer({ topic, mode, target_seconds: modeTargetSeconds(mode, selectedMinutes) })}>
+              <button className="btn-glow flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold" onClick={startCurrentTimer}>
                 <Play size={18} /> 开始
               </button>
             ) : (
@@ -1000,6 +1127,52 @@ function LinkRecordPanel() {
   );
 }
 
+const chartTooltipStyle = {
+  background: "var(--popover)",
+  border: "1px solid var(--glass-card-border-hover)",
+  borderRadius: "14px",
+  color: "var(--popover-foreground)",
+  boxShadow: "var(--shadow-elevated)",
+} as const;
+
+function ChartCard({ title, description, children, footer }: { title: string; description: string; children: ReactNode; footer?: ReactNode }) {
+  return (
+    <section className="glass-card chart-card flex min-h-[288px] flex-col overflow-hidden p-4">
+      <div className="mb-3 shrink-0">
+        <h3 className="text-sm font-semibold">{title}</h3>
+        <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">{description}</p>
+      </div>
+      <div className="chart-body min-h-0 flex-1">{children}</div>
+      {footer && <div className="mt-3 shrink-0 text-xs leading-5 text-[var(--muted-foreground)]">{footer}</div>}
+    </section>
+  );
+}
+
+function ChartLegend({ items }: { items: Array<{ label: string; value: number | string; color: string }> }) {
+  return (
+    <div className="chart-legend">
+      {items.map((item) => (
+        <div key={item.label} className="chart-legend-item">
+          <span className="chart-legend-dot" style={{ background: item.color, boxShadow: `0 0 16px ${item.color}` }} />
+          <span className="min-w-0 flex-1 truncate">{item.label}</span>
+          <span className="font-mono tabular-nums text-[var(--foreground)]">{item.value}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function DonutCenter({ value, label }: { value: number | string; label: string }) {
+  return (
+    <div className="pointer-events-none absolute inset-0 grid place-items-center">
+      <div className="text-center">
+        <div className="font-mono text-3xl font-semibold tabular-nums text-[var(--foreground)]">{value}</div>
+        <div className="mt-1 text-xs text-[var(--muted-foreground)]">{label}</div>
+      </div>
+    </div>
+  );
+}
+
 function StatsView() {
   const { stats, tasks, records, timer } = useAppStore();
   const today = dayjs().format("YYYY-MM-DD");
@@ -1036,10 +1209,21 @@ function StatsView() {
   }
   const completionRate = todayTasks.length ? Math.round((completedToday / todayTasks.length) * 100) : 0;
   const averageFocus = records.length ? records.reduce((sum, record) => sum + record.duration, 0) / records.length : 0;
+  const quadrantTotal = quadrantData.reduce((sum, item) => sum + item.count, 0);
+  const statusTotal = statusData.reduce((sum, item) => sum + item.value, 0);
+  const quadrantLegend = quadrantData.map((item) => ({
+    label: `${item.label} ${quadrantLabels[item.quadrant]}`,
+    value: item.count,
+    color: quadrantColors[item.quadrant],
+  }));
+  const statusLegend = [
+    { label: statusData[0].name, value: statusData[0].value, color: "var(--neon-blue)" },
+    { label: statusData[1].name, value: statusData[1].value, color: "var(--neon-pink)" },
+  ];
   return (
-    <section className="glass-card flex h-full flex-col p-5">
+    <section className="glass-card animate-rise flex h-full min-h-0 flex-col p-5">
       <Header title="统计" subtitle="今日概览、7 天趋势、任务分布和效率指标" />
-      <div className="grid flex-1 grid-cols-1 gap-5 overflow-auto xl:grid-cols-2">
+      <div className="thin-scrollbar grid min-h-0 flex-1 grid-cols-1 gap-5 overflow-auto pr-1 xl:grid-cols-2">
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
           <StatCard label="今日总任务" value={todayTasks.length} />
           <StatCard label="今日完成" value={completedToday} />
@@ -1047,52 +1231,74 @@ function StatsView() {
           <StatCard label="今日专注" value={formatMinutes(todayMinutes)} />
           <StatCard label="今日番茄" value={pomodoroCount} />
           <StatCard label="达成率" value={`${completionRate}%`} />
-          <div className="glass-card col-span-2 h-72 p-4 md:col-span-3">
+          <div className="glass-card chart-card col-span-2 h-80 p-4 md:col-span-3">
             <h3 className="mb-3 text-sm font-semibold">最近 7 天专注时长</h3>
+            <p className="mb-2 text-xs text-[var(--muted-foreground)]">来自 timer_records，包含当前正在运行的计时。</p>
             <ResponsiveContainer>
               <AreaChart data={trend}>
-                <XAxis dataKey="day" />
-                <YAxis />
-                <Tooltip />
+                <XAxis dataKey="day" tick={{ fill: "var(--muted-foreground)", fontSize: 11 }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill: "var(--muted-foreground)", fontSize: 11 }} axisLine={false} tickLine={false} />
+                <Tooltip contentStyle={chartTooltipStyle} cursor={{ stroke: "var(--ring)", strokeDasharray: "4 4" }} />
                 <Area type="monotone" dataKey="minutes" name="分钟" stroke="var(--neon-blue)" fill="oklch(0.72 0.2 240 / 0.22)" />
               </AreaChart>
             </ResponsiveContainer>
           </div>
-          <div className="glass-card col-span-2 h-72 p-4 md:col-span-3">
+          <div className="glass-card chart-card col-span-2 h-80 p-4 md:col-span-3">
             <h3 className="mb-3 text-sm font-semibold">最近 7 天完成任务数</h3>
+            <p className="mb-2 text-xs text-[var(--muted-foreground)]">按任务完成更新时间统计，不用示例数据填充。</p>
             <ResponsiveContainer>
               <BarChart data={trend}>
-                <XAxis dataKey="day" />
-                <YAxis allowDecimals={false} />
-                <Tooltip />
+                <XAxis dataKey="day" tick={{ fill: "var(--muted-foreground)", fontSize: 11 }} axisLine={false} tickLine={false} />
+                <YAxis allowDecimals={false} tick={{ fill: "var(--muted-foreground)", fontSize: 11 }} axisLine={false} tickLine={false} />
+                <Tooltip contentStyle={chartTooltipStyle} cursor={{ fill: "oklch(0.7 0.24 295 / 0.08)" }} />
                 <Bar dataKey="completed" name="完成数" fill="var(--neon-violet)" radius={[6, 6, 2, 2]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
         </div>
         <div className="grid grid-cols-1 gap-5">
-          <div className="glass-card h-72 p-4">
+          <div className="glass-card chart-card h-[360px] p-4">
             <h3 className="mb-3 text-sm font-semibold">四象限任务分布</h3>
+            <p className="mb-2 text-xs text-[var(--muted-foreground)]">由任务的 urgency / importance 计算结果汇总。</p>
+            <div className="relative h-[210px]">
             <ResponsiveContainer>
               <PieChart>
-                <Pie data={quadrantData} dataKey="count" nameKey="label" innerRadius={54} outerRadius={88}>
+                <Pie data={quadrantData} dataKey="count" nameKey="label" innerRadius="64%" outerRadius="86%" paddingAngle={4} cornerRadius={8} stroke="oklch(1 0 0 / 0.18)" strokeWidth={1}>
                   {quadrantData.map((entry) => <Cell key={entry.quadrant} fill={quadrantColors[entry.quadrant]} />)}
                 </Pie>
-                <Tooltip />
+                <Tooltip contentStyle={chartTooltipStyle} />
               </PieChart>
             </ResponsiveContainer>
+            <DonutCenter value={quadrantTotal} label="tasks" />
+            </div>
+            <ChartLegend items={quadrantLegend} />
           </div>
-          <div className="glass-card h-72 p-4">
+          <div className="glass-card chart-card h-[360px] p-4">
             <h3 className="mb-3 text-sm font-semibold">完成 / 未完成分布</h3>
+            <p className="mb-2 text-xs text-[var(--muted-foreground)]">展示当前真实任务状态，归档任务不计入未完成。</p>
+            <div className="relative h-[210px]">
             <ResponsiveContainer>
               <PieChart>
-                <Pie data={statusData} dataKey="value" nameKey="name" innerRadius={54} outerRadius={88}>
-                  <Cell fill="var(--neon-blue)" />
-                  <Cell fill="var(--neon-pink)" />
+                <defs>
+                  <linearGradient id="doneGradient" x1="0" x2="1" y1="0" y2="1">
+                    <stop offset="0%" stopColor="var(--neon-blue)" />
+                    <stop offset="100%" stopColor="var(--neon-violet)" />
+                  </linearGradient>
+                  <linearGradient id="openGradient" x1="0" x2="1" y1="0" y2="1">
+                    <stop offset="0%" stopColor="var(--neon-pink)" />
+                    <stop offset="100%" stopColor="var(--neon-violet)" />
+                  </linearGradient>
+                </defs>
+                <Pie data={statusData} dataKey="value" nameKey="name" innerRadius="64%" outerRadius="86%" paddingAngle={5} cornerRadius={9} stroke="oklch(1 0 0 / 0.18)" strokeWidth={1}>
+                  <Cell fill="url(#doneGradient)" />
+                  <Cell fill="url(#openGradient)" />
                 </Pie>
-                <Tooltip />
+                <Tooltip contentStyle={chartTooltipStyle} />
               </PieChart>
             </ResponsiveContainer>
+            <DonutCenter value={statusTotal} label="tasks" />
+            </div>
+            <ChartLegend items={statusLegend} />
           </div>
           <div className="grid grid-cols-3 gap-3">
             <StatCard label="连续专注" value={`${streak} 天`} />
@@ -1110,7 +1316,7 @@ function CalendarView() {
   const [selected, setSelected] = useState(dayjs().format("YYYY-MM-DD"));
   const [calendarMode, setCalendarMode] = useState<"month" | "week" | "day">("month");
   const selectedDay = dayjs(selected);
-  const monthDays = useMemo(() => Array.from({ length: 35 }, (_, index) => selectedDay.startOf("month").startOf("week").add(index, "day")), [selected]);
+  const monthDays = useMemo(() => Array.from({ length: 42 }, (_, index) => selectedDay.startOf("month").startOf("week").add(index, "day")), [selected]);
   const weekDays = useMemo(() => Array.from({ length: 7 }, (_, index) => selectedDay.startOf("week").add(index, "day")), [selected]);
   const selectedTasks = tasks.filter((task) => task.planned_date === selected);
   const dayTasks = (date: dayjs.Dayjs) => tasks.filter((task) => task.planned_date === date.format("YYYY-MM-DD"));
@@ -1145,11 +1351,12 @@ function CalendarView() {
   const renderDateCell = (day: dayjs.Dayjs, dense = false) => {
     const key = day.format("YYYY-MM-DD");
     const items = dayTasks(day);
+    const isToday = key === dayjs().format("YYYY-MM-DD");
     return (
-      <button key={key} className={`${dense ? "min-h-20" : "min-h-24"} glass-inset p-2 text-left [transition:var(--transition-smooth)] hover:border-[var(--ring)] ${selected === key ? "ring-2 ring-[var(--ring)]" : ""}`} onClick={() => setSelected(key)} onDragOver={(event) => event.preventDefault()} onDrop={dropToDate(key)}>
-        <div className="flex items-center justify-between text-sm font-medium">
-          <span>{calendarMode === "month" ? day.date() : day.format("MM-DD")}</span>
-          <span className="text-xs opacity-60">{items.length}</span>
+      <button key={key} className={`calendar-day-cell interactive-surface glass-inset ${dense ? "calendar-day-cell-compact" : ""} p-3 text-left hover:border-[var(--ring)] ${selected === key ? "ring-2 ring-[var(--ring)]" : ""}`} onClick={() => setSelected(key)} onDragOver={(event) => event.preventDefault()} onDrop={dropToDate(key)}>
+        <div className="flex items-start justify-between gap-3 text-sm font-medium">
+          <span className={isToday ? "rounded-full bg-[var(--neon-violet)] px-2 py-0.5 text-[var(--primary-foreground)]" : ""}>{calendarMode === "month" ? day.date() : day.format("MM-DD")}</span>
+          <span className="shrink-0 rounded-full border border-[var(--glass-inset-border)] px-2 py-0.5 text-xs text-[var(--muted-foreground)]">{items.length}</span>
         </div>
         {renderDots(items)}
       </button>
@@ -1163,6 +1370,13 @@ function CalendarView() {
           <p className="text-sm opacity-65">月/周/日视图任务小圆点、点击查看、拖拽改期</p>
         </div>
         <div className="glass-inset flex p-1 text-sm">
+          <button type="button" className="rounded-lg px-3 py-1.5 text-[var(--muted-foreground)] hover:text-[var(--foreground)]" onClick={() => setSelected(selectedDay.subtract(1, "month").format("YYYY-MM-DD"))} aria-label="上个月">
+            ←
+          </button>
+          <span className="grid min-w-28 place-items-center px-3 font-semibold">{selectedDay.format("YYYY-MM")}</span>
+          <button type="button" className="rounded-lg px-3 py-1.5 text-[var(--muted-foreground)] hover:text-[var(--foreground)]" onClick={() => setSelected(selectedDay.add(1, "month").format("YYYY-MM-DD"))} aria-label="下个月">
+            →
+          </button>
           {(["month", "week", "day"] as const).map((mode) => (
             <button key={mode} className={`rounded-lg px-3 py-1.5 [transition:var(--transition-smooth)] ${calendarMode === mode ? "btn-glow" : "text-[var(--muted-foreground)]"}`} onClick={() => setCalendarMode(mode)}>
               {mode === "month" ? "月" : mode === "week" ? "周" : "日"}
@@ -1170,10 +1384,18 @@ function CalendarView() {
           ))}
         </div>
       </header>
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-5 lg:grid-cols-[1fr_320px]">
-        <div className={calendarMode === "day" ? "overflow-auto" : "grid grid-cols-7 gap-2 overflow-auto"}>
-          {calendarMode === "month" && monthDays.map((day) => renderDateCell(day))}
-          {calendarMode === "week" && weekDays.map((day) => renderDateCell(day, true))}
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-5 overflow-hidden lg:grid-cols-[minmax(0,1fr)_320px]">
+        <div className={`thin-scrollbar min-h-0 ${calendarMode === "month" ? "calendar-month-scroll" : calendarMode === "week" ? "calendar-week-scroll" : "overflow-auto"}`}>
+          {calendarMode === "month" && (
+            <div className="calendar-month-grid">
+              {monthDays.map((day) => renderDateCell(day))}
+            </div>
+          )}
+          {calendarMode === "week" && (
+            <div className="calendar-week-grid">
+              {weekDays.map((day) => renderDateCell(day, true))}
+            </div>
+          )}
           {calendarMode === "day" && (
             <div className="glass-card min-h-full p-5" onDragOver={(event) => event.preventDefault()} onDrop={dropToDate(selected)}>
               <div className="flex items-center justify-between">
