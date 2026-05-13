@@ -355,7 +355,7 @@ function WorkbenchView() {
             </button>
             </div>
           </div>
-          <div className="min-h-0 flex-1 pb-1">
+          <div className="min-h-0 flex-1 flex flex-col pb-1">
             <AiPanel embedded />
           </div>
         </section>
@@ -660,7 +660,7 @@ function AiPanel({ embedded = false }: { embedded?: boolean }) {
       )}
       <div ref={listRef} className="thin-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto overflow-x-hidden pr-1">
         {aiMessages.length === 0 ? (
-          <div className="glass-inset flex min-h-[104px] items-center gap-4 p-5 text-sm leading-7">
+          <div className="glass-inset flex min-h-[104px] flex-col items-start gap-5 p-5 text-sm leading-7">
             <span className="inline-grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[var(--neon-blue)] text-[var(--background)] shadow-[0_0_26px_var(--neon-blue)]">
               <Sparkles size={18} />
             </span>
@@ -676,7 +676,7 @@ function AiPanel({ embedded = false }: { embedded?: boolean }) {
         )}
       </div>
       <form
-        className="mt-4 mb-2 grid shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] gap-2"
+        className="mt-auto mb-0 grid shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] gap-3 pt-4"
         onSubmit={(event) => {
           event.preventDefault();
           if (!input.trim()) return;
@@ -684,12 +684,12 @@ function AiPanel({ embedded = false }: { embedded?: boolean }) {
           setInput("");
         }}
       >
-        <button className={`grid h-10 w-10 place-items-center rounded-full border border-white/10 text-[var(--muted-foreground)] [transition:var(--transition-smooth)] hover:text-[var(--neon-violet)] ${listening ? "text-[var(--neon-pink)] shadow-[var(--shadow-glow-violet)]" : ""}`} type="button" onClick={startSpeech} title="语音输入">
-          <Mic size={18} />
+        <button className={`grid h-12 w-12 place-items-center rounded-full border border-white/10 text-[var(--muted-foreground)] [transition:var(--transition-smooth)] hover:text-[var(--neon-violet)] ${listening ? "text-[var(--neon-pink)] shadow-[var(--shadow-glow-violet)]" : ""}`} type="button" onClick={startSpeech} title="语音输入">
+          <Mic size={20} />
         </button>
-        <input className="glass-inset min-w-0 px-3 py-2 text-sm outline-none [transition:var(--transition-smooth)] focus:border-[var(--ring)]" value={input} onChange={(e) => setInput(e.target.value)} placeholder="输入或语音描述你想做的事..." />
-        <button className="btn-glow grid h-10 w-12 place-items-center rounded-xl text-sm font-semibold" type="submit" title="发送">
-          <Send size={17} />
+        <input className="glass-inset min-w-0 px-4 py-3 text-sm outline-none [transition:var(--transition-smooth)] focus:border-[var(--ring)]" value={input} onChange={(e) => setInput(e.target.value)} placeholder="输入或语音描述你想做的事..." />
+        <button className="btn-glow grid h-12 w-14 place-items-center rounded-xl text-sm font-semibold" type="submit" title="发送">
+          <Send size={18} />
         </button>
       </form>
     </aside>
