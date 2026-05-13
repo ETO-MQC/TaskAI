@@ -115,9 +115,10 @@ Acceptance：
 - 当前 Hotfix 的日期 / 时间输入、日历月份切换和任务基础筛选修复。
 - 现有 `tasks.deadline`、`tasks.planned_date`、`tasks.estimated_duration` 字段。
 
-状态：未开始
+状态：部分完成（2026-05-14 已完成完整月视图 7 列网格、日期格展开、任务圆点和窄屏滚动保护；周/日视图、AI 排程和冲突检测仍未开始）
 
 TODO：
+- 继续补齐周 / 日视图、AI 排程、冲突检测、过载检测和一键应用排程。
 - 明确计划时间字段是否继续复用 `deadline` / `planned_date`，或通过 SQLx migration 增加独立 start/end 字段。
 - 设计 AI 排程结果 JSON schema，包括新增、改期、冲突、过载和跳过原因。
 - 浏览器和 Tauri 环境都要验收拖拽改期。
@@ -280,9 +281,10 @@ Acceptance：
 - Sprint 12 的计时记录筛选和稳定 `timer_records`。
 - 现有 Sprint 6 / 当前 Hotfix 的统计页基础增强。
 
-状态：未开始
+状态：部分完成（2026-05-14 已完成真实数据图表视觉增强、图表说明、四象限环形图、完成/未完成环形图和最近 7 天趋势基础收口；24 小时时间环、计划 vs 实际和专注时段分析仍未开始）
 
 TODO：
+- 继续补齐 24 小时时间环、计划 vs 实际偏差、专注时段分析和统计聚合测试。
 - 明确 24 小时时间环的数据结构，尤其是计划时间块来源。
 - 确定 Recharts 是否足够实现时间环；不足时评估自定义 SVG。
 - 增加统计聚合测试，覆盖空数据、跨天计时和逾期任务。
@@ -340,9 +342,10 @@ Acceptance：
 - Sprint 11-15 的主要页面稳定后再统一收口。
 - 当前 Workbench 响应式与玻璃质感基础。
 
-状态：未开始
+状态：部分完成（2026-05-14 已完成动画 token、页面切换动画、卡片 hover、统一细滚动条、Calendar/Stats 玻璃主题图表收口；关键视口截图验收仍待补齐）
 
 TODO：
+- 补齐关键视口视觉验收，覆盖 Workbench、Calendar、Stats、AI、Tasks、Timer 等页面。
 - 建立视觉验收截图清单，避免只验收 Workbench。
 - 扫描 CSS 颜色 token，减少一次性硬编码颜色。
 - 若新增组件较多，抽取公共 glass / scroll / hover utility。
@@ -376,6 +379,40 @@ Acceptance：
 TODO：
 - 若需要批量清理构建产物或截图，必须停止并请求用户手动处理，遵守禁止批量删除规则。
 - 发布前更新 README 或发布说明，但不在本文档整理任务中执行。
+
+## 2026-05-14 Phase 2 状态同步：Workbench / Calendar / Stats / 动效收口
+
+本节用于补记此前已完成但未同步到 `plan2.md` 的收口工作。实际代码改动范围仅限 `src/App.tsx` 与 `src/styles.css`，未修改 Zustand store、Tauri/Rust 后端、SQLx migration、数据库结构或任务/计时/AI 核心业务逻辑。
+
+### 已完成内容
+
+- Workbench 首页 AI Command Stream 高度已调整：左侧主区域新增 `.workbench-left-grid`，大屏使用 `minmax(320px, 0.45fr) minmax(360px, 0.55fr)`，低高度窗口使用自动高度并允许页面滚动，避免 AI 卡片增高后覆盖 Today Stack / Timeline Timer。
+- AI 面板内部已补齐稳定 flex 布局：embedded 状态使用 `flex min-h-0 flex-1 flex-col`，消息列表使用 `thin-scrollbar min-h-0 flex-1 overflow-y-auto`，输入区固定在底部并保留底部间距。
+- CalendarView 月视图日期格子挤压已修复：完整月视图改为 `.calendar-month-grid`，使用 `repeat(7, minmax(96px, 1fr))` 与 `min-width: 760px`；外层 `.calendar-month-scroll` 支持横向滚动，避免窄屏把日期格压成细长条。
+- CalendarView 日期数字和任务数量已拆开显示：任务数量使用独立 badge，日期格最小高度为 104px，今日/选中日期继续高亮，有任务日期继续显示小圆点；Workbench 小月历与完整 CalendarView 使用不同尺寸体系。
+- StatsView 图表视觉已增强：新增 `ChartCard`、`ChartLegend`、`DonutCenter` 小组件；右侧四象限环形图和完成/未完成环形图增加中心总数、圆角分段、细边线、渐变色、玻璃图表卡片和自定义 legend。
+- StatsView 图表说明已补齐：最近 7 天专注、最近 7 天完成、四象限任务分布、完成/未完成分布均有标题、说明或注释；数据仍来自真实 `tasks`、`records`、`timer`，未写死假数据。
+- 交互流畅度已统一：新增动画 token `--ease-out-soft`、`--ease-spring`、`--duration-fast`、`--duration-normal`、`--duration-slow`；补齐 `.animate-fade-in`、`.animate-rise`、`.smooth-surface`、统一 `.thin-scrollbar`，并加入 `scrollbar-gutter: stable`。
+- 页面切换与 hover 已微调：Workbench / Calendar / Stats 主视图加轻量进入动画；大卡片 hover 维持轻微 lift，小交互面保留更明显的 `translateY(-2px)`，避免 hover 导致覆盖或布局跳动。
+
+### 对 Phase 2 Sprint 的影响
+
+- Sprint 11（日历联动 2.0）：完整智能排程、周/日时间段视图、AI 排程仍未完成；但“CalendarView 月视图 7 列网格、日期格正常展开、任务圆点、窄屏滚动保护”已完成，可作为 Sprint 11 的已落地基础项。
+- Sprint 14（统计页 2.0）：24 小时时间环、计划 vs 实际偏差、最佳专注时段仍未完成；但“真实数据图表、图表说明、四象限分布、完成/未完成分布、最近 7 天趋势视觉增强”已完成，可作为 Sprint 14 的基础图表收口项。
+- Sprint 16（第二代视觉系统收口）：本轮已完成一部分视觉收口，包括动画 token、细滚动条、卡片 hover、页面切换动画、Calendar/Stats 玻璃主题统一；关键视口截图验收未执行，仍需后续补齐。
+
+### 验收结果
+
+- `npm run build` 已通过。
+- 构建仍存在项目既有 Vite chunk size / ineffective dynamic import warning，不影响本轮收口。
+- 未执行浏览器窗口尺寸截图验收：用户在验证开始后明确表示“先不用验证了”，因此未继续做 1920x1080、1366x768、390x844 等视口检查。
+- 未发现需要修改 Rust/Tauri/Zustand/数据库迁移的事项。
+
+### 剩余 TODO
+
+- 后续 Sprint 11 继续补齐 Calendar 周/日视图、智能排程、冲突/过载检测与一键应用排程。
+- 后续 Sprint 14 继续补齐 24 小时时间环、计划 vs 实际、专注时段分析和统计聚合测试。
+- 后续 Sprint 16 需要做完整关键视口视觉验收，覆盖 Workbench、Calendar、Stats、AI、Tasks、Timer 等页面。
 
 ## 5. Backlog 暂不开发
 
