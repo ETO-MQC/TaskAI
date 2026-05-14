@@ -522,3 +522,35 @@ TODO：
 
 下一 Sprint 建议：
 - 继续 Sprint 11D：补齐完整冲突检测和差异预览确认流，在不新增数据库字段的前提下先实现“可审阅但不可误触”的应用前预览；确认计划时间字段设计后再实现真正的一键应用。
+## 2026-05-15 Sprint 11C.1 状态同步：排程建议预览弹窗化
+
+状态：已完成（Sprint 11C.1 已将排程建议从 CalendarView 右侧详情栏完整面板改为“右侧摘要卡片 + 玻璃悬浮窗 / 小屏 Sheet”展示；仍不进入 Sprint 11D，不实现一键应用，不修改任何任务数据）。
+
+实现范围：
+- CalendarView 右侧详情栏仅保留 AI Schedule 摘要：生成状态、建议数量、过载日期数量、补估时数量、查看详情按钮和重新生成本周排程建议按钮。
+- 新增 ScheduleSuggestionDialog 展示排程建议详情，桌面端为玻璃风格居中悬浮窗，小屏为接近 bottom sheet 的 85vh 可滚动面板。
+- 弹窗标题区展示“本周排程建议”、AI 建议 / 本地模拟标记，以及“当前仅预览，不会修改任务”提示。
+- 弹窗 Summary 展示 AI 总结、建议总数、过载日期数量和需要补估时任务数量。
+- 弹窗 Overload Days 展示日期、当前负荷、负荷等级和原因。
+- 弹窗 Suggestions 按 move_task、estimate_duration、mark_needs_review、keep、split_task 分组展示，每条建议展示任务标题、当前日期、建议日期、建议时间块、原因、风险和置信度。
+- JSON 解析失败时弹窗显示错误提示和 AI 原始返回，不白屏。
+- 为 Sprint 11D 预留每条 suggestion 的稳定 key 和底部 action area；当前仅显示禁用的“应用建议（下一 Sprint）”，没有应用逻辑。
+- 弹窗支持右上角关闭、ESC 关闭和点击遮罩关闭；关闭后 CalendarView 的日期、视图模式和排程预览状态不丢失。
+
+验收结果：
+- `npm run build` 已通过。
+- `git diff --check` 未发现空白错误；仅提示 Windows 工作区 LF/CRLF 转换 warning。
+- 右侧详情栏不再堆满完整排程建议，只保留摘要和操作入口。
+- 点击“查看详情”可打开玻璃风格排程建议弹窗，弹窗内容内部滚动。
+- 小屏下弹窗按 bottom sheet 形态展示，宽度 100%，max-height 85vh，内容可滚动且有明确关闭按钮。
+- 解析失败状态会在弹窗中展示错误和原文。
+- 本轮未调用 `updateTask`，未修改 `planned_date`、`tags`、`estimated_duration` 或 `quadrant`。
+- 本轮未新增数据库字段、未新增 SQLx migration、未修改 Rust / Tauri 计时核心、未修改 `plan.md`。
+
+剩余 TODO：
+- Sprint 11D 再实现差异预览、建议勾选、一键应用确认流和基础冲突检测。
+- Sprint 11D 应继续保证应用前只预览差异，取消不修改任何任务；真正应用时仍不得直接写 `quadrant`。
+- 后续补充浏览器与 Tauri 视口验收，重点覆盖 390px、768px、1366px 和 1920px 宽度。
+
+下一 Sprint 建议：
+- 继续 Sprint 11D：差异预览、一键应用和基础冲突检测。

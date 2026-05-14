@@ -1624,6 +1624,7 @@ function CalendarView() {
     error: null,
     source: null,
   });
+  const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false);
   const selectedDay = dayjs(selected);
   const todayKey = dayjs().format("YYYY-MM-DD");
   const activeTasks = tasks.filter((task) => task.status !== "archived");
@@ -1853,6 +1854,7 @@ function CalendarView() {
     setSchedulePreview({ loading: true, result: null, raw: null, error: null, source: null });
     if (!("__TAURI_INTERNALS__" in window)) {
       setSchedulePreview(buildMockScheduleSuggestion(null, null));
+      setScheduleDialogOpen(true);
       return;
     }
     try {
@@ -1866,15 +1868,18 @@ function CalendarView() {
             ? validateScheduleSuggestion(response)
             : validateScheduleSuggestion(raw);
         setSchedulePreview({ loading: false, result, raw, error: null, source: "ai" });
+        setScheduleDialogOpen(true);
       } catch (error) {
         setSchedulePreview(
           buildMockScheduleSuggestion(error instanceof Error ? error.message : "Failed to parse schedule JSON", raw),
         );
+        setScheduleDialogOpen(true);
       }
     } catch (error) {
       setSchedulePreview(
         buildMockScheduleSuggestion(error instanceof Error ? error.message : "AI schedule request failed", null),
       );
+      setScheduleDialogOpen(true);
     }
   };
   const viewTitle =
@@ -1987,6 +1992,10 @@ function CalendarView() {
       </button>
     );
   };
+  const hasSchedulePreview = !!(schedulePreview.result || schedulePreview.error || schedulePreview.raw);
+  const scheduleSuggestionCount = schedulePreview.result?.suggestions.length ?? 0;
+  const scheduleOverloadCount = schedulePreview.result?.overload_days.length ?? 0;
+  const scheduleEstimateCount = schedulePreview.result?.suggestions.filter((suggestion) => suggestion.type === "estimate_duration").length ?? 0;
   const suggestionLabel = (type: ScheduleSuggestionType) => {
     if (type === "move_task") return "Move";
     if (type === "split_task") return "Split";
@@ -1994,6 +2003,8 @@ function CalendarView() {
     if (type === "keep") return "Keep";
     return "Review";
   };
+  const suggestionKey = (suggestion: ScheduleSuggestionItem) =>
+    `${suggestion.type}:${suggestion.task_id}:${suggestion.from_date ?? "none"}:${suggestion.to_date ?? "none"}:${suggestion.suggested_time_block.start ?? "none"}:${suggestion.suggested_time_block.end ?? "none"}`;
   const renderSuggestionGroup = (title: string, types: ScheduleSuggestionType[]) => {
     const items = schedulePreview.result?.suggestions.filter((suggestion) => types.includes(suggestion.type)) ?? [];
     if (items.length === 0) return null;
@@ -2001,7 +2012,7 @@ function CalendarView() {
       <div className="space-y-2">
         <h4 className="text-sm font-semibold text-[var(--muted-foreground)]">{title}</h4>
         {items.map((suggestion) => (
-          <div key={`${suggestion.type}-${suggestion.task_id}-${suggestion.to_date ?? "none"}`} className="schedule-suggestion-item glass-inset p-3 text-sm">
+          <div key={suggestionKey(suggestion)} className="schedule-suggestion-item glass-inset p-3 text-sm">
             <div className="flex flex-wrap items-start justify-between gap-2">
               <div className="min-w-0">
                 <div className="truncate font-semibold">{suggestion.title}</div>
@@ -2025,6 +2036,7 @@ function CalendarView() {
     );
   };
   return (
+    <>
     <section className="glass-card animate-rise flex h-full min-h-0 flex-col overflow-hidden p-5">
       <header className="mb-4 flex flex-wrap items-end justify-between gap-4">
         <div>
@@ -2186,79 +2198,40 @@ function CalendarView() {
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <p className="section-label">AI Schedule</p>
-                  <h4 className="mt-1 text-sm font-semibold">排程建议预览</h4>
+                  <h4 className="mt-1 text-sm font-semibold">排程建议</h4>
                 </div>
                 <span className="rounded-full border border-[var(--glass-inset-border)] px-2 py-0.5 text-xs text-[var(--muted-foreground)]">
-                  仅预览
+                  {schedulePreview.loading ? "生成中" : hasSchedulePreview ? "已生成" : "未生成"}
                 </span>
               </div>
-              <p className="mt-2 text-xs leading-5 text-[var(--muted-foreground)]">本轮仅预览，不会自动修改任务。应用建议将在下一 Sprint 实现。</p>
-              <button
-                type="button"
-                className="mt-3 w-full rounded-xl border border-[var(--glass-inset-border)] px-3 py-2 text-sm font-semibold text-[var(--muted-foreground)] [transition:var(--transition-smooth)] hover:border-[var(--ring)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-60"
-                onClick={requestScheduleSuggestion}
-                disabled={schedulePreview.loading}
-              >
-                {schedulePreview.loading ? "正在生成建议..." : "生成本周排程建议"}
-              </button>
+              <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+                <Info label="建议" value={`${scheduleSuggestionCount}`} />
+                <Info label="过载" value={`${scheduleOverloadCount}`} />
+                <Info label="补估时" value={`${scheduleEstimateCount}`} />
+              </div>
+              {schedulePreview.error && (
+                <p className="mt-2 text-xs leading-5 text-[var(--destructive)]">JSON 解析失败，可在详情中查看原文。</p>
+              )}
+              <div className="mt-3 grid gap-2">
+                <button
+                  type="button"
+                  className="rounded-xl border border-[var(--glass-inset-border)] px-3 py-2 text-sm font-semibold text-[var(--muted-foreground)] [transition:var(--transition-smooth)] hover:border-[var(--ring)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={() => setScheduleDialogOpen(true)}
+                  disabled={!hasSchedulePreview}
+                >
+                  查看详情
+                </button>
+                <button
+                  type="button"
+                  className="btn-glow rounded-xl px-3 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-60"
+                  onClick={requestScheduleSuggestion}
+                  disabled={schedulePreview.loading}
+                >
+                  {schedulePreview.loading ? "正在生成建议..." : "重新生成本周排程建议"}
+                </button>
+              </div>
             </div>
           </div>
-          {(schedulePreview.result || schedulePreview.error || schedulePreview.raw) && (
-            <div className="schedule-preview-panel thin-scrollbar mt-3 space-y-3 overflow-auto pr-1">
-              {schedulePreview.error && (
-                <div className="glass-inset border-[var(--destructive)] p-3 text-xs leading-5 text-[var(--destructive)]">
-                  <div className="font-semibold">JSON 解析失败，已展示本地模拟建议</div>
-                  <div className="mt-1 break-words">{schedulePreview.error}</div>
-                </div>
-              )}
-              {schedulePreview.result && (
-                <>
-                  <div className="glass-inset p-3 text-sm">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="font-semibold">总结</span>
-                      <span className="rounded-full border border-[var(--glass-inset-border)] px-2 py-0.5 text-xs text-[var(--muted-foreground)]">
-                        {schedulePreview.source === "mock" ? "本地模拟" : "AI JSON"}
-                      </span>
-                    </div>
-                    <p className="mt-2 text-xs leading-5 text-[var(--muted-foreground)]">{schedulePreview.result.summary}</p>
-                  </div>
-                  <div className="space-y-2">
-                    <h4 className="text-sm font-semibold text-[var(--muted-foreground)]">过载日期</h4>
-                    {schedulePreview.result.overload_days.length > 0 ? (
-                      schedulePreview.result.overload_days.map((day) => (
-                        <div key={day.date} className="glass-inset p-3 text-sm">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="font-semibold">{day.date}</span>
-                            <span className="calendar-load-badge calendar-load-overload">{formatMinutes(day.load_minutes)}</span>
-                          </div>
-                          <p className="mt-1 text-xs text-[var(--muted-foreground)]">{day.reason}</p>
-                        </div>
-                      ))
-                    ) : (
-                      <div className="calendar-empty-state">未来 7 天暂无超过 8 小时的日期。</div>
-                    )}
-                  </div>
-                  {renderSuggestionGroup("建议移动的任务", ["move_task"])}
-                  {renderSuggestionGroup("建议补估时的任务", ["estimate_duration"])}
-                  {renderSuggestionGroup("建议保留不动的任务", ["keep"])}
-                  {renderSuggestionGroup("其他复核建议", ["split_task", "mark_needs_review"])}
-                  <button
-                    type="button"
-                    className="w-full cursor-not-allowed rounded-xl border border-[var(--glass-inset-border)] px-3 py-2 text-sm text-[var(--muted-foreground)] opacity-70"
-                    disabled
-                  >
-                    应用建议（下一 Sprint 实现）
-                  </button>
-                </>
-              )}
-              {schedulePreview.raw && (
-                <details className="glass-inset p-3 text-xs text-[var(--muted-foreground)]">
-                  <summary className="cursor-pointer font-semibold">查看 AI 原文</summary>
-                  <pre className="thin-scrollbar mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words">{schedulePreview.raw}</pre>
-                </details>
-              )}
-            </div>
-          )}
           <div className="thin-scrollbar mt-4 min-h-0 flex-1 space-y-2 overflow-auto pr-1">
             {selectedTasks.map((task) => renderTaskButton(task))}
             {selectedTasks.length === 0 && <div className="calendar-empty-state">这一天还没有安排任务。</div>}
@@ -2284,6 +2257,184 @@ function CalendarView() {
         </aside>
       </div>
     </section>
+    <ScheduleSuggestionDialog
+      open={scheduleDialogOpen}
+      preview={schedulePreview}
+      onClose={() => setScheduleDialogOpen(false)}
+      suggestionLabel={suggestionLabel}
+      suggestionKey={suggestionKey}
+    />
+    </>
+  );
+}
+
+interface ScheduleSuggestionDialogProps {
+  open: boolean;
+  preview: SchedulePreviewState;
+  onClose: () => void;
+  suggestionLabel: (type: ScheduleSuggestionType) => string;
+  suggestionKey: (suggestion: ScheduleSuggestionItem) => string;
+}
+
+function ScheduleSuggestionDialog({ open, preview, onClose, suggestionLabel, suggestionKey }: ScheduleSuggestionDialogProps) {
+  useEffect(() => {
+    if (!open) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [open, onClose]);
+
+  const groupedSuggestions = useMemo(
+    () => [
+      { title: "移动任务", types: ["move_task"] as ScheduleSuggestionType[] },
+      { title: "补估时", types: ["estimate_duration"] as ScheduleSuggestionType[] },
+      { title: "标记待整理", types: ["mark_needs_review"] as ScheduleSuggestionType[] },
+      { title: "保持不动", types: ["keep"] as ScheduleSuggestionType[] },
+      { title: "拆分任务", types: ["split_task"] as ScheduleSuggestionType[] },
+    ],
+    [],
+  );
+
+  if (!open) return null;
+
+  const result = preview.result;
+  const suggestionCount = result?.suggestions.length ?? 0;
+  const overloadCount = result?.overload_days.length ?? 0;
+  const estimateCount = result?.suggestions.filter((suggestion) => suggestion.type === "estimate_duration").length ?? 0;
+  const sourceLabel = preview.source === "mock" ? "本地模拟" : "AI 建议";
+
+  return (
+    <div className="schedule-dialog-overlay fixed inset-0 z-50 flex items-end justify-center bg-slate-950/45 p-3 backdrop-blur-sm md:items-center md:p-6" onClick={onClose}>
+      <section
+        className="schedule-dialog glass-card flex w-full max-w-[920px] flex-col overflow-hidden p-4 md:p-5"
+        role="dialog"
+        aria-modal="true"
+        aria-label="本周排程建议"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="flex shrink-0 items-start justify-between gap-4 border-b border-[var(--glass-inset-border)] pb-4">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-lg font-semibold">本周排程建议</h2>
+              <span className="rounded-full border border-[var(--glass-inset-border)] bg-[var(--glass-inset-bg)] px-2 py-0.5 text-xs text-[var(--muted-foreground)]">
+                {sourceLabel}
+              </span>
+            </div>
+            <p className="mt-1 text-sm text-[var(--muted-foreground)]">当前仅预览，不会修改任务。</p>
+          </div>
+          <button
+            type="button"
+            className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-[var(--glass-inset-border)] text-sm text-[var(--muted-foreground)] [transition:var(--transition-smooth)] hover:border-[var(--ring)] hover:text-[var(--foreground)]"
+            onClick={onClose}
+            aria-label="关闭排程建议"
+          >
+            x
+          </button>
+        </header>
+
+        <div className="schedule-dialog-body thin-scrollbar min-h-0 flex-1 overflow-auto py-4 pr-1">
+          <section className="space-y-3">
+            <div className="glass-inset p-4">
+              <p className="section-label">Summary</p>
+              <p className="mt-2 text-sm leading-6 text-[var(--muted-foreground)]">
+                {result?.summary ?? (preview.loading ? "正在生成排程建议..." : "尚未生成排程建议。")}
+              </p>
+            </div>
+            <div className="schedule-summary-grid">
+              <Info label="建议总数" value={`${suggestionCount}`} />
+              <Info label="过载日期" value={`${overloadCount}`} />
+              <Info label="需要补估时" value={`${estimateCount}`} />
+            </div>
+          </section>
+
+          {preview.error && (
+            <section className="mt-4 glass-inset p-4">
+              <p className="text-sm font-semibold text-[var(--destructive)]">JSON 解析失败</p>
+              <p className="mt-2 text-sm leading-6 text-[var(--muted-foreground)]">{preview.error}</p>
+              {preview.raw && (
+                <pre className="thin-scrollbar mt-3 max-h-56 overflow-auto whitespace-pre-wrap rounded-xl border border-[var(--glass-inset-border)] bg-[var(--glass-inset-bg)] p-3 text-xs text-[var(--muted-foreground)]">
+                  {preview.raw}
+                </pre>
+              )}
+            </section>
+          )}
+
+          <section className="mt-5">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h3 className="text-sm font-semibold text-[var(--muted-foreground)]">Overload Days</h3>
+              <span className="text-xs text-[var(--muted-foreground)]">{overloadCount} days</span>
+            </div>
+            {result?.overload_days.length ? (
+              <div className="grid gap-2">
+                {result.overload_days.map((day) => (
+                  <div key={`${day.date}:${day.level}`} className="glass-inset p-3 text-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-semibold">{day.date}</span>
+                      <span className="rounded-full border border-[var(--glass-inset-border)] px-2 py-0.5 text-xs text-[var(--muted-foreground)]">
+                        {formatMinutes(day.load_minutes)} / {day.level}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-xs leading-5 text-[var(--muted-foreground)]">{day.reason}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="calendar-empty-state">暂无过载日期。</div>
+            )}
+          </section>
+
+          <section className="mt-5 space-y-4">
+            <h3 className="text-sm font-semibold text-[var(--muted-foreground)]">Suggestions</h3>
+            {result && suggestionCount > 0 ? (
+              groupedSuggestions.map((group) => {
+                const items = result.suggestions.filter((suggestion) => group.types.includes(suggestion.type));
+                if (items.length === 0) return null;
+                return (
+                  <div key={group.title} className="space-y-2">
+                    <h4 className="text-sm font-semibold">{group.title}</h4>
+                    {items.map((suggestion) => {
+                      const key = suggestionKey(suggestion);
+                      const timeBlock =
+                        suggestion.suggested_time_block.start && suggestion.suggested_time_block.end
+                          ? `${suggestion.suggested_time_block.start}-${suggestion.suggested_time_block.end}`
+                          : "未指定";
+                      return (
+                        <article key={key} data-suggestion-key={key} className="schedule-suggestion-item glass-inset p-3 text-sm">
+                          <div className="flex flex-wrap items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <h5 className="truncate font-semibold">{suggestion.title}</h5>
+                              <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+                                当前 {suggestion.from_date ?? "未安排"} / 建议 {suggestion.to_date ?? "不调整"} / {timeBlock}
+                              </p>
+                            </div>
+                            <span className="schedule-suggestion-type rounded-full border border-[var(--glass-inset-border)] px-2 py-0.5 text-xs">
+                              {suggestionLabel(suggestion.type)}
+                            </span>
+                          </div>
+                          <p className="mt-2 text-xs leading-5 text-[var(--muted-foreground)]">原因：{suggestion.reason}</p>
+                          <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">风险：{suggestion.risk}</p>
+                          <div className="mt-2 text-xs text-[var(--muted-foreground)]">置信度 {Math.round(suggestion.confidence * 100)}%</div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                );
+              })
+            ) : (
+              <div className="calendar-empty-state">暂无可展示的建议。</div>
+            )}
+          </section>
+        </div>
+
+        <footer className="schedule-dialog-actions shrink-0 border-t border-[var(--glass-inset-border)] pt-3">
+          <button type="button" className="w-full rounded-xl border border-[var(--glass-inset-border)] px-3 py-2 text-sm font-semibold text-[var(--muted-foreground)] opacity-70" disabled>
+            应用建议（下一 Sprint）
+          </button>
+        </footer>
+      </section>
+    </div>
   );
 }
 

@@ -605,6 +605,25 @@
     color: var(--neon-blue);
     background: var(--glass-inset-bg);
   }
+  .schedule-dialog-overlay {
+    animation: fade-in 180ms ease-out;
+  }
+  .schedule-dialog {
+    width: 100%;
+    max-height: 85vh;
+    border-radius: var(--radius-2xl);
+  }
+  .schedule-dialog-body {
+    max-height: calc(85vh - 148px);
+  }
+  .schedule-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.75rem;
+  }
+  .schedule-dialog-actions {
+    background: color-mix(in oklch, var(--glass-card-bg) 84%, transparent);
+  }
   .calendar-load-badge {
     display: inline-flex;
     max-width: 100%;
@@ -657,6 +676,14 @@
       max-height: 320px;
     }
   }
+  @media (min-width: 768px) {
+    .schedule-dialog {
+      max-height: 80vh;
+    }
+    .schedule-dialog-body {
+      max-height: calc(80vh - 156px);
+    }
+  }
   @media (max-width: 640px) {
     .calendar-toolbar {
       justify-content: flex-start;
@@ -669,6 +696,18 @@
     .calendar-week-grid {
       grid-template-columns: repeat(7, minmax(138px, 1fr));
       min-width: 980px;
+    }
+    .schedule-dialog-overlay {
+      align-items: flex-end;
+      padding: 0.75rem;
+    }
+    .schedule-dialog {
+      max-height: 85vh;
+      border-bottom-right-radius: 0;
+      border-bottom-left-radius: 0;
+    }
+    .schedule-summary-grid {
+      grid-template-columns: minmax(0, 1fr);
     }
   }
   .chart-card {
