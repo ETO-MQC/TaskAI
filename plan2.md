@@ -554,3 +554,36 @@ TODO：
 
 下一 Sprint 建议：
 - 继续 Sprint 11D：差异预览、一键应用和基础冲突检测。
+
+## 2026-05-15 Sprint 11D.1 状态同步：排程建议差异确认与基础应用
+
+状态：已完成。Sprint 11D.1 在 Sprint 11C / 11C.1 的 AI 排程建议生成与详情弹窗基础上，补齐“选中建议 -> 差异确认 -> 应用基础字段”的安全闭环。
+
+实现范围：
+- ScheduleSuggestionDialog 每条建议增加 checkbox，并按可应用性自动默认勾选低风险建议。
+- move_task 仅允许写入 `planned_date: to_date`，不修改 `deadline`、`quadrant`、`urgency`、`importance`。
+- mark_needs_review 复用现有 `tags` 字段追加“待整理”，已存在“待整理”或 `needs_review` 时跳过。
+- estimate_duration 在现有 `updateTask` patch 支持 `estimated_duration` 的前提下写入建议分钟数；无合法 duration 时跳过。
+- 每条建议展示当前日期、建议日期、当前估时、建议估时、当前 tags、建议新增 tags、reason、risk、confidence、可应用性原因与基础风险提示。
+- 应用前使用确认弹窗展示将修改任务数、planned_date / 待整理 / estimated_duration 数量，并明确不写 quadrant、不写 suggested_time_block、可取消且取消不修改。
+- 应用时逐条 try/catch；成功为 applied，未选中/不可应用/无效为 skipped，异常为 failed；一条失败不会中断其他建议。
+- 应用完成后刷新 store tasks，使 CalendarView 月 / 周 / 日与右侧详情使用最新任务状态。
+
+验收结果：
+- `npm run build` 通过。
+- 建议弹窗支持勾选建议，不可应用建议禁用并显示原因。
+- 点击“应用选中建议”前有确认；取消确认不会调用 `updateTask`。
+- move_task 只提交 `id + planned_date`。
+- mark_needs_review 只提交 `id + tags`。
+- estimate_duration 只提交 `id + estimated_duration`。
+- 未直接写入 `quadrant`，未修改 `urgency` / `importance` / `deadline`，未持久化 `suggested_time_block`。
+- 应用结果展示 applied / skipped / failed 和错误信息。
+- 构建仍有项目既有 Vite chunk size 与 ineffective dynamic import warning，不影响本轮验收。
+
+剩余 TODO：
+- 后续在 Tauri 真实 AI Key 环境下实测 AI 返回的 `estimated_duration` 字段质量。
+- 继续补充小屏与 light / dark 的人工视觉验收截图。
+- 若后续要应用小时级 time block，需先设计字段与 SQLx migration；本轮未实现。
+
+下一 Sprint 建议：
+- 继续 Sprint 11D 后续小步：补齐更完整的冲突检测与差异预览细节，但仍保持不新增数据库字段、不接外部日历同步，直到计划时间字段设计明确。

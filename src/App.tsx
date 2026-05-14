@@ -1488,6 +1488,7 @@ interface ScheduleSuggestionItem {
   title: string;
   from_date: string | null;
   to_date: string | null;
+  estimated_duration?: number | null;
   suggested_time_block: {
     start: string | null;
     end: string | null;
@@ -1593,6 +1594,14 @@ function validateScheduleSuggestion(value: unknown): ScheduleSuggestionResult {
       title: suggestion.title,
       from_date: suggestion.from_date as string | null,
       to_date: suggestion.to_date as string | null,
+      estimated_duration:
+        typeof suggestion.estimated_duration === "number"
+          ? suggestion.estimated_duration
+          : typeof suggestion.duration === "number"
+            ? suggestion.duration
+            : typeof suggestion.minutes === "number"
+              ? suggestion.minutes
+              : null,
       suggested_time_block: {
         start: block.start as string | null,
         end: block.end as string | null,
@@ -1756,6 +1765,7 @@ function CalendarView() {
           title: moveCandidate.title,
           from_date: moveCandidate.planned_date?.slice(0, 10) ?? null,
           to_date: targetDay.date,
+          estimated_duration: moveCandidate.estimated_duration ?? null,
           suggested_time_block: { start: "14:00", end: "15:30" },
           reason: `本地模拟建议：${overloaded.date} 已超过 8 小时，优先移动不紧急或不重要且期限较远的任务。`,
           risk: "这是开发预览规则，未结合真实个人作息和外部日历。",
@@ -1774,6 +1784,7 @@ function CalendarView() {
           title: task.title,
           from_date: task.planned_date?.slice(0, 10) ?? null,
           to_date: task.planned_date?.slice(0, 10) ?? null,
+          estimated_duration: 60,
           suggested_time_block: { start: null, end: null },
           reason: "本地模拟建议：该任务缺少 estimated_duration，当前负荷统计可能偏低。",
           risk: "补估时前无法可靠判断当天是否过载。",
@@ -1789,6 +1800,7 @@ function CalendarView() {
         title: task.title,
         from_date: task.planned_date?.slice(0, 10) ?? null,
         to_date: task.planned_date?.slice(0, 10) ?? null,
+        estimated_duration: task.estimated_duration ?? null,
         suggested_time_block: { start: null, end: null },
         reason: "本地模拟建议：任务紧急或重要，本轮先保留原日期。",
         risk: "如果同日还有外部会议，仍可能需要后续调整。",
@@ -1836,6 +1848,7 @@ function CalendarView() {
               title: "string",
               from_date: "YYYY-MM-DD|null",
               to_date: "YYYY-MM-DD|null",
+              estimated_duration: 60,
               suggested_time_block: { start: "HH:mm|null", end: "HH:mm|null" },
               reason: "why",
               risk: "risk",
@@ -2004,7 +2017,7 @@ function CalendarView() {
     return "Review";
   };
   const suggestionKey = (suggestion: ScheduleSuggestionItem) =>
-    `${suggestion.type}:${suggestion.task_id}:${suggestion.from_date ?? "none"}:${suggestion.to_date ?? "none"}:${suggestion.suggested_time_block.start ?? "none"}:${suggestion.suggested_time_block.end ?? "none"}`;
+    `${suggestion.type}:${suggestion.task_id}:${suggestion.from_date ?? "none"}:${suggestion.to_date ?? "none"}:${suggestion.estimated_duration ?? "none"}:${suggestion.suggested_time_block.start ?? "none"}:${suggestion.suggested_time_block.end ?? "none"}`;
   const renderSuggestionGroup = (title: string, types: ScheduleSuggestionType[]) => {
     const items = schedulePreview.result?.suggestions.filter((suggestion) => types.includes(suggestion.type)) ?? [];
     if (items.length === 0) return null;
@@ -2276,7 +2289,139 @@ interface ScheduleSuggestionDialogProps {
   suggestionKey: (suggestion: ScheduleSuggestionItem) => string;
 }
 
+type ScheduleApplyStatus = "applied" | "skipped" | "failed";
+type ScheduleApplyAction = "planned_date" | "needs_review" | "estimated_duration";
+
+interface ScheduleApplyResult {
+  status: ScheduleApplyStatus;
+  action?: ScheduleApplyAction;
+  message?: string;
+}
+
+interface ScheduleApplySummary {
+  applied: number;
+  skipped: number;
+  failed: number;
+  plannedDate: number;
+  needsReview: number;
+  estimatedDuration: number;
+}
+
+function isValidDateKey(value?: string | null): value is string {
+  return !!value && /^\d{4}-\d{2}-\d{2}$/.test(value) && dayjs(value).isValid() && dayjs(value).format("YYYY-MM-DD") === value;
+}
+
+function suggestedDurationMinutes(suggestion: ScheduleSuggestionItem) {
+  const value = suggestion.estimated_duration;
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.round(value) : null;
+}
+
+function taskPlannedDate(task?: Task) {
+  return task?.planned_date?.slice(0, 10) ?? null;
+}
+
+function deadlineBeforeDate(task: Task | undefined, date?: string | null) {
+  if (!task?.deadline || !isValidDateKey(date)) return false;
+  return dayjs(task.deadline).startOf("day").isBefore(dayjs(date), "day");
+}
+
+function isHighRiskText(value: string) {
+  return /high|severe|critical|deadline|overdue|late|高|严重|截止|逾期|晚于/.test(value);
+}
+
+function workloadAfterMove(tasks: Task[], task: Task, toDate: string) {
+  return tasks
+    .filter((item) => item.status !== "archived" && item.status !== "done")
+    .filter((item) => item.id !== task.id && taskPlannedDate(item) === toDate)
+    .reduce((sum, item) => sum + (item.estimated_duration ?? 0), task.estimated_duration ?? 0);
+}
+
+function workloadAfterEstimate(tasks: Task[], task: Task, minutes: number) {
+  const date = taskPlannedDate(task);
+  if (!date) return 0;
+  return tasks
+    .filter((item) => item.status !== "archived" && item.status !== "done")
+    .filter((item) => item.id !== task.id && taskPlannedDate(item) === date)
+    .reduce((sum, item) => sum + (item.estimated_duration ?? 0), minutes);
+}
+
+function buildScheduleReview(
+  suggestion: ScheduleSuggestionItem,
+  key: string,
+  tasks: Task[],
+): {
+  key: string;
+  suggestion: ScheduleSuggestionItem;
+  task?: Task;
+  disabled: boolean;
+  defaultChecked: boolean;
+  reasons: string[];
+  warnings: string[];
+  suggestedDuration: number | null;
+  suggestedTags: string[];
+} {
+  const task = tasks.find((item) => item.id === suggestion.task_id);
+  const suggestedDuration = suggestedDurationMinutes(suggestion);
+  const reasons: string[] = [];
+  const warnings: string[] = [];
+  const suggestedTags = suggestion.type === "mark_needs_review" ? ["待整理"] : [];
+  const highRisk = isHighRiskText(suggestion.risk);
+
+  if (!task) reasons.push("task_id 找不到");
+  if (task?.status === "done") reasons.push("任务已完成");
+
+  if (suggestion.type === "move_task") {
+    if (!isValidDateKey(suggestion.to_date)) reasons.push("to_date 为空或无效");
+    const toDate = suggestion.to_date;
+    if (task && isValidDateKey(toDate)) {
+      if (workloadAfterMove(tasks, task, toDate) > 480) warnings.push("应用后仍可能过载");
+      if (deadlineBeforeDate(task, toDate)) {
+        warnings.push("可能晚于截止时间");
+        if (highRisk) reasons.push("deadline 早于建议日期且风险较高");
+      }
+    }
+  } else if (suggestion.type === "mark_needs_review") {
+    if (!task) reasons.push("缺少可标记任务");
+  } else if (suggestion.type === "estimate_duration") {
+    if (!suggestedDuration) reasons.push("duration 为空或不合法");
+    if (task && suggestedDuration && workloadAfterEstimate(tasks, task, suggestedDuration) > 480) {
+      warnings.push("应用后仍可能过载");
+    }
+  } else if (suggestion.type === "split_task") {
+    reasons.push("本轮不应用 split_task");
+  } else if (suggestion.type === "keep") {
+    reasons.push("keep 不需要写入任务");
+  }
+
+  if (
+    suggestion.type !== "move_task" &&
+    suggestion.type !== "mark_needs_review" &&
+    suggestion.type !== "estimate_duration" &&
+    (suggestion.suggested_time_block.start || suggestion.suggested_time_block.end)
+  ) {
+    reasons.push("suggested_time_block 只有时间但没有可写日期");
+  }
+
+  const disabled = reasons.length > 0;
+  const defaultChecked =
+    !disabled &&
+    ((suggestion.type === "move_task" && !!task && isValidDateKey(suggestion.to_date) && warnings.length === 0) ||
+      (suggestion.type === "mark_needs_review" && !!task) ||
+      (suggestion.type === "estimate_duration" && !!task && !!suggestedDuration && warnings.length === 0));
+
+  return { key, suggestion, task, disabled, defaultChecked, reasons, warnings, suggestedDuration, suggestedTags };
+}
+
+function emptyScheduleApplySummary(): ScheduleApplySummary {
+  return { applied: 0, skipped: 0, failed: 0, plannedDate: 0, needsReview: 0, estimatedDuration: 0 };
+}
+
 function ScheduleSuggestionDialog({ open, preview, onClose, suggestionLabel, suggestionKey }: ScheduleSuggestionDialogProps) {
+  const { tasks, updateTask } = useAppStore();
+  const [checkedKeys, setCheckedKeys] = useState<Set<string>>(new Set());
+  const [applyResults, setApplyResults] = useState<Record<string, ScheduleApplyResult>>({});
+  const [applySummary, setApplySummary] = useState<ScheduleApplySummary | null>(null);
+  const [applying, setApplying] = useState(false);
   useEffect(() => {
     if (!open) return;
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -2297,9 +2442,124 @@ function ScheduleSuggestionDialog({ open, preview, onClose, suggestionLabel, sug
     [],
   );
 
+  const result = preview.result;
+  const reviewItems = useMemo(
+    () =>
+      result?.suggestions.map((suggestion) => buildScheduleReview(suggestion, suggestionKey(suggestion), tasks)) ?? [],
+    [result, suggestionKey, tasks],
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    setCheckedKeys(new Set(reviewItems.filter((item) => item.defaultChecked).map((item) => item.key)));
+    setApplyResults({});
+    setApplySummary(null);
+  }, [open, result]);
+
+  const selectedReviewItems = reviewItems.filter((item) => checkedKeys.has(item.key) && !item.disabled);
+  const selectedTaskCount = new Set(selectedReviewItems.map((item) => item.suggestion.task_id)).size;
+  const selectedMoveCount = selectedReviewItems.filter((item) => item.suggestion.type === "move_task").length;
+  const selectedReviewCount = selectedReviewItems.filter((item) => item.suggestion.type === "mark_needs_review").length;
+  const selectedEstimateCount = selectedReviewItems.filter((item) => item.suggestion.type === "estimate_duration").length;
+
+  const toggleSuggestion = (key: string) => {
+    setCheckedKeys((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const applySelectedSuggestions = async () => {
+    if (selectedReviewItems.length === 0 || applying) return;
+    const confirmed = window.confirm(
+      [
+        `将修改 ${selectedTaskCount} 个任务。`,
+        `${selectedMoveCount} 个任务会改 planned_date。`,
+        `${selectedReviewCount} 个任务会标记为待整理。`,
+        `${selectedEstimateCount} 个任务会补 estimated_duration。`,
+        "",
+        "不会直接修改 quadrant。",
+        "quadrant 仍由 Rust 根据 urgency + importance 计算。",
+        "本轮不会写入 suggested_time_block。",
+        "可以取消，取消后不会产生任何修改。",
+      ].join("\n"),
+    );
+    if (!confirmed) return;
+
+    setApplying(true);
+    const nextResults: Record<string, ScheduleApplyResult> = { ...applyResults };
+    const nextSummary = emptyScheduleApplySummary();
+    const selectedKeys = new Set(selectedReviewItems.map((item) => item.key));
+
+    for (const item of reviewItems) {
+      if (selectedKeys.has(item.key)) continue;
+      nextResults[item.key] = {
+        status: "skipped",
+        message: item.disabled ? item.reasons.join("；") || "不可应用" : "未选中",
+      };
+      nextSummary.skipped += 1;
+    }
+
+    for (const item of selectedReviewItems) {
+      const { key, suggestion, task, suggestedDuration } = item;
+      try {
+        if (!task) {
+          nextResults[key] = { status: "skipped", message: "task_id 找不到" };
+          nextSummary.skipped += 1;
+        } else if (suggestion.type === "move_task") {
+          if (!isValidDateKey(suggestion.to_date)) {
+            nextResults[key] = { status: "skipped", message: "to_date 为空或无效" };
+            nextSummary.skipped += 1;
+          } else {
+            await updateTask({ id: task.id, planned_date: suggestion.to_date });
+            nextResults[key] = { status: "applied", action: "planned_date" };
+            nextSummary.applied += 1;
+            nextSummary.plannedDate += 1;
+          }
+        } else if (suggestion.type === "mark_needs_review") {
+          const tags = parseTags(task);
+          if (tags.includes("待整理") || tags.includes("needs_review")) {
+            nextResults[key] = { status: "skipped", message: "任务已标记待整理" };
+            nextSummary.skipped += 1;
+          } else {
+            await updateTask({ id: task.id, tags: [...tags, "待整理"] });
+            nextResults[key] = { status: "applied", action: "needs_review" };
+            nextSummary.applied += 1;
+            nextSummary.needsReview += 1;
+          }
+        } else if (suggestion.type === "estimate_duration") {
+          if (!suggestedDuration) {
+            nextResults[key] = { status: "skipped", message: "duration 为空或不合法" };
+            nextSummary.skipped += 1;
+          } else {
+            await updateTask({ id: task.id, estimated_duration: suggestedDuration });
+            nextResults[key] = { status: "applied", action: "estimated_duration" };
+            nextSummary.applied += 1;
+            nextSummary.estimatedDuration += 1;
+          }
+        } else {
+          nextResults[key] = { status: "skipped", message: "本轮不应用该建议类型" };
+          nextSummary.skipped += 1;
+        }
+      } catch (error) {
+        nextResults[key] = {
+          status: "failed",
+          message: error instanceof Error ? error.message : "updateTask failed",
+        };
+        nextSummary.failed += 1;
+      }
+      setApplyResults({ ...nextResults });
+    }
+
+    await useAppStore.getState().load();
+    setApplySummary(nextSummary);
+    setApplying(false);
+  };
+
   if (!open) return null;
 
-  const result = preview.result;
   const suggestionCount = result?.suggestions.length ?? 0;
   const overloadCount = result?.overload_days.length ?? 0;
   const estimateCount = result?.suggestions.filter((suggestion) => suggestion.type === "estimate_duration").length ?? 0;
@@ -2389,33 +2649,76 @@ function ScheduleSuggestionDialog({ open, preview, onClose, suggestionLabel, sug
             <h3 className="text-sm font-semibold text-[var(--muted-foreground)]">Suggestions</h3>
             {result && suggestionCount > 0 ? (
               groupedSuggestions.map((group) => {
-                const items = result.suggestions.filter((suggestion) => group.types.includes(suggestion.type));
+                const items = reviewItems.filter((item) => group.types.includes(item.suggestion.type));
                 if (items.length === 0) return null;
                 return (
                   <div key={group.title} className="space-y-2">
                     <h4 className="text-sm font-semibold">{group.title}</h4>
-                    {items.map((suggestion) => {
-                      const key = suggestionKey(suggestion);
+                    {items.map((item) => {
+                      const { key, suggestion, task, disabled, reasons, warnings, suggestedDuration, suggestedTags } = item;
+                      const currentTags = task ? parseTags(task) : [];
+                      const itemResult = applyResults[key];
                       const timeBlock =
                         suggestion.suggested_time_block.start && suggestion.suggested_time_block.end
                           ? `${suggestion.suggested_time_block.start}-${suggestion.suggested_time_block.end}`
                           : "未指定";
                       return (
-                        <article key={key} data-suggestion-key={key} className="schedule-suggestion-item glass-inset p-3 text-sm">
-                          <div className="flex flex-wrap items-start justify-between gap-2">
-                            <div className="min-w-0">
+                        <article key={key} data-suggestion-key={key} className={`schedule-suggestion-item glass-inset p-3 text-sm ${disabled ? "opacity-70" : ""}`}>
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <label className="flex min-w-0 flex-1 items-start gap-3">
+                              <input
+                                type="checkbox"
+                                className="mt-1 h-4 w-4 accent-[var(--neon-violet)] disabled:cursor-not-allowed"
+                                checked={checkedKeys.has(key)}
+                                disabled={disabled || applying}
+                                onChange={() => toggleSuggestion(key)}
+                              />
+                              <span className="min-w-0">
                               <h5 className="truncate font-semibold">{suggestion.title}</h5>
                               <p className="mt-1 text-xs text-[var(--muted-foreground)]">
                                 当前 {suggestion.from_date ?? "未安排"} / 建议 {suggestion.to_date ?? "不调整"} / {timeBlock}
                               </p>
+                              </span>
+                            </label>
+                            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                              {itemResult && (
+                                <span className={`rounded-full border border-[var(--glass-inset-border)] px-2 py-0.5 text-xs ${
+                                  itemResult.status === "applied"
+                                    ? "text-emerald-400"
+                                    : itemResult.status === "failed"
+                                      ? "text-[var(--destructive)]"
+                                      : "text-[var(--muted-foreground)]"
+                                }`}>
+                                  {itemResult.status}
+                                </span>
+                              )}
+                              <span className="schedule-suggestion-type rounded-full border border-[var(--glass-inset-border)] px-2 py-0.5 text-xs">
+                                {suggestionLabel(suggestion.type)}
+                              </span>
                             </div>
-                            <span className="schedule-suggestion-type rounded-full border border-[var(--glass-inset-border)] px-2 py-0.5 text-xs">
-                              {suggestionLabel(suggestion.type)}
-                            </span>
+                          </div>
+                          <div className="mt-3 grid gap-2 text-xs text-[var(--muted-foreground)] md:grid-cols-2">
+                            <div className="glass-inset p-2">当前日期：{taskPlannedDate(task) ?? suggestion.from_date ?? "未安排"}</div>
+                            <div className="glass-inset p-2">建议日期：{suggestion.to_date ?? "不调整"}</div>
+                            <div className="glass-inset p-2">当前估时：{task?.estimated_duration ? formatMinutes(task.estimated_duration) : "未估时"}</div>
+                            <div className="glass-inset p-2">建议估时：{suggestedDuration ? formatMinutes(suggestedDuration) : "无"}</div>
+                            <div className="glass-inset p-2">当前 tags：{currentTags.length ? currentTags.join(", ") : "无"}</div>
+                            <div className="glass-inset p-2">建议新增 tags：{suggestedTags.length ? suggestedTags.join(", ") : "无"}</div>
                           </div>
                           <p className="mt-2 text-xs leading-5 text-[var(--muted-foreground)]">原因：{suggestion.reason}</p>
                           <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">风险：{suggestion.risk}</p>
                           <div className="mt-2 text-xs text-[var(--muted-foreground)]">置信度 {Math.round(suggestion.confidence * 100)}%</div>
+                          {(warnings.length > 0 || reasons.length > 0 || itemResult?.message) && (
+                            <div className="mt-2 space-y-1 text-xs leading-5">
+                              {warnings.map((warning) => (
+                                <p key={warning} className="text-[var(--neon-amber)]">{warning}</p>
+                              ))}
+                              {reasons.map((reason) => (
+                                <p key={reason} className="text-[var(--destructive)]">不可应用：{reason}</p>
+                              ))}
+                              {itemResult?.message && <p className="text-[var(--muted-foreground)]">{itemResult.message}</p>}
+                            </div>
+                          )}
                         </article>
                       );
                     })}
@@ -2429,9 +2732,27 @@ function ScheduleSuggestionDialog({ open, preview, onClose, suggestionLabel, sug
         </div>
 
         <footer className="schedule-dialog-actions shrink-0 border-t border-[var(--glass-inset-border)] pt-3">
-          <button type="button" className="w-full rounded-xl border border-[var(--glass-inset-border)] px-3 py-2 text-sm font-semibold text-[var(--muted-foreground)] opacity-70" disabled>
-            应用建议（下一 Sprint）
+          {applySummary && (
+            <div className="mb-3 grid gap-2 text-xs text-[var(--muted-foreground)] sm:grid-cols-3">
+              <Info label="已应用" value={`${applySummary.applied}`} />
+              <Info label="跳过" value={`${applySummary.skipped}`} />
+              <Info label="失败" value={`${applySummary.failed}`} />
+              <Info label="改 planned_date" value={`${applySummary.plannedDate}`} />
+              <Info label="标记待整理" value={`${applySummary.needsReview}`} />
+              <Info label="补 estimated_duration" value={`${applySummary.estimatedDuration}`} />
+            </div>
+          )}
+          <button
+            type="button"
+            className="btn-glow w-full rounded-xl px-3 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={selectedReviewItems.length === 0 || applying}
+            onClick={applySelectedSuggestions}
+          >
+            {applying ? "正在应用..." : `应用选中建议（${selectedReviewItems.length}）`}
           </button>
+          <p className="mt-2 text-xs leading-5 text-[var(--muted-foreground)]">
+            只会写入 planned_date、tags 或 estimated_duration；不会直接修改 quadrant、urgency、importance、deadline，也不会写入 suggested_time_block。
+          </p>
         </footer>
       </section>
     </div>
