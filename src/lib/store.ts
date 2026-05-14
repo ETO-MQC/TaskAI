@@ -33,7 +33,7 @@ interface TaskDraft {
   tags: string;
 }
 
-type TaskUpdatePatch = Omit<Partial<Task>, "tags"> & { id: string; tags?: string[] | string };
+export type TaskUpdatePatch = Omit<Partial<Task>, "tags"> & { id: string; tags?: string[] | string };
 
 interface AppStore {
   view: View;

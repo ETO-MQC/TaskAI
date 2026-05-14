@@ -1,0 +1,21 @@
+
+- ScheduleSuggestionDialog 每条建议增加 checkbox，并按可应用性自动默认勾选低风险建议。
+- move_task 仅允许写入 `planned_date: to_date`，不修改 `deadline`、`quadrant`、`urgency`、`importance`。
+- mark_needs_review 复用现有 `tags` 字段追加“待整理”，已存在“待整理”或 `needs_review` 时跳过。
+- estimate_duration 在现有 `updateTask` patch 支持 `estimated_duration` 的前提下写入建议分钟数；无合法 duration 时跳过。
+- 应用前使用确认弹窗展示将修改任务数、planned_date / 待整理 / estimated_duration 数量，并明确不写 quadrant、不写 suggested_time_block、可取消且取消不修改。
+- 应用完成后刷新 store tasks，使 CalendarView 月 / 周 / 日与右侧详情使用最新任务状态。
+
+- `npm run build` 通过。
+- move_task 只提交 `id + planned_date`。
+- mark_needs_review 只提交 `id + tags`。
+- estimate_duration 只提交 `id + estimated_duration`。
+- 未直接写入 `quadrant`，未修改 `urgency` / `importance` / `deadline`，未持久化 `suggested_time_block`。
+- 应用结果展示 applied / skipped / failed 和错误信息。
+- 构建仍有项目既有 Vite chunk size 与 ineffective dynamic import warning，不影响本轮验收。
+
+剩余 TODO：
+- 后续在 Tauri 真实 AI Key 环境下实测 AI 返回的 `estimated_duration` 字段质量。
+- 若后续要应用小时级 time block，需先设计字段与 SQLx migration；本轮未实现。
+
+下一 Sprint 建议：

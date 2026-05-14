@@ -37,7 +37,7 @@ import {
 } from "recharts";
 import dayjs from "dayjs";
 import isBetween from "dayjs/plugin/isBetween";
-import { useAppStore } from "./lib/store";
+import { TaskUpdatePatch, useAppStore } from "./lib/store";
 import type { Importance, Priority, Task, TimerMode, Urgency } from "./lib/types";
 import {
   formatMinutes,
@@ -2307,6 +2307,20 @@ interface ScheduleApplySummary {
   estimatedDuration: number;
 }
 
+interface TaskStateSnapshot {
+  planned_date: string | null;
+  tags: string[];
+  estimated_duration: number | null;
+}
+
+interface ApplyLogItem {
+  task_id: string;
+  title: string;
+  before: TaskStateSnapshot;
+  after: TaskStateSnapshot;
+  changed_fields: string[];
+}
+
 function isValidDateKey(value?: string | null): value is string {
   return !!value && /^\d{4}-\d{2}-\d{2}$/.test(value) && dayjs(value).isValid() && dayjs(value).format("YYYY-MM-DD") === value;
 }
@@ -2421,7 +2435,10 @@ function ScheduleSuggestionDialog({ open, preview, onClose, suggestionLabel, sug
   const [checkedKeys, setCheckedKeys] = useState<Set<string>>(new Set());
   const [applyResults, setApplyResults] = useState<Record<string, ScheduleApplyResult>>({});
   const [applySummary, setApplySummary] = useState<ScheduleApplySummary | null>(null);
+  const [applyLog, setApplyLog] = useState<ApplyLogItem[]>([]);
+  const [lastUndoUsed, setLastUndoUsed] = useState(true);
   const [applying, setApplying] = useState(false);
+  const [undoing, setUndoing] = useState(false);
   useEffect(() => {
     if (!open) return;
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -2491,6 +2508,7 @@ function ScheduleSuggestionDialog({ open, preview, onClose, suggestionLabel, sug
     setApplying(true);
     const nextResults: Record<string, ScheduleApplyResult> = { ...applyResults };
     const nextSummary = emptyScheduleApplySummary();
+    const nextLog: ApplyLogItem[] = [];
     const selectedKeys = new Set(selectedReviewItems.map((item) => item.key));
 
     for (const item of reviewItems) {
@@ -2508,40 +2526,71 @@ function ScheduleSuggestionDialog({ open, preview, onClose, suggestionLabel, sug
         if (!task) {
           nextResults[key] = { status: "skipped", message: "task_id 找不到" };
           nextSummary.skipped += 1;
-        } else if (suggestion.type === "move_task") {
-          if (!isValidDateKey(suggestion.to_date)) {
-            nextResults[key] = { status: "skipped", message: "to_date 为空或无效" };
-            nextSummary.skipped += 1;
-          } else {
-            await updateTask({ id: task.id, planned_date: suggestion.to_date });
-            nextResults[key] = { status: "applied", action: "planned_date" };
-            nextSummary.applied += 1;
-            nextSummary.plannedDate += 1;
-          }
-        } else if (suggestion.type === "mark_needs_review") {
-          const tags = parseTags(task);
-          if (tags.includes("待整理") || tags.includes("needs_review")) {
-            nextResults[key] = { status: "skipped", message: "任务已标记待整理" };
-            nextSummary.skipped += 1;
-          } else {
-            await updateTask({ id: task.id, tags: [...tags, "待整理"] });
-            nextResults[key] = { status: "applied", action: "needs_review" };
-            nextSummary.applied += 1;
-            nextSummary.needsReview += 1;
-          }
-        } else if (suggestion.type === "estimate_duration") {
-          if (!suggestedDuration) {
-            nextResults[key] = { status: "skipped", message: "duration 为空或不合法" };
-            nextSummary.skipped += 1;
-          } else {
-            await updateTask({ id: task.id, estimated_duration: suggestedDuration });
-            nextResults[key] = { status: "applied", action: "estimated_duration" };
-            nextSummary.applied += 1;
-            nextSummary.estimatedDuration += 1;
-          }
         } else {
-          nextResults[key] = { status: "skipped", message: "本轮不应用该建议类型" };
-          nextSummary.skipped += 1;
+          const beforeState: TaskStateSnapshot = {
+            planned_date: task.planned_date ?? null,
+            tags: parseTags(task),
+            estimated_duration: task.estimated_duration ?? null,
+          };
+          const afterState: TaskStateSnapshot = { ...beforeState };
+          const changedFields: string[] = [];
+
+          if (suggestion.type === "move_task") {
+            if (!isValidDateKey(suggestion.to_date)) {
+              nextResults[key] = { status: "skipped", message: "to_date 为空或无效" };
+              nextSummary.skipped += 1;
+              continue;
+            } else {
+              await updateTask({ id: task.id, planned_date: suggestion.to_date });
+              nextResults[key] = { status: "applied", action: "planned_date" };
+              afterState.planned_date = suggestion.to_date;
+              changedFields.push("planned_date");
+              nextSummary.applied += 1;
+              nextSummary.plannedDate += 1;
+            }
+          } else if (suggestion.type === "mark_needs_review") {
+            const tags = parseTags(task);
+            if (tags.includes("待整理") || tags.includes("needs_review")) {
+              nextResults[key] = { status: "skipped", message: "任务已标记待整理" };
+              nextSummary.skipped += 1;
+              continue;
+            } else {
+              const newTags = [...tags, "待整理"];
+              await updateTask({ id: task.id, tags: newTags });
+              nextResults[key] = { status: "applied", action: "needs_review" };
+              afterState.tags = newTags;
+              changedFields.push("tags");
+              nextSummary.applied += 1;
+              nextSummary.needsReview += 1;
+            }
+          } else if (suggestion.type === "estimate_duration") {
+            if (!suggestedDuration) {
+              nextResults[key] = { status: "skipped", message: "duration 为空或不合法" };
+              nextSummary.skipped += 1;
+              continue;
+            } else {
+              await updateTask({ id: task.id, estimated_duration: suggestedDuration });
+              nextResults[key] = { status: "applied", action: "estimated_duration" };
+              afterState.estimated_duration = suggestedDuration;
+              changedFields.push("estimated_duration");
+              nextSummary.applied += 1;
+              nextSummary.estimatedDuration += 1;
+            }
+          } else {
+            nextResults[key] = { status: "skipped", message: "本轮不应用该建议类型" };
+            nextSummary.skipped += 1;
+            continue;
+          }
+          
+          if (changedFields.length > 0) {
+            nextLog.push({
+              task_id: task.id,
+              title: task.title,
+              before: beforeState,
+              after: afterState,
+              changed_fields: changedFields,
+            });
+          }
         }
       } catch (error) {
         nextResults[key] = {
@@ -2555,6 +2604,8 @@ function ScheduleSuggestionDialog({ open, preview, onClose, suggestionLabel, sug
 
     await useAppStore.getState().load();
     setApplySummary(nextSummary);
+    setApplyLog(nextLog);
+    setLastUndoUsed(false);
     setApplying(false);
   };
 
@@ -2729,6 +2780,65 @@ function ScheduleSuggestionDialog({ open, preview, onClose, suggestionLabel, sug
               <div className="calendar-empty-state">暂无可展示的建议。</div>
             )}
           </section>
+          
+          {applyLog.length > 0 && (
+            <section className="mt-5 space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="text-sm font-semibold text-[var(--muted-foreground)]">本次修改摘要</h3>
+              </div>
+              <div className="space-y-2">
+                {applyLog.map((log) => (
+                  <div key={log.task_id} className="glass-inset p-3 text-xs">
+                    <div className="font-semibold text-sm mb-1">{log.title}</div>
+                    {log.changed_fields.includes("planned_date") && (
+                      <div className="text-[var(--muted-foreground)]">
+                        planned_date: <span className="line-through opacity-70">{log.before.planned_date?.slice(0, 10) ?? "空"}</span> → <span className="text-emerald-400">{log.after.planned_date?.slice(0, 10)}</span>
+                      </div>
+                    )}
+                    {log.changed_fields.includes("tags") && (
+                      <div className="text-[var(--muted-foreground)]">
+                        tags: <span className="line-through opacity-70">[{log.before.tags.join(", ")}]</span> → <span className="text-emerald-400">[{log.after.tags.join(", ")}]</span>
+                      </div>
+                    )}
+                    {log.changed_fields.includes("estimated_duration") && (
+                      <div className="text-[var(--muted-foreground)]">
+                        estimated_duration: <span className="line-through opacity-70">{log.before.estimated_duration ?? "空"}</span> → <span className="text-emerald-400">{log.after.estimated_duration} 分钟</span>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {!lastUndoUsed && applySummary?.applied ? (
+                <button
+                  type="button"
+                  className="mt-2 w-full rounded-xl border border-[var(--destructive)] px-3 py-2 text-sm font-semibold text-[var(--destructive)] [transition:var(--transition-smooth)] hover:bg-[var(--destructive)] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={applying || undoing}
+                  onClick={async () => {
+                    const confirmed = window.confirm("将撤销本次应用？\n这只会恢复 planned_date, tags 和 estimated_duration。");
+                    if (!confirmed) return;
+                    setUndoing(true);
+                    for (const log of applyLog) {
+                      try {
+                        const patch: TaskUpdatePatch = { id: log.task_id };
+                        if (log.changed_fields.includes("planned_date")) patch.planned_date = log.before.planned_date ?? undefined;
+                        if (log.changed_fields.includes("tags")) patch.tags = log.before.tags;
+                        if (log.changed_fields.includes("estimated_duration")) patch.estimated_duration = log.before.estimated_duration ?? null;
+                        await updateTask(patch);
+                      } catch (e) {
+                         alert(`撤销任务 ${log.title} 失败: ${e instanceof Error ? e.message : e}`);
+                      }
+                    }
+                    await useAppStore.getState().load();
+                    setLastUndoUsed(true);
+                    setUndoing(false);
+                    alert("撤销完成，列表已刷新");
+                  }}
+                >
+                  {undoing ? "撤销中..." : "撤销上一次应用"}
+                </button>
+              ) : null}
+            </section>
+          )}
         </div>
 
         <footer className="schedule-dialog-actions shrink-0 border-t border-[var(--glass-inset-border)] pt-3">
