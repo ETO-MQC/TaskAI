@@ -1477,6 +1477,260 @@ function StatsView() {
 }
 
 function CalendarView() {
+  const { tasks, records, updateTask, selectTask, setView } = useAppStore();
+  const [selected, setSelected] = useState(dayjs().format("YYYY-MM-DD"));
+  const [calendarMode, setCalendarMode] = useState<"month" | "week" | "day">("month");
+  const selectedDay = dayjs(selected);
+  const todayKey = dayjs().format("YYYY-MM-DD");
+  const activeTasks = tasks.filter((task) => task.status !== "archived");
+  const monthDays = useMemo(
+    () => Array.from({ length: 42 }, (_, index) => selectedDay.startOf("month").startOf("week").add(index, "day")),
+    [selected],
+  );
+  const weekDays = useMemo(
+    () => Array.from({ length: 7 }, (_, index) => selectedDay.startOf("week").add(index, "day")),
+    [selected],
+  );
+  const getTaskDate = (task: Task) => task.planned_date?.slice(0, 10) ?? "";
+  const getDayTasks = (date: dayjs.Dayjs) =>
+    activeTasks
+      .filter((task) => getTaskDate(task) === date.format("YYYY-MM-DD"))
+      .sort((a, b) => a.quadrant - b.quadrant || b.sort_order - a.sort_order);
+  const selectedTasks = getDayTasks(selectedDay);
+  const selectedEstimatedMinutes = selectedTasks.reduce((sum, task) => sum + (task.estimated_duration ?? 0), 0);
+  const selectedUnestimatedCount = selectedTasks.filter((task) => !task.estimated_duration).length;
+  const selectedRecords = records
+    .filter((record) => dayjs(record.started_at).format("YYYY-MM-DD") === selected)
+    .sort((a, b) => dayjs(a.started_at).valueOf() - dayjs(b.started_at).valueOf());
+  const selectedRecordMinutes = selectedRecords.reduce((sum, record) => sum + record.duration, 0);
+  const viewTitle =
+    calendarMode === "month"
+      ? selectedDay.format("YYYY-MM")
+      : calendarMode === "week"
+        ? `${weekDays[0].format("MM-DD")} - ${weekDays[6].format("MM-DD")}`
+        : selectedDay.format("YYYY-MM-DD");
+  const taskColor = (task: Task) => `var(--prio-p${task.quadrant})`;
+  const taskTimeLabel = (task: Task) => {
+    const parsed = task.deadline ? dayjs(task.deadline) : null;
+    return parsed?.isValid() ? parsed.format("HH:mm") : "All day";
+  };
+  const goToTask = (task: Task) => {
+    selectTask(task.id);
+    setView("tasks");
+  };
+  const shiftCalendar = (direction: -1 | 1) => {
+    const unit = calendarMode === "month" ? "month" : calendarMode === "week" ? "week" : "day";
+    setSelected(selectedDay.add(direction, unit).format("YYYY-MM-DD"));
+  };
+  const dropToDate = (date: string) => (event: DragEvent) => {
+    event.preventDefault();
+    const id = event.dataTransfer.getData("task-id");
+    if (id) updateTask({ id, planned_date: date });
+  };
+  const renderDots = (items: Task[]) => (
+    <div className="mt-2 flex min-h-3 flex-wrap gap-1">
+      {items.slice(0, 8).map((task) => (
+        <span
+          key={task.id}
+          draggable
+          onDragStart={(event) => event.dataTransfer.setData("task-id", task.id)}
+          className="h-2.5 w-2.5 rounded-full"
+          style={{ background: taskColor(task), boxShadow: `0 0 18px ${taskColor(task)}` }}
+          title={task.title}
+        />
+      ))}
+    </div>
+  );
+  const renderTaskButton = (task: Task, compact = false) => (
+    <button
+      key={task.id}
+      type="button"
+      draggable
+      onClick={() => goToTask(task)}
+      onDragStart={(event) => event.dataTransfer.setData("task-id", task.id)}
+      className="calendar-task-row interactive-surface glass-inset flex w-full min-w-0 items-center gap-3 p-3 text-left hover:border-[var(--ring)]"
+    >
+      <PriorityDot quadrant={task.quadrant} />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-semibold">{task.title}</span>
+        {!compact && (
+          <span className="mt-1 block truncate text-xs text-[var(--muted-foreground)]">
+            Q{task.quadrant} {quadrantLabels[task.quadrant]} · {task.estimated_duration ? formatMinutes(task.estimated_duration) : "Unestimated"}
+          </span>
+        )}
+      </span>
+      <span className="shrink-0 rounded-full border border-[var(--glass-inset-border)] px-2 py-1 text-xs text-[var(--muted-foreground)]">
+        {taskTimeLabel(task)}
+      </span>
+    </button>
+  );
+  const renderDateCell = (day: dayjs.Dayjs, dense = false) => {
+    const key = day.format("YYYY-MM-DD");
+    const items = getDayTasks(day);
+    const isToday = key === todayKey;
+    const isOutsideMonth = calendarMode === "month" && day.month() !== selectedDay.month();
+    return (
+      <button
+        key={key}
+        className={`calendar-day-cell interactive-surface glass-inset ${dense ? "calendar-day-cell-compact" : ""} ${isOutsideMonth ? "opacity-45" : ""} p-3 text-left hover:border-[var(--ring)] ${selected === key ? "ring-2 ring-[var(--ring)]" : ""}`}
+        onClick={() => setSelected(key)}
+        onDragOver={(event) => event.preventDefault()}
+        onDrop={dropToDate(key)}
+      >
+        <div className="flex items-start justify-between gap-3 text-sm font-medium">
+          <span className={isToday ? "rounded-full bg-[var(--neon-violet)] px-2 py-0.5 text-[var(--primary-foreground)] shadow-[var(--shadow-glow-violet)]" : ""}>
+            {calendarMode === "month" ? day.date() : day.format("MM-DD")}
+          </span>
+          <span className="shrink-0 rounded-full border border-[var(--glass-inset-border)] px-2 py-0.5 text-xs text-[var(--muted-foreground)]">{items.length}</span>
+        </div>
+        {renderDots(items)}
+      </button>
+    );
+  };
+  return (
+    <section className="glass-card animate-rise flex h-full min-h-0 flex-col overflow-hidden p-5">
+      <header className="mb-4 flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <p className="section-label flex items-center gap-2">
+            <CalendarDays size={15} /> Calendar
+          </p>
+          <h1 className="mt-2 text-2xl font-semibold">日程</h1>
+          <p className="text-sm text-[var(--muted-foreground)]">月 / 周 / 日视图，查看任务、工作负荷和当天计时记录。</p>
+        </div>
+        <div className="calendar-toolbar flex min-w-0 flex-wrap items-center justify-end gap-2">
+          <div className="glass-inset flex shrink-0 p-1 text-sm">
+            <button type="button" className="rounded-lg px-3 py-1.5 text-[var(--muted-foreground)] hover:text-[var(--foreground)]" onClick={() => shiftCalendar(-1)} aria-label="Previous period">
+              ←
+            </button>
+            <span className="grid min-w-32 place-items-center px-3 font-semibold">{viewTitle}</span>
+            <button type="button" className="rounded-lg px-3 py-1.5 text-[var(--muted-foreground)] hover:text-[var(--foreground)]" onClick={() => shiftCalendar(1)} aria-label="Next period">
+              →
+            </button>
+          </div>
+          <button type="button" className="glass-inset shrink-0 px-3 py-2 text-sm text-[var(--muted-foreground)] hover:text-[var(--foreground)]" onClick={() => setSelected(todayKey)}>
+            今天
+          </button>
+          <div className="glass-inset flex shrink-0 p-1 text-sm">
+            {(["month", "week", "day"] as const).map((mode) => (
+              <button key={mode} className={`rounded-lg px-3 py-1.5 [transition:var(--transition-smooth)] ${calendarMode === mode ? "btn-glow" : "text-[var(--muted-foreground)]"}`} onClick={() => setCalendarMode(mode)}>
+                {mode === "month" ? "月" : mode === "week" ? "周" : "日"}
+              </button>
+            ))}
+          </div>
+        </div>
+      </header>
+      <div className="calendar-layout grid min-h-0 flex-1 grid-cols-1 gap-5 overflow-hidden lg:grid-cols-[minmax(0,1fr)_340px]">
+        <div className={`thin-scrollbar min-h-0 ${calendarMode === "month" ? "calendar-month-scroll" : calendarMode === "week" ? "calendar-week-scroll" : "overflow-auto"}`}>
+          {calendarMode === "month" && <div className="calendar-month-grid">{monthDays.map((day) => renderDateCell(day))}</div>}
+          {calendarMode === "week" && (
+            <div className="calendar-week-grid">
+              {weekDays.map((day) => {
+                const key = day.format("YYYY-MM-DD");
+                const items = getDayTasks(day);
+                const isToday = key === todayKey;
+                return (
+                  <section key={key} className={`calendar-week-column glass-inset ${selected === key ? "ring-2 ring-[var(--ring)]" : ""}`} onDragOver={(event) => event.preventDefault()} onDrop={dropToDate(key)}>
+                    <button type="button" className="w-full text-left" onClick={() => setSelected(key)}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-xs text-[var(--muted-foreground)]">{day.format("ddd")}</div>
+                          <div className={`mt-1 inline-grid h-8 min-w-8 place-items-center rounded-full px-2 text-sm font-semibold ${isToday ? "bg-[var(--neon-violet)] text-[var(--primary-foreground)] shadow-[var(--shadow-glow-violet)]" : ""}`}>
+                            {day.format("MM-DD")}
+                          </div>
+                        </div>
+                        <span className="rounded-full border border-[var(--glass-inset-border)] px-2 py-0.5 text-xs text-[var(--muted-foreground)]">{items.length} 项</span>
+                      </div>
+                    </button>
+                    {renderDots(items)}
+                    <div className="thin-scrollbar mt-3 min-h-0 flex-1 space-y-2 overflow-auto pr-1">
+                      {items.map((task) => renderTaskButton(task, true))}
+                      {items.length === 0 && <div className="calendar-empty-state">无任务</div>}
+                    </div>
+                  </section>
+                );
+              })}
+            </div>
+          )}
+          {calendarMode === "day" && (
+            <div className="calendar-day-panel glass-card min-h-full p-5" onDragOver={(event) => event.preventDefault()} onDrop={dropToDate(selected)}>
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <div className="text-sm text-[var(--muted-foreground)]">{selectedDay.format("dddd")}</div>
+                  <h2 className="text-2xl font-semibold">{selectedDay.format("YYYY-MM-DD")}</h2>
+                </div>
+                <div className="grid grid-cols-3 gap-2 text-center text-sm">
+                  <Info label="任务" value={`${selectedTasks.length}`} />
+                  <Info label="预计" value={formatMinutes(selectedEstimatedMinutes)} />
+                  <Info label="记录" value={formatMinutes(selectedRecordMinutes)} />
+                </div>
+              </div>
+              <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
+                <div className="min-w-0">
+                  <h3 className="mb-3 text-sm font-semibold text-[var(--muted-foreground)]">当天任务</h3>
+                  <div className="space-y-2">
+                    {selectedTasks.map((task) => renderTaskButton(task))}
+                    {selectedTasks.length === 0 && <div className="calendar-empty-state">这一天还没有安排任务。</div>}
+                  </div>
+                </div>
+                <div className="min-w-0 space-y-3">
+                  <div className="glass-inset p-4">
+                    <div className="text-xs text-[var(--muted-foreground)]">预计工作负荷</div>
+                    <div className="mt-2 text-2xl font-semibold">{formatMinutes(selectedEstimatedMinutes)}</div>
+                    <div className="mt-1 text-sm text-[var(--muted-foreground)]">
+                      {selectedUnestimatedCount ? `${selectedUnestimatedCount} 项未估时` : "所有任务已估时"}
+                    </div>
+                  </div>
+                  <div className="glass-inset p-4">
+                    <div className="text-xs text-[var(--muted-foreground)]">计时记录摘要</div>
+                    <div className="mt-2 text-2xl font-semibold">{formatMinutes(selectedRecordMinutes)}</div>
+                    <div className="mt-1 text-sm text-[var(--muted-foreground)]">{selectedRecords.length} 条记录</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+        <aside className="calendar-detail-sidebar glass-card flex min-h-0 flex-col overflow-hidden p-4">
+          <div className="shrink-0">
+            <p className="section-label">Selected Day</p>
+            <h3 className="mt-1 font-semibold">{selected}</h3>
+            <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+              <Info label="任务数量" value={`${selectedTasks.length}`} />
+              <Info label="预计负荷" value={formatMinutes(selectedEstimatedMinutes)} />
+            </div>
+            <p className="mt-3 text-sm text-[var(--muted-foreground)]">
+              {selectedUnestimatedCount ? `${selectedUnestimatedCount} 项未估时` : "当天任务均已估时"} · 计时 {formatMinutes(selectedRecordMinutes)}
+            </p>
+          </div>
+          <div className="thin-scrollbar mt-4 min-h-0 flex-1 space-y-2 overflow-auto pr-1">
+            {selectedTasks.map((task) => renderTaskButton(task))}
+            {selectedTasks.length === 0 && <div className="calendar-empty-state">这一天还没有安排任务。</div>}
+            {selectedRecords.length > 0 && (
+              <div className="pt-3">
+                <h4 className="mb-2 text-sm font-semibold text-[var(--muted-foreground)]">计时记录</h4>
+                <div className="space-y-2">
+                  {selectedRecords.map((record) => (
+                    <div key={record.id} className="glass-inset p-3 text-sm">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="min-w-0 truncate font-medium">{record.task_topic || modeLabel(record.mode)}</span>
+                        <span className="shrink-0 text-xs text-[var(--muted-foreground)]">{formatMinutes(record.duration)}</span>
+                      </div>
+                      <div className="mt-1 text-xs text-[var(--muted-foreground)]">
+                        {dayjs(record.started_at).format("HH:mm")} - {dayjs(record.ended_at).format("HH:mm")} · {modeLabel(record.mode)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </aside>
+      </div>
+    </section>
+  );
+}
+
+function CalendarViewLegacy() {
   const { tasks, updateTask } = useAppStore();
   const [selected, setSelected] = useState(dayjs().format("YYYY-MM-DD"));
   const [calendarMode, setCalendarMode] = useState<"month" | "week" | "day">("month");

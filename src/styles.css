@@ -562,6 +562,14 @@
     gap: 0.75rem;
     min-width: 840px;
   }
+  .calendar-week-column {
+    display: flex;
+    min-height: 360px;
+    min-width: 0;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 0.875rem;
+  }
   .calendar-day-cell {
     width: 100%;
     min-width: 0;
@@ -571,6 +579,42 @@
   }
   .calendar-day-cell-compact {
     min-height: 96px;
+  }
+  .calendar-day-panel,
+  .calendar-detail-sidebar {
+    min-width: 0;
+  }
+  .calendar-task-row {
+    border-radius: var(--radius-xl);
+  }
+  .calendar-empty-state {
+    border: 1px dashed var(--glass-inset-border);
+    border-radius: var(--radius-xl);
+    padding: 0.875rem;
+    color: var(--muted-foreground);
+    font-size: 0.875rem;
+  }
+  @media (max-width: 1023px) {
+    .calendar-layout {
+      overflow: auto;
+    }
+    .calendar-detail-sidebar {
+      max-height: 360px;
+    }
+  }
+  @media (max-width: 640px) {
+    .calendar-toolbar {
+      justify-content: flex-start;
+      width: 100%;
+    }
+    .calendar-month-grid {
+      grid-template-columns: repeat(7, minmax(88px, 1fr));
+      min-width: 690px;
+    }
+    .calendar-week-grid {
+      grid-template-columns: repeat(7, minmax(138px, 1fr));
+      min-width: 980px;
+    }
   }
   .chart-card {
     background:
