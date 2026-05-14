@@ -1139,13 +1139,17 @@ function TaskDetail({ task }: { task: Task | null }) {
 }
 
 function TimerView() {
-  const { timer, startTimer, pauseTimer, resetTimer, stopTimer } = useAppStore();
+  const { tasks, records, timer, startTimer, pauseTimer, resetTimer, stopTimer } = useAppStore();
   const [mode, setMode] = useState<TimerMode>("pomodoro");
   const [topic, setTopic] = useState("自由专注");
   const [pomodoroMinutes, setPomodoroMinutes] = useState("25");
   const [countdownHours, setCountdownHours] = useState("0");
   const [countdownMinutes, setCountdownMinutes] = useState("30");
   const [lastCountdownSeconds, setLastCountdownSeconds] = useState(30 * 60);
+
+  const [dateFilter, setDateFilter] = useState("today");
+  const [modeFilter, setModeFilter] = useState("all");
+
   const autoStoppedRef = useRef(false);
   const elapsed = timer.elapsed_seconds;
   const selectedPomodoroMinutes = Math.max(1, Number(pomodoroMinutes) || 25);
@@ -1170,6 +1174,18 @@ function TimerView() {
       : mode === "pomodoro"
         ? selectedPomodoroMinutes * 60
         : lastCountdownSeconds;
+
+  const incompleteTasks = tasks.filter(t => t.status !== "done" && t.status !== "archived");
+  const recommendedTasks = incompleteTasks.slice(0, 4);
+
+  const filteredRecords = records.filter(r => {
+    let dateMatch = true;
+    if (dateFilter === "today") dateMatch = dayjs(r.started_at).isSame(dayjs(), "day");
+    if (dateFilter === "week") dateMatch = dayjs(r.started_at).isAfter(dayjs().subtract(7, "day"));
+    let modeMatch = true;
+    if (modeFilter !== "all") modeMatch = r.mode === modeFilter;
+    return dateMatch && modeMatch;
+  }).sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime());
 
   useEffect(() => {
     if (!timer.active || timer.paused || timer.mode === "positive" || timer.remaining_seconds == null || timer.remaining_seconds > 0) {
@@ -1255,6 +1271,60 @@ function TimerView() {
                   <Square size={18} /> 结束
                 </button>
               </>
+            )}
+          </div>
+
+          {!timer.active && recommendedTasks.length > 0 && (
+            <div className="w-full max-w-2xl mt-4">
+              <p className="text-sm font-semibold mb-2">推荐关联任务：</p>
+              <div className="flex flex-wrap gap-2">
+                {recommendedTasks.map(t => (
+                  <button key={t.id} type="button" className="glass-inset px-3 py-1.5 text-xs rounded-lg hover:text-[var(--neon-violet)] [transition:var(--transition-smooth)]" onClick={() => setTopic(t.title)}>
+                    {t.title}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="w-full max-w-4xl mt-8 border-t border-[var(--border)] pt-8">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+              <h3 className="text-lg font-semibold flex items-center gap-2"><Trophy size={18} /> 历史专注记录</h3>
+              <div className="flex gap-2">
+                <select className="field !py-1.5 !text-sm" value={dateFilter} onChange={e => setDateFilter(e.target.value)}>
+                  <option value="all">所有日期</option>
+                  <option value="today">今天</option>
+                  <option value="week">最近一周</option>
+                </select>
+                <select className="field !py-1.5 !text-sm" value={modeFilter} onChange={e => setModeFilter(e.target.value)}>
+                  <option value="all">所有模式</option>
+                  <option value="positive">正计时</option>
+                  <option value="pomodoro">番茄钟</option>
+                  <option value="countdown">倒计时</option>
+                </select>
+              </div>
+            </div>
+            
+            {filteredRecords.length === 0 ? (
+              <p className="text-sm text-center text-[var(--muted-foreground)] py-8">暂无匹配的记录</p>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+                {filteredRecords.map(record => {
+                  const task = tasks.find(t => t.id === record.task_id);
+                  return (
+                    <div key={record.id} className="glass-card hover:-translate-y-0.5 [transition:var(--transition-smooth)] flex flex-col p-4 rounded-xl">
+                      <div className="flex justify-between items-start mb-2">
+                        <span className="font-semibold text-sm line-clamp-1 flex-1 mr-2">{task?.title || record.note || "自由专注"}</span>
+                        <span className="text-xs text-[var(--neon-violet)] font-mono shrink-0 px-2 py-1 rounded-md bg-[var(--neon-violet)]/10">{formatMinutes(record.duration)}</span>
+                      </div>
+                      <div className="flex items-center gap-3 text-xs text-[var(--muted-foreground)]">
+                        <span className="flex items-center gap-1"><Clock3 size={12} /> {dayjs(record.started_at).format("MM-DD HH:mm")}</span>
+                        <span className="flex items-center gap-1"><CirclePlay size={12} /> {modeLabel(record.mode)}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </div>
         </div>
@@ -3221,10 +3291,8 @@ function TimerOrb({ seconds, progress, paused = false, compact = false, mode = "
           background: `conic-gradient(from 220deg, var(--neon-violet) 0deg, var(--neon-blue) ${progressDegrees * 0.55}deg, var(--neon-pink) ${progressDegrees}deg, transparent ${progressDegrees}deg 360deg)`,
         }}
       />
-      <div className="timer-orb-core absolute inset-[18%] rounded-full">
-        <div className="timer-orb-wave" style={{ top: `${waveLevel}%`, "--wave-color": modeColor } as CSSProperties}>
-          <span />
-          <span />
+      <div className="timer-orb-core absolute inset-[18%] rounded-full overflow-hidden">
+        <div className={`timer-orb-wave ${paused ? "opacity-60 scale-95" : "scale-100"} [transition:all_800ms_cubic-bezier(0.34,1.56,0.64,1)]`} style={{ top: `${waveLevel}%`, "--wave-color": modeColor } as CSSProperties}>
         </div>
       </div>
       <div className="relative z-10 flex flex-col items-center justify-center text-center">
