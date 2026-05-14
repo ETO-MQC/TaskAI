@@ -996,7 +996,11 @@ function TaskRow({ task, selected, onToggleSelected, onSelect }: { task: Task; s
     <div
       className="glass-inset group p-3 text-sm [transition:var(--transition-smooth)] hover:-translate-y-0.5 hover:border-[var(--ring)]"
       draggable
-      onDragStart={(event) => event.dataTransfer.setData("task-id", task.id)}
+      onDragStart={(event) => {
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("task-id", task.id);
+        event.dataTransfer.setData("text/plain", task.id);
+      }}
       onClick={onSelect}
     >
       <div className="flex items-center gap-2">
@@ -1476,10 +1480,150 @@ function StatsView() {
   );
 }
 
+type ScheduleSuggestionType = "move_task" | "split_task" | "estimate_duration" | "keep" | "mark_needs_review";
+
+interface ScheduleSuggestionItem {
+  type: ScheduleSuggestionType;
+  task_id: string;
+  title: string;
+  from_date: string | null;
+  to_date: string | null;
+  suggested_time_block: {
+    start: string | null;
+    end: string | null;
+  };
+  reason: string;
+  risk: string;
+  confidence: number;
+}
+
+interface ScheduleSuggestionResult {
+  intent: "schedule_suggestion";
+  action: "preview_schedule";
+  summary: string;
+  overload_days: Array<{
+    date: string;
+    load_minutes: number;
+    level: "overloaded" | "full" | "normal" | "light" | "idle";
+    reason: string;
+  }>;
+  suggestions: ScheduleSuggestionItem[];
+  needs_user_confirmation: true;
+}
+
+interface SchedulePreviewState {
+  loading: boolean;
+  result: ScheduleSuggestionResult | null;
+  raw: string | null;
+  error: string | null;
+  source: "ai" | "mock" | null;
+}
+
+function extractJsonCandidate(value: unknown) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const withoutFence = trimmed.startsWith("```")
+    ? trimmed
+        .replace(/^```(?:json)?/i, "")
+        .replace(/```$/i, "")
+        .trim()
+    : trimmed;
+  try {
+    return JSON.parse(withoutFence);
+  } catch {
+    const start = withoutFence.search(/[\[{]/);
+    if (start < 0) throw new Error("AI response did not contain JSON");
+    return JSON.parse(withoutFence.slice(start));
+  }
+}
+
+function validateScheduleSuggestion(value: unknown): ScheduleSuggestionResult {
+  const data = typeof value === "string" ? extractJsonCandidate(value) : value;
+  if (!data || typeof data !== "object") throw new Error("Schedule suggestion must be a JSON object");
+  const record = data as Record<string, unknown>;
+  if (record.intent !== "schedule_suggestion") throw new Error("intent must be schedule_suggestion");
+  if (record.action !== "preview_schedule") throw new Error("action must be preview_schedule");
+  if (record.needs_user_confirmation !== true) throw new Error("needs_user_confirmation must be true");
+  if (typeof record.summary !== "string") throw new Error("summary must be a string");
+  if (!Array.isArray(record.overload_days)) throw new Error("overload_days must be an array");
+  if (!Array.isArray(record.suggestions)) throw new Error("suggestions must be an array");
+
+  const overload_days: ScheduleSuggestionResult["overload_days"] = record.overload_days.map((item) => {
+    const day = item as Record<string, unknown>;
+    if (typeof day.date !== "string") throw new Error("overload_days[].date must be a string");
+    if (typeof day.load_minutes !== "number") throw new Error("overload_days[].load_minutes must be a number");
+    if (typeof day.reason !== "string") throw new Error("overload_days[].reason must be a string");
+    const level = day.level as ScheduleSuggestionResult["overload_days"][number]["level"];
+    if (level !== "overloaded" && level !== "full" && level !== "normal" && level !== "light" && level !== "idle") {
+      throw new Error("overload_days[].level is invalid");
+    }
+    return {
+      date: day.date,
+      load_minutes: day.load_minutes,
+      level,
+      reason: day.reason,
+    };
+  });
+
+  const allowedTypes = new Set<ScheduleSuggestionType>([
+    "move_task",
+    "split_task",
+    "estimate_duration",
+    "keep",
+    "mark_needs_review",
+  ]);
+  const suggestions = record.suggestions.map((item) => {
+    const suggestion = item as Record<string, unknown>;
+    if (!allowedTypes.has(suggestion.type as ScheduleSuggestionType)) throw new Error("suggestions[].type is invalid");
+    if (typeof suggestion.task_id !== "string") throw new Error("suggestions[].task_id must be a string");
+    if (typeof suggestion.title !== "string") throw new Error("suggestions[].title must be a string");
+    if (suggestion.from_date !== null && typeof suggestion.from_date !== "string") throw new Error("suggestions[].from_date must be string or null");
+    if (suggestion.to_date !== null && typeof suggestion.to_date !== "string") throw new Error("suggestions[].to_date must be string or null");
+    const block = suggestion.suggested_time_block as Record<string, unknown> | null | undefined;
+    if (!block || typeof block !== "object") throw new Error("suggestions[].suggested_time_block must be an object");
+    if (block.start !== null && typeof block.start !== "string") throw new Error("suggestions[].suggested_time_block.start must be string or null");
+    if (block.end !== null && typeof block.end !== "string") throw new Error("suggestions[].suggested_time_block.end must be string or null");
+    if (typeof suggestion.reason !== "string") throw new Error("suggestions[].reason must be a string");
+    if (typeof suggestion.risk !== "string") throw new Error("suggestions[].risk must be a string");
+    if (typeof suggestion.confidence !== "number") throw new Error("suggestions[].confidence must be a number");
+    return {
+      type: suggestion.type as ScheduleSuggestionType,
+      task_id: suggestion.task_id,
+      title: suggestion.title,
+      from_date: suggestion.from_date as string | null,
+      to_date: suggestion.to_date as string | null,
+      suggested_time_block: {
+        start: block.start as string | null,
+        end: block.end as string | null,
+      },
+      reason: suggestion.reason,
+      risk: suggestion.risk,
+      confidence: Math.max(0, Math.min(1, suggestion.confidence)),
+    };
+  });
+
+  return {
+    intent: "schedule_suggestion",
+    action: "preview_schedule",
+    summary: record.summary,
+    overload_days,
+    suggestions,
+    needs_user_confirmation: true,
+  };
+}
+
 function CalendarView() {
   const { tasks, records, updateTask, selectTask, setView } = useAppStore();
   const [selected, setSelected] = useState(dayjs().format("YYYY-MM-DD"));
   const [calendarMode, setCalendarMode] = useState<"month" | "week" | "day">("month");
+  const [schedulePreview, setSchedulePreview] = useState<SchedulePreviewState>({
+    loading: false,
+    result: null,
+    raw: null,
+    error: null,
+    source: null,
+  });
   const selectedDay = dayjs(selected);
   const todayKey = dayjs().format("YYYY-MM-DD");
   const activeTasks = tasks.filter((task) => task.status !== "archived");
@@ -1496,13 +1640,243 @@ function CalendarView() {
     activeTasks
       .filter((task) => getTaskDate(task) === date.format("YYYY-MM-DD"))
       .sort((a, b) => a.quadrant - b.quadrant || b.sort_order - a.sort_order);
+  const getDayWorkload = (date: dayjs.Dayjs) => {
+    const dayTasks = getDayTasks(date);
+    const incompleteTasks = dayTasks.filter((task) => task.status !== "done");
+    const completedTasks = dayTasks.filter((task) => task.status === "done");
+    const estimatedMinutes = incompleteTasks.reduce((sum, task) => sum + (task.estimated_duration ?? 0), 0);
+    const unestimatedCount = incompleteTasks.filter((task) => !task.estimated_duration || task.estimated_duration <= 0).length;
+    const hours = estimatedMinutes / 60;
+    const state =
+      estimatedMinutes === 0
+        ? { label: "空闲", tone: "idle", description: "当天没有已估时的未完成任务。" }
+        : hours <= 3
+          ? { label: "轻负荷", tone: "light", description: "预计工作量较轻，可以补充估时或安排低压任务。" }
+          : hours <= 6
+            ? { label: "正常", tone: "normal", description: "当天负荷处于常规范围。" }
+            : hours <= 8
+              ? { label: "偏满", tone: "full", description: "当天安排偏满，建议优先处理高影响任务。" }
+              : { label: "过载", tone: "overload", description: "当天预计工作量超过 8 小时，建议改期部分任务。" };
+    return {
+      tasks: dayTasks,
+      totalCount: dayTasks.length,
+      incompleteCount: incompleteTasks.length,
+      completedCount: completedTasks.length,
+      estimatedMinutes,
+      unestimatedCount,
+      state,
+    };
+  };
   const selectedTasks = getDayTasks(selectedDay);
-  const selectedEstimatedMinutes = selectedTasks.reduce((sum, task) => sum + (task.estimated_duration ?? 0), 0);
-  const selectedUnestimatedCount = selectedTasks.filter((task) => !task.estimated_duration).length;
+  const selectedWorkload = getDayWorkload(selectedDay);
+  const selectedEstimatedMinutes = selectedWorkload.estimatedMinutes;
+  const selectedUnestimatedCount = selectedWorkload.unestimatedCount;
   const selectedRecords = records
     .filter((record) => dayjs(record.started_at).format("YYYY-MM-DD") === selected)
     .sort((a, b) => dayjs(a.started_at).valueOf() - dayjs(b.started_at).valueOf());
   const selectedRecordMinutes = selectedRecords.reduce((sum, record) => sum + record.duration, 0);
+  const future7Days = useMemo(() => Array.from({ length: 7 }, (_, index) => dayjs().add(index, "day").format("YYYY-MM-DD")), []);
+  const buildScheduleContext = () => {
+    const incompleteTasks = activeTasks.filter((task) => task.status !== "done");
+    const taskPayload = (task: Task) => ({
+      id: task.id,
+      title: task.title,
+      deadline: task.deadline ?? null,
+      planned_date: task.planned_date ?? null,
+      estimated_duration: task.estimated_duration ?? null,
+      priority: task.priority,
+      urgency: task.urgency,
+      importance: task.importance,
+      tags: parseTags(task),
+      status: task.status,
+      quadrant: task.quadrant,
+      overdue: (() => {
+        const key = task.deadline ? dayjs(task.deadline).format("YYYY-MM-DD") : task.planned_date?.slice(0, 10);
+        return !!key && dayjs(key).isBefore(dayjs().startOf("day"), "day");
+      })(),
+    });
+    const days = future7Days.map((date) => {
+      const workload = getDayWorkload(dayjs(date));
+      return {
+        date,
+        existing_tasks: workload.tasks.map(taskPayload),
+        load_minutes: workload.estimatedMinutes,
+        unestimated_task_count: workload.unestimatedCount,
+        incomplete_count: workload.incompleteCount,
+        completed_count: workload.completedCount,
+        load_level:
+          workload.state.tone === "overload"
+            ? "overloaded"
+            : workload.state.tone === "full"
+              ? "full"
+              : workload.state.tone === "normal"
+                ? "normal"
+                : workload.state.tone === "light"
+                  ? "light"
+                  : "idle",
+      };
+    });
+    return {
+      current_date: todayKey,
+      future_7_days: future7Days,
+      days,
+      overload_days: days.filter((day) => day.load_minutes > 480),
+      incomplete_tasks: incompleteTasks.map(taskPayload),
+      overdue_tasks: incompleteTasks.filter((task) => taskPayload(task).overdue).map(taskPayload),
+      important_or_urgent_tasks: incompleteTasks
+        .filter((task) => task.importance === "important" || task.urgency === "urgent")
+        .map(taskPayload),
+    };
+  };
+  const buildMockScheduleSuggestion = (parseError?: string | null, raw?: string | null): SchedulePreviewState => {
+    const context = buildScheduleContext();
+    const lowLoadDays = [...context.days].sort((a, b) => a.load_minutes - b.load_minutes);
+    const suggestions: ScheduleSuggestionItem[] = [];
+
+    for (const overloaded of context.overload_days) {
+      const targetDay = lowLoadDays.find((day) => day.date !== overloaded.date && day.load_minutes < 360);
+      const moveCandidate = overloaded.existing_tasks
+        .filter((task) => task.status !== "done")
+        .sort((a, b) => {
+          const aScore =
+            (a.urgency === "urgent" ? 4 : 0) +
+            (a.importance === "important" ? 3 : 0) +
+            (a.deadline ? Math.max(0, 30 - dayjs(a.deadline).diff(dayjs(), "day")) : 0);
+          const bScore =
+            (b.urgency === "urgent" ? 4 : 0) +
+            (b.importance === "important" ? 3 : 0) +
+            (b.deadline ? Math.max(0, 30 - dayjs(b.deadline).diff(dayjs(), "day")) : 0);
+          return aScore - bScore;
+        })[0];
+      if (moveCandidate && targetDay) {
+        suggestions.push({
+          type: "move_task",
+          task_id: moveCandidate.id,
+          title: moveCandidate.title,
+          from_date: moveCandidate.planned_date?.slice(0, 10) ?? null,
+          to_date: targetDay.date,
+          suggested_time_block: { start: "14:00", end: "15:30" },
+          reason: `本地模拟建议：${overloaded.date} 已超过 8 小时，优先移动不紧急或不重要且期限较远的任务。`,
+          risk: "这是开发预览规则，未结合真实个人作息和外部日历。",
+          confidence: 0.62,
+        });
+      }
+    }
+
+    context.incomplete_tasks
+      .filter((task) => !task.estimated_duration || task.estimated_duration <= 0)
+      .slice(0, 6)
+      .forEach((task) => {
+        suggestions.push({
+          type: "estimate_duration",
+          task_id: task.id,
+          title: task.title,
+          from_date: task.planned_date?.slice(0, 10) ?? null,
+          to_date: task.planned_date?.slice(0, 10) ?? null,
+          suggested_time_block: { start: null, end: null },
+          reason: "本地模拟建议：该任务缺少 estimated_duration，当前负荷统计可能偏低。",
+          risk: "补估时前无法可靠判断当天是否过载。",
+          confidence: 0.74,
+        });
+      });
+
+    context.important_or_urgent_tasks.slice(0, 4).forEach((task) => {
+      if (suggestions.some((item) => item.task_id === task.id)) return;
+      suggestions.push({
+        type: "keep",
+        task_id: task.id,
+        title: task.title,
+        from_date: task.planned_date?.slice(0, 10) ?? null,
+        to_date: task.planned_date?.slice(0, 10) ?? null,
+        suggested_time_block: { start: null, end: null },
+        reason: "本地模拟建议：任务紧急或重要，本轮先保留原日期。",
+        risk: "如果同日还有外部会议，仍可能需要后续调整。",
+        confidence: 0.58,
+      });
+    });
+
+    const result: ScheduleSuggestionResult = {
+      intent: "schedule_suggestion",
+      action: "preview_schedule",
+      summary: "本地模拟建议，仅用于开发预览。未调用或未成功解析真实 AI 返回，且不会修改任何任务。",
+      overload_days: context.overload_days.map((day) => ({
+        date: day.date,
+        load_minutes: day.load_minutes,
+        level: "overloaded",
+        reason: "预计任务超过 8 小时",
+      })),
+      suggestions,
+      needs_user_confirmation: true,
+    };
+    return { loading: false, result, raw: raw ?? null, error: parseError ?? null, source: "mock" };
+  };
+  const requestScheduleSuggestion = async () => {
+    const context = buildScheduleContext();
+    const prompt = [
+      "You are SmartFocus schedule planner. Return strict JSON only. Do not modify any task.",
+      "Use this exact JSON schema:",
+      JSON.stringify(
+        {
+          intent: "schedule_suggestion",
+          action: "preview_schedule",
+          summary: "short schedule summary",
+          overload_days: [
+            {
+              date: "YYYY-MM-DD",
+              load_minutes: 540,
+              level: "overloaded",
+              reason: "why overloaded",
+            },
+          ],
+          suggestions: [
+            {
+              type: "move_task|split_task|estimate_duration|keep|mark_needs_review",
+              task_id: "string",
+              title: "string",
+              from_date: "YYYY-MM-DD|null",
+              to_date: "YYYY-MM-DD|null",
+              suggested_time_block: { start: "HH:mm|null", end: "HH:mm|null" },
+              reason: "why",
+              risk: "risk",
+              confidence: 0.8,
+            },
+          ],
+          needs_user_confirmation: true,
+        },
+        null,
+        2,
+      ),
+      "Rules: preview only; never include task updates; quadrant is read-only; prefer moving low urgency/low importance tasks away from overloaded days; ask no follow-up.",
+      `schedule_context=${JSON.stringify(context)}`,
+    ].join("\n\n");
+
+    setSchedulePreview({ loading: true, result: null, raw: null, error: null, source: null });
+    if (!("__TAURI_INTERNALS__" in window)) {
+      setSchedulePreview(buildMockScheduleSuggestion(null, null));
+      return;
+    }
+    try {
+      const response = await import("./lib/api").then(({ api }) =>
+        api<Record<string, unknown>>("send_ai_message", { message: prompt }),
+      );
+      const raw = typeof response.reply === "string" ? response.reply : JSON.stringify(response, null, 2);
+      try {
+        const result =
+          response.intent === "schedule_suggestion"
+            ? validateScheduleSuggestion(response)
+            : validateScheduleSuggestion(raw);
+        setSchedulePreview({ loading: false, result, raw, error: null, source: "ai" });
+      } catch (error) {
+        setSchedulePreview(
+          buildMockScheduleSuggestion(error instanceof Error ? error.message : "Failed to parse schedule JSON", raw),
+        );
+      }
+    } catch (error) {
+      setSchedulePreview(
+        buildMockScheduleSuggestion(error instanceof Error ? error.message : "AI schedule request failed", null),
+      );
+    }
+  };
   const viewTitle =
     calendarMode === "month"
       ? selectedDay.format("YYYY-MM")
@@ -1522,10 +1896,30 @@ function CalendarView() {
     const unit = calendarMode === "month" ? "month" : calendarMode === "week" ? "week" : "day";
     setSelected(selectedDay.add(direction, unit).format("YYYY-MM-DD"));
   };
-  const dropToDate = (date: string) => (event: DragEvent) => {
+  const workloadBadgeClass = (tone: string) => `calendar-load-badge calendar-load-${tone}`;
+  const workloadBarClass = (tone: string) => `calendar-load-bar calendar-load-${tone}`;
+  const allowDateDrop = (event: DragEvent) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+  };
+  const dragTask = (task: Task) => (event: DragEvent) => {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("task-id", task.id);
+    event.dataTransfer.setData("text/plain", task.id);
+  };
+  const dropToDate = (date: string) => async (event: DragEvent) => {
     event.preventDefault();
     const id = event.dataTransfer.getData("task-id");
-    if (id) updateTask({ id, planned_date: date });
+    if (!id) {
+      console.warn("Calendar drag reschedule failed: missing task id");
+      return;
+    }
+    try {
+      await updateTask({ id, planned_date: date });
+      setSelected(date);
+    } catch (error) {
+      console.warn("Calendar drag reschedule failed", error);
+    }
   };
   const renderDots = (items: Task[]) => (
     <div className="mt-2 flex min-h-3 flex-wrap gap-1">
@@ -1533,7 +1927,7 @@ function CalendarView() {
         <span
           key={task.id}
           draggable
-          onDragStart={(event) => event.dataTransfer.setData("task-id", task.id)}
+          onDragStart={dragTask(task)}
           className="h-2.5 w-2.5 rounded-full"
           style={{ background: taskColor(task), boxShadow: `0 0 18px ${taskColor(task)}` }}
           title={task.title}
@@ -1547,7 +1941,7 @@ function CalendarView() {
       type="button"
       draggable
       onClick={() => goToTask(task)}
-      onDragStart={(event) => event.dataTransfer.setData("task-id", task.id)}
+      onDragStart={dragTask(task)}
       className="calendar-task-row interactive-surface glass-inset flex w-full min-w-0 items-center gap-3 p-3 text-left hover:border-[var(--ring)]"
     >
       <PriorityDot quadrant={task.quadrant} />
@@ -1567,6 +1961,7 @@ function CalendarView() {
   const renderDateCell = (day: dayjs.Dayjs, dense = false) => {
     const key = day.format("YYYY-MM-DD");
     const items = getDayTasks(day);
+    const workload = getDayWorkload(day);
     const isToday = key === todayKey;
     const isOutsideMonth = calendarMode === "month" && day.month() !== selectedDay.month();
     return (
@@ -1574,7 +1969,7 @@ function CalendarView() {
         key={key}
         className={`calendar-day-cell interactive-surface glass-inset ${dense ? "calendar-day-cell-compact" : ""} ${isOutsideMonth ? "opacity-45" : ""} p-3 text-left hover:border-[var(--ring)] ${selected === key ? "ring-2 ring-[var(--ring)]" : ""}`}
         onClick={() => setSelected(key)}
-        onDragOver={(event) => event.preventDefault()}
+        onDragOver={allowDateDrop}
         onDrop={dropToDate(key)}
       >
         <div className="flex items-start justify-between gap-3 text-sm font-medium">
@@ -1583,8 +1978,50 @@ function CalendarView() {
           </span>
           <span className="shrink-0 rounded-full border border-[var(--glass-inset-border)] px-2 py-0.5 text-xs text-[var(--muted-foreground)]">{items.length}</span>
         </div>
+        <div className="mt-2 flex items-center justify-between gap-2">
+          <span className={workloadBadgeClass(workload.state.tone)}>{workload.state.label}</span>
+          <span className="truncate text-xs text-[var(--muted-foreground)]">{formatMinutes(workload.estimatedMinutes)}</span>
+        </div>
+        <div className={workloadBarClass(workload.state.tone)} />
         {renderDots(items)}
       </button>
+    );
+  };
+  const suggestionLabel = (type: ScheduleSuggestionType) => {
+    if (type === "move_task") return "Move";
+    if (type === "split_task") return "Split";
+    if (type === "estimate_duration") return "Estimate";
+    if (type === "keep") return "Keep";
+    return "Review";
+  };
+  const renderSuggestionGroup = (title: string, types: ScheduleSuggestionType[]) => {
+    const items = schedulePreview.result?.suggestions.filter((suggestion) => types.includes(suggestion.type)) ?? [];
+    if (items.length === 0) return null;
+    return (
+      <div className="space-y-2">
+        <h4 className="text-sm font-semibold text-[var(--muted-foreground)]">{title}</h4>
+        {items.map((suggestion) => (
+          <div key={`${suggestion.type}-${suggestion.task_id}-${suggestion.to_date ?? "none"}`} className="schedule-suggestion-item glass-inset p-3 text-sm">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="truncate font-semibold">{suggestion.title}</div>
+                <div className="mt-1 text-xs text-[var(--muted-foreground)]">
+                  {suggestion.from_date ?? "未安排"} {suggestion.to_date ? `-> ${suggestion.to_date}` : ""}
+                  {suggestion.suggested_time_block.start && suggestion.suggested_time_block.end
+                    ? ` · ${suggestion.suggested_time_block.start}-${suggestion.suggested_time_block.end}`
+                    : ""}
+                </div>
+              </div>
+              <span className="schedule-suggestion-type rounded-full border border-[var(--glass-inset-border)] px-2 py-0.5 text-xs">
+                {suggestionLabel(suggestion.type)}
+              </span>
+            </div>
+            <p className="mt-2 text-xs leading-5 text-[var(--muted-foreground)]">Reason: {suggestion.reason}</p>
+            <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">Risk: {suggestion.risk}</p>
+            <div className="mt-2 text-xs text-[var(--muted-foreground)]">Confidence {Math.round(suggestion.confidence * 100)}%</div>
+          </div>
+        ))}
+      </div>
     );
   };
   return (
@@ -1610,6 +2047,14 @@ function CalendarView() {
           <button type="button" className="glass-inset shrink-0 px-3 py-2 text-sm text-[var(--muted-foreground)] hover:text-[var(--foreground)]" onClick={() => setSelected(todayKey)}>
             今天
           </button>
+          <button
+            type="button"
+            className="btn-glow shrink-0 rounded-xl px-3 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-60"
+            onClick={requestScheduleSuggestion}
+            disabled={schedulePreview.loading}
+          >
+            {schedulePreview.loading ? "生成中..." : "生成本周排程建议"}
+          </button>
           <div className="glass-inset flex shrink-0 p-1 text-sm">
             {(["month", "week", "day"] as const).map((mode) => (
               <button key={mode} className={`rounded-lg px-3 py-1.5 [transition:var(--transition-smooth)] ${calendarMode === mode ? "btn-glow" : "text-[var(--muted-foreground)]"}`} onClick={() => setCalendarMode(mode)}>
@@ -1627,9 +2072,10 @@ function CalendarView() {
               {weekDays.map((day) => {
                 const key = day.format("YYYY-MM-DD");
                 const items = getDayTasks(day);
+                const workload = getDayWorkload(day);
                 const isToday = key === todayKey;
                 return (
-                  <section key={key} className={`calendar-week-column glass-inset ${selected === key ? "ring-2 ring-[var(--ring)]" : ""}`} onDragOver={(event) => event.preventDefault()} onDrop={dropToDate(key)}>
+                  <section key={key} className={`calendar-week-column glass-inset ${selected === key ? "ring-2 ring-[var(--ring)]" : ""}`} onDragOver={allowDateDrop} onDrop={dropToDate(key)}>
                     <button type="button" className="w-full text-left" onClick={() => setSelected(key)}>
                       <div className="flex items-start justify-between gap-3">
                         <div>
@@ -1641,6 +2087,17 @@ function CalendarView() {
                         <span className="rounded-full border border-[var(--glass-inset-border)] px-2 py-0.5 text-xs text-[var(--muted-foreground)]">{items.length} 项</span>
                       </div>
                     </button>
+                    <div className="mt-3 grid gap-2 text-xs">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className={workloadBadgeClass(workload.state.tone)}>{workload.state.label}</span>
+                        <span className="text-[var(--muted-foreground)]">{formatMinutes(workload.estimatedMinutes)}</span>
+                      </div>
+                      <div className={workloadBarClass(workload.state.tone)} />
+                      <div className="text-[var(--muted-foreground)]">
+                        {workload.incompleteCount} 未完成 / {workload.completedCount} 已完成
+                        {workload.unestimatedCount ? ` · ${workload.unestimatedCount} 项未估时` : ""}
+                      </div>
+                    </div>
                     {renderDots(items)}
                     <div className="thin-scrollbar mt-3 min-h-0 flex-1 space-y-2 overflow-auto pr-1">
                       {items.map((task) => renderTaskButton(task, true))}
@@ -1652,7 +2109,7 @@ function CalendarView() {
             </div>
           )}
           {calendarMode === "day" && (
-            <div className="calendar-day-panel glass-card min-h-full p-5" onDragOver={(event) => event.preventDefault()} onDrop={dropToDate(selected)}>
+            <div className="calendar-day-panel glass-card min-h-full p-5" onDragOver={allowDateDrop} onDrop={dropToDate(selected)}>
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div>
                   <div className="text-sm text-[var(--muted-foreground)]">{selectedDay.format("dddd")}</div>
@@ -1662,6 +2119,20 @@ function CalendarView() {
                   <Info label="任务" value={`${selectedTasks.length}`} />
                   <Info label="预计" value={formatMinutes(selectedEstimatedMinutes)} />
                   <Info label="记录" value={formatMinutes(selectedRecordMinutes)} />
+                </div>
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(180px,240px)]">
+                <div className="glass-inset p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-sm font-semibold">当天负荷摘要</span>
+                    <span className={workloadBadgeClass(selectedWorkload.state.tone)}>{selectedWorkload.state.label}</span>
+                  </div>
+                  <div className={workloadBarClass(selectedWorkload.state.tone)} />
+                  <p className="mt-2 text-sm text-[var(--muted-foreground)]">{selectedWorkload.state.description}</p>
+                </div>
+                <div className="glass-inset p-4 text-sm text-[var(--muted-foreground)]">
+                  <div>{selectedWorkload.incompleteCount} 项未完成 / {selectedWorkload.completedCount} 项已完成</div>
+                  <div className="mt-1">{selectedUnestimatedCount ? `${selectedUnestimatedCount} 项未估时，建议补充预计时长。` : "未完成任务均已估时。"}</div>
                 </div>
               </div>
               <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
@@ -1697,11 +2168,97 @@ function CalendarView() {
             <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
               <Info label="任务数量" value={`${selectedTasks.length}`} />
               <Info label="预计负荷" value={formatMinutes(selectedEstimatedMinutes)} />
+              <Info label="未完成" value={`${selectedWorkload.incompleteCount}`} />
+              <Info label="已完成" value={`${selectedWorkload.completedCount}`} />
             </div>
-            <p className="mt-3 text-sm text-[var(--muted-foreground)]">
-              {selectedUnestimatedCount ? `${selectedUnestimatedCount} 项未估时` : "当天任务均已估时"} · 计时 {formatMinutes(selectedRecordMinutes)}
-            </p>
+            <div className="mt-3 glass-inset p-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className={workloadBadgeClass(selectedWorkload.state.tone)}>{selectedWorkload.state.label}</span>
+                <span className="text-sm font-semibold">{formatMinutes(selectedEstimatedMinutes)}</span>
+              </div>
+              <div className={workloadBarClass(selectedWorkload.state.tone)} />
+              <p className="mt-2 text-sm text-[var(--muted-foreground)]">{selectedWorkload.state.description}</p>
+              <p className="mt-1 text-sm text-[var(--muted-foreground)]">
+                {selectedUnestimatedCount ? `${selectedUnestimatedCount} 项未估时` : "当天未完成任务均已估时"} · 计时 {formatMinutes(selectedRecordMinutes)}
+              </p>
+            </div>
+            <div className="mt-3 glass-inset p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="section-label">AI Schedule</p>
+                  <h4 className="mt-1 text-sm font-semibold">排程建议预览</h4>
+                </div>
+                <span className="rounded-full border border-[var(--glass-inset-border)] px-2 py-0.5 text-xs text-[var(--muted-foreground)]">
+                  仅预览
+                </span>
+              </div>
+              <p className="mt-2 text-xs leading-5 text-[var(--muted-foreground)]">本轮仅预览，不会自动修改任务。应用建议将在下一 Sprint 实现。</p>
+              <button
+                type="button"
+                className="mt-3 w-full rounded-xl border border-[var(--glass-inset-border)] px-3 py-2 text-sm font-semibold text-[var(--muted-foreground)] [transition:var(--transition-smooth)] hover:border-[var(--ring)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={requestScheduleSuggestion}
+                disabled={schedulePreview.loading}
+              >
+                {schedulePreview.loading ? "正在生成建议..." : "生成本周排程建议"}
+              </button>
+            </div>
           </div>
+          {(schedulePreview.result || schedulePreview.error || schedulePreview.raw) && (
+            <div className="schedule-preview-panel thin-scrollbar mt-3 space-y-3 overflow-auto pr-1">
+              {schedulePreview.error && (
+                <div className="glass-inset border-[var(--destructive)] p-3 text-xs leading-5 text-[var(--destructive)]">
+                  <div className="font-semibold">JSON 解析失败，已展示本地模拟建议</div>
+                  <div className="mt-1 break-words">{schedulePreview.error}</div>
+                </div>
+              )}
+              {schedulePreview.result && (
+                <>
+                  <div className="glass-inset p-3 text-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-semibold">总结</span>
+                      <span className="rounded-full border border-[var(--glass-inset-border)] px-2 py-0.5 text-xs text-[var(--muted-foreground)]">
+                        {schedulePreview.source === "mock" ? "本地模拟" : "AI JSON"}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-xs leading-5 text-[var(--muted-foreground)]">{schedulePreview.result.summary}</p>
+                  </div>
+                  <div className="space-y-2">
+                    <h4 className="text-sm font-semibold text-[var(--muted-foreground)]">过载日期</h4>
+                    {schedulePreview.result.overload_days.length > 0 ? (
+                      schedulePreview.result.overload_days.map((day) => (
+                        <div key={day.date} className="glass-inset p-3 text-sm">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-semibold">{day.date}</span>
+                            <span className="calendar-load-badge calendar-load-overload">{formatMinutes(day.load_minutes)}</span>
+                          </div>
+                          <p className="mt-1 text-xs text-[var(--muted-foreground)]">{day.reason}</p>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="calendar-empty-state">未来 7 天暂无超过 8 小时的日期。</div>
+                    )}
+                  </div>
+                  {renderSuggestionGroup("建议移动的任务", ["move_task"])}
+                  {renderSuggestionGroup("建议补估时的任务", ["estimate_duration"])}
+                  {renderSuggestionGroup("建议保留不动的任务", ["keep"])}
+                  {renderSuggestionGroup("其他复核建议", ["split_task", "mark_needs_review"])}
+                  <button
+                    type="button"
+                    className="w-full cursor-not-allowed rounded-xl border border-[var(--glass-inset-border)] px-3 py-2 text-sm text-[var(--muted-foreground)] opacity-70"
+                    disabled
+                  >
+                    应用建议（下一 Sprint 实现）
+                  </button>
+                </>
+              )}
+              {schedulePreview.raw && (
+                <details className="glass-inset p-3 text-xs text-[var(--muted-foreground)]">
+                  <summary className="cursor-pointer font-semibold">查看 AI 原文</summary>
+                  <pre className="thin-scrollbar mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words">{schedulePreview.raw}</pre>
+                </details>
+              )}
+            </div>
+          )}
           <div className="thin-scrollbar mt-4 min-h-0 flex-1 space-y-2 overflow-auto pr-1">
             {selectedTasks.map((task) => renderTaskButton(task))}
             {selectedTasks.length === 0 && <div className="calendar-empty-state">这一天还没有安排任务。</div>}

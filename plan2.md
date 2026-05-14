@@ -136,7 +136,7 @@ Acceptance：
 - 当前 Hotfix 的日期 / 时间输入、日历月份切换和任务基础筛选修复。
 - 现有 `tasks.deadline`、`tasks.planned_date`、`tasks.estimated_duration` 字段。
 
-状态：部分完成（2026-05-14 Sprint 11A 已完成：日历基础结构与月 / 周 / 日视图；AI 排程、冲突检测、过载检测和一键应用排程仍未开始）
+状态：部分完成（2026-05-14 Sprint 11B 已完成：日历拖拽改期增强、每日工作负荷阈值、过载 / 偏满 / 正常 / 轻负荷 / 空闲提示、未估时提示；AI 排程、冲突检测完整版和一键应用排程仍未开始）
 
 实现范围：
 - CalendarView 顶部已增加月 / 周 / 日视图切换，并保留上一段 / 下一段导航与今天按钮。
@@ -145,6 +145,11 @@ Acceptance：
 - 日视图已展示选中日期、当天任务列表、预计工作负荷、未估时任务数量和当天计时记录摘要。
 - 右侧详情栏在月 / 周 / 日视图中保持可见，展示选中日期、任务数量、预计负荷、未估时提示、任务列表和计时记录；内容多时内部滚动。
 - 任务点击可进入任务页并选中对应任务；日历拖拽改期仍只提交 `planned_date`，不写 `quadrant`。
+- Sprint 11B 增强了任务列表和日历内任务项的拖拽 payload，拖到日期后仅调用 `updateTask({ id, planned_date })`，失败或缺少 task id 时输出 `console.warn`。
+- 新增 CalendarView 按天工作负荷统计：只统计 `planned_date` 匹配日期且未完成任务的 `estimated_duration`；已完成任务单独计数，不计入未完成负荷。
+- 新增负荷状态阈值：0 小时为空闲，0-3 小时为轻负荷，3-6 小时为正常，6-8 小时为偏满，超过 8 小时为过载。
+- 月视图日期格新增轻量负荷 badge 和细条；周视图每天显示预计负荷、未估时数、未完成 / 已完成数量；日视图顶部新增当天负荷摘要。
+- 右侧详情栏新增未完成数、已完成数、负荷状态、负荷说明和计时摘要，继续保持内部滚动。
 - Workbench 小月历未重写，仅沿用现有玻璃拟态、小圆点和细滚动条风格。
 
 验收结果：
@@ -153,18 +158,21 @@ Acceptance：
 - 月视图保持现有 42 格布局和任务小圆点。
 - 周视图可展示 7 天任务摘要。
 - 日视图可展示当天任务、预计工作负荷、未估时提示和计时记录摘要。
+- 月 / 周 / 日视图均显示预计工作负荷和负荷状态。
+- 右侧详情栏显示任务数、未完成数、已完成数、预计负荷、未估时数量和负荷状态说明。
+- 拖拽改期提交范围保持为 `id + planned_date`，未直接写 `quadrant`，也未修改 `urgency` / `importance`。
 - 当前日期与选中日期高亮清楚，右侧详情栏不会撑爆页面。
-- 本轮未修改 Zustand store 结构、Rust / Tauri 计时核心、SQLx migration、AI 排程、文件上传、荣誉墙、统计 24 小时时间环或 `plan.md`。
+- 本轮未修改 Zustand store 结构、Rust / Tauri 计时核心、SQLx migration、AI 排程、一键应用排程、冲突检测完整版、Google Calendar / Outlook 同步、文件上传、荣誉墙、统计 24 小时时间环、AI 工作区 2.0 或 `plan.md`。
 
 TODO：
 - 浏览器和 Tauri 环境补充视口验收，重点覆盖 390px、768px、1366px 和 1920px 宽度。
-- 后续继续补齐 AI 排程、冲突检测、过载检测和一键应用排程；这些未纳入 Sprint 11A。
+- 浏览器和 Tauri 环境继续做真实拖拽改期手工验收，确认刷新或重启后 `planned_date` 持久化正确。
+- 后续继续补齐 AI 排程、冲突检测完整版和一键应用排程；这些未纳入 Sprint 11B。
 - 明确计划时间字段是否继续复用 `deadline` / `planned_date`，或通过 SQLx migration 增加独立 start/end 字段。
 - 设计 AI 排程结果 JSON schema，包括新增、改期、冲突、过载和跳过原因。
-- 浏览器和 Tauri 环境都要验收拖拽改期。
 
 下一 Sprint 建议：
-- 继续 Sprint 11B：在不新增数据库字段的前提下补充日历拖拽改期验收、负荷阈值展示草案，或在确认字段设计后再进入智能排程。
+- 继续 Sprint 11C：在不新增数据库字段的前提下做浏览器 / Tauri 拖拽持久化验收和视口验收；确认计划时间字段设计后，再进入 AI 排程、差异预览和冲突检测完整版。
 
 ### Sprint 12：计时器高级模式与情境感知
 
@@ -482,3 +490,35 @@ TODO：
   - 剩余 TODO。
   - 下一 Sprint 建议。
 - 更新 `plan2.md` 时保持简洁，不复制历史日志；一期历史继续保留在 `plan.md` 归档。
+
+## 2026-05-14 Sprint 11C 状态同步：AI 排程 JSON Schema 与排程建议预览
+
+状态：部分完成（Sprint 11C 已完成 AI 排程 JSON schema、schedule_context 收集、AI / fallback 排程建议预览；一键应用排程、真实任务改期、完整冲突检测、第三方日历同步和数据库字段扩展仍未开始）
+
+实现范围：
+- CalendarView 顶部和右侧详情栏新增“生成本周排程建议”入口。
+- 前端构造只读 `schedule_context`，包含当前日期、未来 7 天、每日已有任务、预计负荷、未估时数量、过载日期、未完成任务、逾期任务、重要 / 紧急任务，以及任务 `id/title/deadline/planned_date/estimated_duration/priority/urgency/importance/tags/status/quadrant`。
+- 设计并校验严格排程 JSON schema：`intent=schedule_suggestion`、`action=preview_schedule`、`summary`、`overload_days`、`suggestions`、`needs_user_confirmation=true`。
+- CalendarView 调用现有后端 `send_ai_message` 请求排程 JSON；返回可解析时展示 AI 结果，解析失败时显示错误和原文。
+- 浏览器 fallback 或 AI 返回不可解析时生成本地模拟建议，标记为“本地模拟建议，仅用于开发预览”。
+- 建议面板展示总结、过载日期、移动任务建议、补估时建议、保留不动建议、原因、风险和置信度。
+- “应用建议”仅置灰并标注下一 Sprint 实现；本轮没有调用 `updateTask` 修改任何排程建议结果。
+- 新增轻量样式确保建议面板在右侧栏和小屏下内部滚动，沿用现有 glass / thin-scrollbar / light-dark token。
+
+验收结果：
+- `npm run build` 已通过。
+- CalendarView 已出现 AI 排程建议入口。
+- 点击入口可生成预览：Tauri 环境优先请求 AI JSON，浏览器 fallback 或解析失败时使用本地模拟建议。
+- 建议预览能显示过载日期、移动任务建议、补估时建议、保留建议、原因和风险。
+- JSON 解析失败时显示错误提示和 AI 原文，不会白屏。
+- 本轮未修改任务 `planned_date`、未直接写 `quadrant`、未新增 SQLx migration、未修改 Rust 计时核心、未接 Google Calendar / Outlook。
+- 构建仍存在项目既有 Vite chunk size / dynamic import warning，不影响本轮验收。
+
+剩余 TODO：
+- 在 Tauri 配置真实 DeepSeek API Key 后做一次 AI JSON 实测，确认后端系统 prompt 与本轮排程 prompt 不冲突。
+- 补充浏览器和 Tauri 视口验收，重点覆盖 390px、768px、1366px 和 1920px 宽度。
+- 后续实现完整冲突检测、差异预览、一键应用确认流，但应用时仍只能修改 `planned_date` / 计划时间字段，不允许直接写 `quadrant`。
+- 明确是否继续复用 `deadline` / `planned_date` 表示计划时间，或在后续 Sprint 通过 SQLx migration 增加独立 start/end 字段。
+
+下一 Sprint 建议：
+- 继续 Sprint 11D：补齐完整冲突检测和差异预览确认流，在不新增数据库字段的前提下先实现“可审阅但不可误触”的应用前预览；确认计划时间字段设计后再实现真正的一键应用。
