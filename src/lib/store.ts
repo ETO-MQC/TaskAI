@@ -33,6 +33,8 @@ interface TaskDraft {
   tags: string;
 }
 
+type TaskUpdatePatch = Omit<Partial<Task>, "tags"> & { id: string; tags?: string[] | string };
+
 interface AppStore {
   view: View;
   tasks: Task[];
@@ -50,7 +52,7 @@ interface AppStore {
   setTheme: (theme: "light" | "dark") => Promise<void>;
   load: () => Promise<void>;
   createTask: (draft: TaskDraft) => Promise<Task>;
-  updateTask: (patch: Partial<Task> & { id: string }) => Promise<void>;
+  updateTask: (patch: TaskUpdatePatch) => Promise<void>;
   deleteTask: (id: string) => Promise<void>;
   selectTask: (id: string | null) => void;
   startFocus: (task: Task, mode?: TimerMode) => Promise<void>;

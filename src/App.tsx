@@ -111,10 +111,49 @@ function modeDescription(mode: TimerMode) {
 
 type TaskDateFilter = "today" | "tomorrow" | "week" | "all" | "custom";
 
+const needsReviewTags = ["待整理", "needs_review"];
+
+const quadrantMeta: Record<number, { title: string; description: string; urgency: Urgency; importance: Importance }> = {
+  1: {
+    title: "Q1 重要且紧急",
+    description: "马上推进，优先处理有明确时限或高影响的事项。",
+    urgency: "urgent",
+    importance: "important",
+  },
+  2: {
+    title: "Q2 重要不紧急",
+    description: "持续投入，适合安排深度工作和长期建设。",
+    urgency: "not_urgent",
+    importance: "important",
+  },
+  3: {
+    title: "Q3 紧急不重要",
+    description: "快速处理或委托，避免打断核心工作。",
+    urgency: "urgent",
+    importance: "not_important",
+  },
+  4: {
+    title: "Q4 不重要不紧急",
+    description: "低优先级整理区，必要时标记为待整理。",
+    urgency: "not_urgent",
+    importance: "not_important",
+  },
+};
+
 function taskDateKey(task: Task) {
   if (task.planned_date) return task.planned_date.slice(0, 10);
   if (task.deadline) return dayjs(task.deadline).format("YYYY-MM-DD");
   return "";
+}
+
+function isNeedsReviewTask(task: Task) {
+  const tags = parseTags(task);
+  return needsReviewTags.some((tag) => tags.includes(tag));
+}
+
+function tagsWithNeedsReview(task: Task) {
+  const tags = parseTags(task);
+  return tags.includes("待整理") ? tags : [...tags.filter((tag) => tag !== "needs_review"), "待整理"];
 }
 
 function isTaskVisibleForDateFilter(task: Task, filter: TaskDateFilter, customDate: string) {
@@ -123,12 +162,13 @@ function isTaskVisibleForDateFilter(task: Task, filter: TaskDateFilter, customDa
   const today = dayjs().startOf("day");
   const dateKey = taskDateKey(task);
   const date = dateKey ? dayjs(dateKey) : null;
+  if (task.status === "done") return false;
   if (filter === "custom") return dateKey === customDate;
   if (filter === "tomorrow") return dateKey === today.add(1, "day").format("YYYY-MM-DD");
   if (filter === "week") return !!date && date.isBetween(today.subtract(1, "millisecond"), today.endOf("week"), null, "[]");
-  if (!dateKey) return task.status !== "done";
+  if (!dateKey) return true;
   if (dateKey === today.format("YYYY-MM-DD")) return true;
-  const overdue = date?.isBefore(today, "day") && task.status !== "done";
+  const overdue = date?.isBefore(today, "day");
   return !!overdue && (task.importance === "important" || task.urgency === "urgent");
 }
 
@@ -735,11 +775,27 @@ function AiView() {
 }
 
 function TasksView() {
-  const { tasks, selectedTaskId, selectTask } = useAppStore();
+  const { tasks, selectedTaskId, selectTask, updateTask } = useAppStore();
   const [dateFilter, setDateFilter] = useState<TaskDateFilter>("today");
   const [customDate, setCustomDate] = useState(defaultTaskDate);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [batchDate, setBatchDate] = useState(defaultTaskDate);
+  const [batchUrgency, setBatchUrgency] = useState<Urgency>("not_urgent");
+  const [batchImportance, setBatchImportance] = useState<Importance>("not_important");
   const selected = tasks.find((task) => task.id === selectedTaskId) ?? tasks[0] ?? null;
   const visibleTasks = tasks.filter((task) => isTaskVisibleForDateFilter(task, dateFilter, customDate));
+  const selectedTasks = tasks.filter((task) => selectedIds.includes(task.id));
+  const selectedCount = selectedTasks.length;
+  const toggleSelected = (id: string) =>
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
+  const confirmBatch = async (label: string, run: (task: Task) => Promise<void>) => {
+    if (selectedCount === 0) return;
+    if (!window.confirm(`确认对 ${selectedCount} 个任务执行“${label}”？`)) return;
+    for (const task of selectedTasks) {
+      await run(task);
+    }
+    setSelectedIds([]);
+  };
   return (
     <section className="glass-card flex h-full min-h-0 gap-5 overflow-hidden p-5">
       <div className="flex min-w-0 flex-1 flex-col">
@@ -767,6 +823,55 @@ function TasksView() {
           )}
           <span className="ml-auto text-xs text-[var(--muted-foreground)]">今日视图顺延重要或紧急的逾期未完成任务</span>
         </div>
+        <div className="glass-inset mt-3 flex flex-wrap items-center gap-2 p-2 text-sm">
+          <span className="px-2 text-xs font-medium text-[var(--muted-foreground)]">已选择 {selectedCount} 项</span>
+          <input className="field py-1.5" type="date" value={batchDate} onChange={(event) => setBatchDate(event.target.value)} />
+          <button
+            type="button"
+            className="glass-inset px-3 py-1.5 text-xs [transition:var(--transition-smooth)] hover:text-[var(--neon-blue)] disabled:opacity-40"
+            disabled={selectedCount === 0}
+            onClick={() => confirmBatch("延期到指定日期", (task) => updateTask({ id: task.id, planned_date: batchDate }))}
+          >
+            批量延期
+          </button>
+          <button
+            type="button"
+            className="glass-inset px-3 py-1.5 text-xs [transition:var(--transition-smooth)] hover:text-[var(--neon-amber)] disabled:opacity-40"
+            disabled={selectedCount === 0}
+            onClick={() => confirmBatch("标记为待整理", (task) => updateTask({ id: task.id, tags: tagsWithNeedsReview(task) }))}
+          >
+            标记待整理
+          </button>
+          <button
+            type="button"
+            className="glass-inset px-3 py-1.5 text-xs [transition:var(--transition-smooth)] hover:text-emerald-400 disabled:opacity-40"
+            disabled={selectedCount === 0}
+            onClick={() => confirmBatch("批量完成", (task) => updateTask({ id: task.id, status: "done" }))}
+          >
+            批量完成
+          </button>
+          <select className="field py-1.5" value={batchImportance} onChange={(event) => setBatchImportance(event.target.value as Importance)}>
+            <option value="important">重要</option>
+            <option value="not_important">不重要</option>
+          </select>
+          <select className="field py-1.5" value={batchUrgency} onChange={(event) => setBatchUrgency(event.target.value as Urgency)}>
+            <option value="urgent">紧急</option>
+            <option value="not_urgent">不紧急</option>
+          </select>
+          <button
+            type="button"
+            className="glass-inset px-3 py-1.5 text-xs [transition:var(--transition-smooth)] hover:text-[var(--neon-violet)] disabled:opacity-40"
+            disabled={selectedCount === 0}
+            onClick={() => confirmBatch("调整重要/紧急", (task) => updateTask({ id: task.id, urgency: batchUrgency, importance: batchImportance }))}
+          >
+            应用优先级
+          </button>
+          {selectedCount > 0 && (
+            <button type="button" className="ml-auto text-xs text-[var(--muted-foreground)] hover:text-[var(--foreground)]" onClick={() => setSelectedIds([])}>
+              取消选择
+            </button>
+          )}
+        </div>
         <div className="mt-4 grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-auto pr-1 lg:grid-cols-2">
           {[1, 2, 3, 4].map((quadrant) => (
             <QuadrantColumn
@@ -774,6 +879,8 @@ function TasksView() {
               quadrant={quadrant}
               tasks={visibleTasks.filter((task) => task.quadrant === quadrant)}
               onSelect={selectTask}
+              selectedIds={selectedIds}
+              onToggleSelected={toggleSelected}
             />
           ))}
         </div>
@@ -831,18 +938,48 @@ function TaskForm() {
   );
 }
 
-function QuadrantColumn({ quadrant, tasks, onSelect }: { quadrant: number; tasks: Task[]; onSelect: (id: string) => void }) {
+function QuadrantColumn({
+  quadrant,
+  tasks,
+  onSelect,
+  selectedIds,
+  onToggleSelected,
+}: {
+  quadrant: number;
+  tasks: Task[];
+  onSelect: (id: string) => void;
+  selectedIds: string[];
+  onToggleSelected: (id: string) => void;
+}) {
+  const updateTask = useAppStore((state) => state.updateTask);
+  const meta = quadrantMeta[quadrant];
+  const dropToQuadrant = async (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const id = event.dataTransfer.getData("task-id");
+    if (!id) return;
+    await updateTask({ id, urgency: meta.urgency, importance: meta.importance });
+  };
   return (
-    <div className="glass-card p-3 [transition:var(--transition-smooth)]">
-      <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-lg font-semibold" style={{ color: quadrantColors[quadrant] }}>
-          Q{quadrant} {quadrantLabels[quadrant]}
-        </h3>
-        <span className="glass-inset px-2 py-0.5 text-xs opacity-80">{tasks.length}</span>
+    <div className="glass-card p-3 [transition:var(--transition-smooth)]" onDragOver={(event) => event.preventDefault()} onDrop={dropToQuadrant}>
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-normal text-[var(--muted-foreground)]">Eisenhower Matrix</p>
+          <h3 className="mt-1 text-xl font-semibold leading-tight" style={{ color: quadrantColors[quadrant] }}>
+            {meta.title}
+          </h3>
+          <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">{meta.description}</p>
+        </div>
+        <span className="glass-inset shrink-0 px-2 py-0.5 text-xs opacity-80">{tasks.length} 项</span>
       </div>
       <div className="space-y-2">
         {tasks.map((task) => (
-          <TaskRow key={task.id} task={task} onSelect={() => onSelect(task.id)} />
+          <TaskRow
+            key={task.id}
+            task={task}
+            selected={selectedIds.includes(task.id)}
+            onToggleSelected={() => onToggleSelected(task.id)}
+            onSelect={() => onSelect(task.id)}
+          />
         ))}
         {tasks.length === 0 && <p className="glass-inset border-dashed p-4 text-sm opacity-60">暂无任务</p>}
       </div>
@@ -850,13 +987,30 @@ function QuadrantColumn({ quadrant, tasks, onSelect }: { quadrant: number; tasks
   );
 }
 
-function TaskRow({ task, onSelect }: { task: Task; onSelect: () => void }) {
+function TaskRow({ task, selected, onToggleSelected, onSelect }: { task: Task; selected: boolean; onToggleSelected: () => void; onSelect: () => void }) {
   const { updateTask, deleteTask, startFocus } = useAppStore();
   const done = task.status === "done";
   const overdue = taskOverdueLabel(task);
+  const tags = parseTags(task);
   return (
-    <div className="glass-inset group p-3 text-sm [transition:var(--transition-smooth)] hover:-translate-y-0.5 hover:border-[var(--ring)]" onClick={onSelect}>
+    <div
+      className="glass-inset group p-3 text-sm [transition:var(--transition-smooth)] hover:-translate-y-0.5 hover:border-[var(--ring)]"
+      draggable
+      onDragStart={(event) => event.dataTransfer.setData("task-id", task.id)}
+      onClick={onSelect}
+    >
       <div className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          className="h-4 w-4 accent-[var(--neon-violet)]"
+          checked={selected}
+          onChange={(event) => {
+            event.stopPropagation();
+            onToggleSelected();
+          }}
+          onClick={(event) => event.stopPropagation()}
+          aria-label="选择任务"
+        />
         <button
           className="icon-btn"
           onClick={(event) => {
@@ -898,6 +1052,17 @@ function TaskRow({ task, onSelect }: { task: Task; onSelect: () => void }) {
           </button>
         </div>
       </div>
+      {(overdue || isNeedsReviewTask(task) || tags.length > 0) && (
+        <div className="mt-2 flex flex-wrap gap-1.5 text-xs">
+          {overdue && <span className="rounded-full bg-red-500/15 px-2 py-0.5 text-red-300">{overdue}</span>}
+          {isNeedsReviewTask(task) && <span className="rounded-full bg-[var(--neon-amber)]/15 px-2 py-0.5 text-[var(--neon-amber)]">待整理</span>}
+          {tags.filter((tag) => !needsReviewTags.includes(tag)).slice(0, 3).map((tag) => (
+            <span key={tag} className="rounded-full border border-[var(--glass-inset-border)] px-2 py-0.5 text-[var(--muted-foreground)]">
+              {tag}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

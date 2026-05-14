@@ -226,15 +226,17 @@ class FallbackApi {
     return task;
   }
 
-  async update_task(patch: Partial<Task> & { id: string }): Promise<Task> {
+  async update_task(patch: Omit<Partial<Task>, "tags"> & { id: string; tags?: string[] | string }): Promise<Task> {
     const tasks = readJson<Task[]>(taskKey, []);
     const next = tasks.map((task) => {
       if (task.id !== patch.id) return task;
       const urgency = patch.urgency ?? task.urgency;
       const importance = patch.importance ?? task.importance;
+      const tags = Array.isArray(patch.tags) ? JSON.stringify(patch.tags) : patch.tags;
       return {
         ...task,
         ...patch,
+        tags: tags ?? task.tags,
         urgency,
         importance,
         quadrant: calculateQuadrant(urgency, importance),
