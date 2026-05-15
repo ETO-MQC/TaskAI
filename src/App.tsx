@@ -1246,10 +1246,10 @@ function TimerView() {
   };
 
   return (
-    <section className="glass-card animate-fade-in flex h-full min-h-0 flex-col p-5">
+    <section className="timer-page-shell glass-card animate-fade-in flex flex-col p-5 min-h-full pb-12">
       <Header title="专注计时" subtitle="Rust 后端 Instant 管理起止时间，前端消费后端秒级状态" />
-      <div className="grid flex-1 place-items-center">
-        <div className="flex w-full max-w-4xl flex-col items-center gap-6">
+      <div className="flex-1 w-full flex flex-col items-center mt-6">
+        <div className="timer-hero-section flex w-full max-w-4xl flex-col items-center gap-6">
           <div className="flex gap-2">
             {(["positive", "pomodoro", "countdown"] as TimerMode[]).map((item) => (
               <button key={item} className={`rounded-xl px-4 py-2 text-sm [transition:var(--transition-smooth)] ${mode === item ? "btn-glow" : "glass-inset text-[var(--muted-foreground)]"}`} onClick={() => switchMode(item)}>
@@ -1336,11 +1336,12 @@ function TimerView() {
               </div>
             </div>
           )}
+        </div>
 
-          <div className="w-full max-w-4xl mt-12">
-            <div className="glass-card overflow-hidden flex flex-col p-6 rounded-2xl border border-[var(--glass-card-border)] bg-[var(--glass-card-bg)] shadow-[var(--glass-card-shadow)] hover:shadow-[var(--glass-card-shadow-hover)] [transition:var(--transition-smooth)]">
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
-                <h3 className="text-lg font-semibold flex items-center gap-2"><Trophy size={20} className="text-[var(--neon-violet)]" /> 历史专注记录</h3>
+        <section className="timer-history-section w-full max-w-4xl mt-12 md:mt-16">
+          <div className="glass-card overflow-hidden flex flex-col p-6 rounded-2xl border border-[var(--glass-card-border)] bg-[var(--glass-card-bg)] shadow-[var(--glass-card-shadow)] hover:shadow-[var(--glass-card-shadow-hover)] [transition:var(--transition-smooth)]">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
+              <h3 className="text-lg font-semibold flex items-center gap-2"><Trophy size={20} className="text-[var(--neon-violet)]" /> 历史专注记录</h3>
                 <div className="flex flex-wrap gap-2">
                   <select className="field !py-1.5 !text-sm" value={dateFilter} onChange={e => setDateFilter(e.target.value)}>
                     <option value="all">全部时间</option>
@@ -1397,9 +1398,8 @@ function TimerView() {
                 </div>
               )}
             </div>
-          </div>
+          </section>
         </div>
-      </div>
     </section>
   );
 }
