@@ -457,13 +457,23 @@ function WorkbenchView() {
                 </p>
                 <h2 className="mt-3 text-2xl font-bold">日历计时融合视图</h2>
               </div>
-              <div className="glass-inset flex shrink-0 p-1 text-sm">
-                <button className={`rounded-lg px-4 py-1.5 [transition:var(--transition-smooth)] ${centerPanel === "timer" ? "btn-glow font-medium" : "text-[var(--muted-foreground)] hover:text-[var(--neon-blue)]"}`} onClick={() => setCenterPanel("timer")}>
-                  计时
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  className="glass-inset px-3 py-1.5 text-xs font-semibold text-[var(--muted-foreground)] hover:text-white rounded-lg [transition:var(--transition-smooth)] hover:bg-[var(--glass-card-bg-hover)]"
+                  title={centerPanel === "timer" ? "打开完整计时页" : "打开完整日历页"}
+                  onClick={() => setView(centerPanel)}
+                >
+                  完整页
                 </button>
-                <button className={`rounded-lg px-4 py-1.5 [transition:var(--transition-smooth)] ${centerPanel === "calendar" ? "btn-glow font-medium" : "text-[var(--muted-foreground)] hover:text-[var(--neon-blue)]"}`} onClick={() => setCenterPanel("calendar")}>
-                  日历
-                </button>
+                <div className="glass-inset flex shrink-0 p-1 text-sm">
+                  <button className={`rounded-lg px-4 py-1.5 [transition:var(--transition-smooth)] ${centerPanel === "timer" ? "btn-glow font-medium" : "text-[var(--muted-foreground)] hover:text-[var(--neon-blue)]"}`} onClick={() => setCenterPanel("timer")}>
+                    计时
+                  </button>
+                  <button className={`rounded-lg px-4 py-1.5 [transition:var(--transition-smooth)] ${centerPanel === "calendar" ? "btn-glow font-medium" : "text-[var(--muted-foreground)] hover:text-[var(--neon-blue)]"}`} onClick={() => setCenterPanel("calendar")}>
+                    日历
+                  </button>
+                </div>
               </div>
             </div>
             {centerPanel === "timer" ? (
@@ -1142,6 +1152,7 @@ function TimerView() {
   const { tasks, records, timer, startTimer, pauseTimer, resetTimer, stopTimer } = useAppStore();
   const [mode, setMode] = useState<TimerMode>("pomodoro");
   const [topic, setTopic] = useState("自由专注");
+  const [currentTaskId, setCurrentTaskId] = useState<string>("");
   const [pomodoroMinutes, setPomodoroMinutes] = useState("25");
   const [countdownHours, setCountdownHours] = useState("0");
   const [countdownMinutes, setCountdownMinutes] = useState("30");
@@ -1149,6 +1160,7 @@ function TimerView() {
 
   const [dateFilter, setDateFilter] = useState("today");
   const [modeFilter, setModeFilter] = useState("all");
+  const [taskFilter, setTaskFilter] = useState("all");
 
   const autoStoppedRef = useRef(false);
   const elapsed = timer.elapsed_seconds;
@@ -1181,11 +1193,30 @@ function TimerView() {
   const filteredRecords = records.filter(r => {
     let dateMatch = true;
     if (dateFilter === "today") dateMatch = dayjs(r.started_at).isSame(dayjs(), "day");
-    if (dateFilter === "week") dateMatch = dayjs(r.started_at).isAfter(dayjs().subtract(7, "day"));
+    else if (dateFilter === "yesterday") dateMatch = dayjs(r.started_at).isSame(dayjs().subtract(1, "day"), "day");
+    else if (dateFilter === "week") dateMatch = dayjs(r.started_at).isAfter(dayjs().subtract(7, "day"));
+    // Custom date logic could be extended if needed, treating "custom" as "all" for now if not implemented.
+    
     let modeMatch = true;
     if (modeFilter !== "all") modeMatch = r.mode === modeFilter;
-    return dateMatch && modeMatch;
+    
+    let taskMatch = true;
+    if (taskFilter === "linked") taskMatch = !!r.task_id;
+    else if (taskFilter === "unlinked") taskMatch = !r.task_id;
+    else if (taskFilter !== "all") taskMatch = r.task_id === taskFilter;
+
+    return dateMatch && modeMatch && taskMatch;
   }).sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime());
+
+  const summary = useMemo(() => {
+    const totalDuration = filteredRecords.reduce((acc, curr) => acc + curr.duration, 0);
+    const count = filteredRecords.length;
+    const avgDuration = count > 0 ? totalDuration / count : 0;
+    const pomodoroCount = filteredRecords.filter(r => r.mode === "pomodoro").length;
+    const linkedCount = filteredRecords.filter(r => !!r.task_id).length;
+    const unlinkedCount = count - linkedCount;
+    return { totalDuration, count, avgDuration, pomodoroCount, linkedCount, unlinkedCount };
+  }, [filteredRecords]);
 
   useEffect(() => {
     if (!timer.active || timer.paused || timer.mode === "positive" || timer.remaining_seconds == null || timer.remaining_seconds > 0) {
@@ -1211,7 +1242,7 @@ function TimerView() {
   const startCurrentTimer = () => {
     const target_seconds = mode === "positive" ? null : mode === "pomodoro" ? selectedPomodoroMinutes * 60 : countdownSeconds;
     if (mode === "countdown") setLastCountdownSeconds(countdownSeconds);
-    startTimer({ topic, mode, target_seconds });
+    startTimer({ topic, mode, target_seconds, task_id: currentTaskId || null });
   };
 
   return (
@@ -1228,7 +1259,26 @@ function TimerView() {
           </div>
           <TimerOrb seconds={displaySeconds} progress={progress} paused={timer.paused} mode={activeMode} />
           <p className="max-w-xl text-center text-sm text-[var(--muted-foreground)]">{modeDescription(mode)}</p>
-          <div className="grid w-full max-w-2xl grid-cols-1 gap-2 md:grid-cols-[1fr_auto]">
+          <div className="grid w-full max-w-2xl grid-cols-1 gap-2 md:grid-cols-[1fr_1fr_auto]">
+            <select 
+              className="field" 
+              value={currentTaskId} 
+              onChange={(e) => {
+                const id = e.target.value;
+                setCurrentTaskId(id);
+                if (id) {
+                  const task = tasks.find(t => t.id === id);
+                  if (task) setTopic(task.title);
+                } else {
+                  setTopic("自由专注");
+                }
+              }}
+            >
+              <option value="">仅记录时间 (无关联任务)</option>
+              {incompleteTasks.map(t => (
+                <option key={t.id} value={t.id}>{t.title}</option>
+              ))}
+            </select>
             <input className="field" value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="当前专注主题" />
             <input className="field" value={minutes} onChange={(e) => setMinutes(e.target.value)} type="number" min="1" disabled={mode === "positive"} title={mode === "positive" ? "正计时不需要目标时长" : "目标分钟数"} />
           </div>
@@ -1279,7 +1329,7 @@ function TimerView() {
               <p className="text-sm font-semibold mb-2">推荐关联任务：</p>
               <div className="flex flex-wrap gap-2">
                 {recommendedTasks.map(t => (
-                  <button key={t.id} type="button" className="glass-inset px-3 py-1.5 text-xs rounded-lg hover:text-[var(--neon-violet)] [transition:var(--transition-smooth)]" onClick={() => setTopic(t.title)}>
+                  <button key={t.id} type="button" className={`glass-inset px-3 py-1.5 text-xs rounded-lg hover:text-[var(--neon-violet)] [transition:var(--transition-smooth)] ${currentTaskId === t.id ? 'ring-1 ring-[var(--neon-violet)] text-[var(--neon-violet)]' : ''}`} onClick={() => { setTopic(t.title); setCurrentTaskId(t.id); }}>
                     {t.title}
                   </button>
                 ))}
@@ -1287,45 +1337,66 @@ function TimerView() {
             </div>
           )}
 
-          <div className="w-full max-w-4xl mt-8 border-t border-[var(--border)] pt-8">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
-              <h3 className="text-lg font-semibold flex items-center gap-2"><Trophy size={18} /> 历史专注记录</h3>
-              <div className="flex gap-2">
-                <select className="field !py-1.5 !text-sm" value={dateFilter} onChange={e => setDateFilter(e.target.value)}>
-                  <option value="all">所有日期</option>
-                  <option value="today">今天</option>
-                  <option value="week">最近一周</option>
-                </select>
-                <select className="field !py-1.5 !text-sm" value={modeFilter} onChange={e => setModeFilter(e.target.value)}>
-                  <option value="all">所有模式</option>
-                  <option value="positive">正计时</option>
-                  <option value="pomodoro">番茄钟</option>
-                  <option value="countdown">倒计时</option>
-                </select>
+          <div className="w-full max-w-4xl mt-12">
+            <div className="glass-card overflow-hidden flex flex-col p-6 rounded-2xl border border-[var(--glass-card-border)] bg-[var(--glass-card-bg)] shadow-[var(--glass-card-shadow)] hover:shadow-[var(--glass-card-shadow-hover)] [transition:var(--transition-smooth)]">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
+                <h3 className="text-lg font-semibold flex items-center gap-2"><Trophy size={20} className="text-[var(--neon-violet)]" /> 历史专注记录</h3>
+                <div className="flex flex-wrap gap-2">
+                  <select className="field !py-1.5 !text-sm" value={dateFilter} onChange={e => setDateFilter(e.target.value)}>
+                    <option value="all">全部时间</option>
+                    <option value="today">今天</option>
+                    <option value="yesterday">昨天</option>
+                    <option value="week">本周</option>
+                  </select>
+                  <select className="field !py-1.5 !text-sm" value={modeFilter} onChange={e => setModeFilter(e.target.value)}>
+                    <option value="all">全部模式</option>
+                    <option value="positive">正计时</option>
+                    <option value="pomodoro">番茄钟</option>
+                    <option value="countdown">倒计时</option>
+                  </select>
+                  <select className="field !py-1.5 !text-sm max-w-[120px]" value={taskFilter} onChange={e => setTaskFilter(e.target.value)}>
+                    <option value="all">全部任务</option>
+                    <option value="linked">已关联任务</option>
+                    <option value="unlinked">未关联</option>
+                    {tasks.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
+                  </select>
+                </div>
               </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-6 gap-2 mb-6 bg-[var(--background)]/30 p-3 rounded-xl border border-[var(--border)]">
+                <div className="flex flex-col"><span className="text-xs text-[var(--muted-foreground)]">总计专注</span><span className="text-sm font-semibold">{formatMinutes(summary.totalDuration)}</span></div>
+                <div className="flex flex-col"><span className="text-xs text-[var(--muted-foreground)]">记录总数</span><span className="text-sm font-semibold">{summary.count} 次</span></div>
+                <div className="flex flex-col"><span className="text-xs text-[var(--muted-foreground)]">平均时长</span><span className="text-sm font-semibold">{formatMinutes(Math.round(summary.avgDuration))}</span></div>
+                <div className="flex flex-col"><span className="text-xs text-[var(--muted-foreground)]">番茄钟</span><span className="text-sm font-semibold">{summary.pomodoroCount} 次</span></div>
+                <div className="flex flex-col"><span className="text-xs text-[var(--muted-foreground)]">已关联</span><span className="text-sm font-semibold text-[var(--neon-mint)]">{summary.linkedCount} 次</span></div>
+                <div className="flex flex-col"><span className="text-xs text-[var(--muted-foreground)]">未关联</span><span className="text-sm font-semibold text-orange-400/80">{summary.unlinkedCount} 次</span></div>
+              </div>
+              
+              {filteredRecords.length === 0 ? (
+                <div className="flex-1 grid place-items-center py-12 px-4 rounded-xl border border-dashed border-[var(--border)]">
+                  <p className="text-sm text-[var(--muted-foreground)]">暂无匹配的记录</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[360px] overflow-y-auto pr-2 custom-scrollbar">
+                  {filteredRecords.map(record => {
+                    const task = tasks.find(t => t.id === record.task_id);
+                    return (
+                      <div key={record.id} className="glass-inset hover:-translate-y-0.5 [transition:var(--transition-smooth)] flex flex-col p-4 rounded-xl">
+                        <div className="flex justify-between items-start mb-2 gap-2">
+                          <span className="font-semibold text-sm line-clamp-1 flex-1">{task?.title || record.task_topic || record.note || "自由专注"}</span>
+                          <span className="text-xs text-[var(--neon-violet)] font-mono shrink-0 px-2 py-1 rounded-md bg-[var(--neon-violet)]/10">{formatMinutes(record.duration)}</span>
+                        </div>
+                        <div className="flex items-center gap-3 text-xs text-[var(--muted-foreground)]">
+                          <span className="flex items-center gap-1"><Clock3 size={12} /> {dayjs(record.started_at).format("MM-DD HH:mm")}</span>
+                          <span className="flex items-center gap-1"><CirclePlay size={12} /> {modeLabel(record.mode)}</span>
+                          {task && <span className="flex items-center gap-1 text-[var(--neon-mint)]"><ListTodo size={12} /> 已关联任务</span>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
-            
-            {filteredRecords.length === 0 ? (
-              <p className="text-sm text-center text-[var(--muted-foreground)] py-8">暂无匹配的记录</p>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
-                {filteredRecords.map(record => {
-                  const task = tasks.find(t => t.id === record.task_id);
-                  return (
-                    <div key={record.id} className="glass-card hover:-translate-y-0.5 [transition:var(--transition-smooth)] flex flex-col p-4 rounded-xl">
-                      <div className="flex justify-between items-start mb-2">
-                        <span className="font-semibold text-sm line-clamp-1 flex-1 mr-2">{task?.title || record.note || "自由专注"}</span>
-                        <span className="text-xs text-[var(--neon-violet)] font-mono shrink-0 px-2 py-1 rounded-md bg-[var(--neon-violet)]/10">{formatMinutes(record.duration)}</span>
-                      </div>
-                      <div className="flex items-center gap-3 text-xs text-[var(--muted-foreground)]">
-                        <span className="flex items-center gap-1"><Clock3 size={12} /> {dayjs(record.started_at).format("MM-DD HH:mm")}</span>
-                        <span className="flex items-center gap-1"><CirclePlay size={12} /> {modeLabel(record.mode)}</span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
           </div>
         </div>
       </div>
