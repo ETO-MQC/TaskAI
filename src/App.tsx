@@ -8,6 +8,7 @@ import {
   Check,
   CirclePlay,
   Clock3,
+  Edit2,
   LayoutDashboard,
   ListTodo,
   Mic,
@@ -42,6 +43,7 @@ import type { Importance, Priority, Task, TimerMode, Urgency } from "./lib/types
 import {
   formatMinutes,
   formatSeconds,
+  getRecommendedTasks,
   modeLabel,
   parseTags,
   priorityLabel,
@@ -299,9 +301,21 @@ function Sidebar() {
 }
 
 function WorkbenchView() {
-  const { tasks, timer, records, selectTask, startFocus, startTimer, pauseTimer, resetTimer, stopTimer, setView } = useAppStore();
+  const { tasks, timer, timerTopic, timerTaskId, setTimerContext, records, selectTask, startFocus, startTimer, pauseTimer, resetTimer, stopTimer, setView } = useAppStore();
   const [timerMode, setTimerMode] = useState<TimerMode>("positive");
   const [centerPanel, setCenterPanel] = useState<"timer" | "calendar">("timer");
+  const [isTopicPopoverOpen, setIsTopicPopoverOpen] = useState(false);
+  const popoverRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (popoverRef.current && !popoverRef.current.contains(event.target as Node)) {
+        setIsTopicPopoverOpen(false);
+      }
+    }
+    if (isTopicPopoverOpen) document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [isTopicPopoverOpen]);
   const [selectedWorkbenchDate, setSelectedWorkbenchDate] = useState(dayjs().format("YYYY-MM-DD"));
   const today = dayjs().format("YYYY-MM-DD");
   const activeTasks = tasks.filter((task) => task.status !== "archived");
@@ -316,7 +330,9 @@ function WorkbenchView() {
   const doneToday = tasks.filter((task) => task.status === "done" && (!task.planned_date || task.planned_date === today)).length;
   const completionRate = totalToday ? Math.round((doneToday / totalToday) * 100) : 0;
   const gardenProgress = Math.min(100, Math.round((focusSeconds / (4 * 60 * 60)) * 100));
-  const currentTopic = timer.topic || todayTasks[0]?.title || "自由专注";
+  
+  const workbenchRecommended = getRecommendedTasks(tasks, records, timerTopic, timerTaskId);
+  
   const displaySeconds =
     timer.mode === "positive" || !timer.remaining_seconds ? timer.elapsed_seconds : timer.remaining_seconds;
   const selectedTimerMinutes = timerMode === "pomodoro" ? 25 : 30;
@@ -482,9 +498,53 @@ function WorkbenchView() {
                 <TimerOrb compact seconds={workbenchTimerSeconds} progress={workbenchTimerProgress} mode={workbenchTimerActiveMode} />
               </div>
               <div className="min-w-0 space-y-4 self-center md:max-w-[390px]">
-                <div>
+                <div className="relative" ref={popoverRef}>
                   <p className="text-sm text-[var(--muted-foreground)]">当前主题</p>
-                  <h3 className="mt-1 text-lg font-bold leading-snug">{currentTopic}</h3>
+                  <button 
+                    className="mt-1 flex items-center gap-2 group hover:opacity-80 transition-opacity text-left max-w-full"
+                    onClick={() => !timer.active && setIsTopicPopoverOpen(!isTopicPopoverOpen)}
+                    disabled={timer.active}
+                    aria-label="选择关联任务或输入主题"
+                  >
+                    <h3 className="text-lg font-bold leading-snug truncate group-hover:underline decoration-[var(--muted-foreground)] underline-offset-4">
+                      {timer.active ? (timer.topic || "自由专注") : (timerTaskId ? tasks.find(t => t.id === timerTaskId)?.title || "任务已失效" : timerTopic)}
+                    </h3>
+                    {!timer.active && <Edit2 size={12} className="text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 transition-opacity" />}
+                  </button>
+                  
+                  {isTopicPopoverOpen && !timer.active && (
+                    <div className="absolute top-full left-0 mt-2 w-80 max-w-[calc(100vw-32px)] z-50 glass-card subtle-card-light rounded-xl p-3 shadow-lg border border-[var(--border)] max-h-[300px] overflow-y-auto thin-scrollbar">
+                      <div className="mb-3">
+                        <input 
+                          className="field w-full text-sm" 
+                          placeholder="输入自由专注主题" 
+                          value={timerTopic}
+                          onChange={(e) => setTimerContext(e.target.value, timerTaskId)}
+                        />
+                      </div>
+                      
+                      <div className="space-y-1 mt-3">
+                        <button 
+                          className={`w-full text-left px-2 py-1.5 rounded-lg text-sm transition-colors ${!timerTaskId ? "bg-white/5 text-[var(--neon-blue)] font-medium" : "hover:bg-white/5"}`}
+                          onClick={() => { setTimerContext(timerTopic, null); setIsTopicPopoverOpen(false); }}
+                        >
+                          仅记录时间 (无关联任务)
+                        </button>
+                        
+                        {workbenchRecommended.length > 0 && <div className="text-xs font-semibold text-[var(--muted-foreground)] px-2 pt-2 pb-1">推荐关联任务：</div>}
+                        {workbenchRecommended.map(t => (
+                          <button
+                            key={t.id}
+                            className={`w-full flex flex-col items-start px-2 py-1.5 rounded-lg transition-colors ${timerTaskId === t.id ? "bg-[var(--neon-violet)]/10 text-[var(--neon-violet)]" : "hover:bg-white/5"}`}
+                            onClick={() => { setTimerContext(t.title, t.id); setIsTopicPopoverOpen(false); }}
+                          >
+                            <span className="text-sm truncate w-full text-left font-medium">{t.title}</span>
+                            {t.recommendReason && <span className="text-[10px] text-[var(--muted-foreground)] opacity-80 mt-0.5">{t.recommendReason}</span>}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
                 <div className="glass-inset p-3 text-xs leading-6 text-[var(--muted-foreground)]">
                   {modeDescription(timerMode)}
@@ -495,9 +555,9 @@ function WorkbenchView() {
                       className="btn-glow flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold"
                       onClick={() =>
                         startTimer({
-                          topic: currentTopic,
+                          topic: timerTopic,
                           mode: timerMode,
-                          task_id: todayTasks[0]?.id ?? null,
+                          task_id: timerTaskId,
                           target_seconds: modeTargetSeconds(timerMode, selectedTimerMinutes),
                         })
                       }
@@ -1149,10 +1209,8 @@ function TaskDetail({ task }: { task: Task | null }) {
 }
 
 function TimerView() {
-  const { tasks, records, timer, startTimer, pauseTimer, resetTimer, stopTimer } = useAppStore();
+  const { tasks, records, timer, timerTopic, timerTaskId, setTimerContext, startTimer, pauseTimer, resetTimer, stopTimer } = useAppStore();
   const [mode, setMode] = useState<TimerMode>("pomodoro");
-  const [topic, setTopic] = useState("自由专注");
-  const [currentTaskId, setCurrentTaskId] = useState<string>("");
   const [pomodoroMinutes, setPomodoroMinutes] = useState("25");
   const [countdownHours, setCountdownHours] = useState("0");
   const [countdownMinutes, setCountdownMinutes] = useState("30");
@@ -1188,7 +1246,7 @@ function TimerView() {
         : lastCountdownSeconds;
 
   const incompleteTasks = tasks.filter(t => t.status !== "done" && t.status !== "archived");
-  const recommendedTasks = incompleteTasks.slice(0, 4);
+  const recommendedTasks = getRecommendedTasks(tasks, records, timerTopic, timerTaskId);
 
   const filteredRecords = records.filter(r => {
     let dateMatch = true;
@@ -1242,7 +1300,7 @@ function TimerView() {
   const startCurrentTimer = () => {
     const target_seconds = mode === "positive" ? null : mode === "pomodoro" ? selectedPomodoroMinutes * 60 : countdownSeconds;
     if (mode === "countdown") setLastCountdownSeconds(countdownSeconds);
-    startTimer({ topic, mode, target_seconds, task_id: currentTaskId || null });
+    startTimer({ topic: timerTopic, mode, target_seconds, task_id: timerTaskId || null });
   };
 
   return (
@@ -1262,15 +1320,14 @@ function TimerView() {
           <div className="grid w-full max-w-2xl grid-cols-1 gap-2 md:grid-cols-[1fr_1fr_auto]">
             <select 
               className="field" 
-              value={currentTaskId} 
+              value={timerTaskId || ""} 
               onChange={(e) => {
                 const id = e.target.value;
-                setCurrentTaskId(id);
                 if (id) {
                   const task = tasks.find(t => t.id === id);
-                  if (task) setTopic(task.title);
+                  if (task) setTimerContext(task.title, id);
                 } else {
-                  setTopic("自由专注");
+                  setTimerContext("自由专注", null);
                 }
               }}
             >
@@ -1279,7 +1336,7 @@ function TimerView() {
                 <option key={t.id} value={t.id}>{t.title}</option>
               ))}
             </select>
-            <input className="field" value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="当前专注主题" />
+            <input className="field" value={timerTopic} onChange={(e) => setTimerContext(e.target.value, timerTaskId)} placeholder="当前专注主题" />
             <input className="field" value={minutes} onChange={(e) => setMinutes(e.target.value)} type="number" min="1" disabled={mode === "positive"} title={mode === "positive" ? "正计时不需要目标时长" : "目标分钟数"} />
           </div>
           {mode === "pomodoro" && (
@@ -1324,16 +1381,31 @@ function TimerView() {
             )}
           </div>
 
-          {!timer.active && recommendedTasks.length > 0 && (
+          {!timer.active && (
             <div className="w-full max-w-2xl mt-4">
               <p className="text-sm font-semibold mb-2">推荐关联任务：</p>
-              <div className="flex flex-wrap gap-2">
-                {recommendedTasks.map(t => (
-                  <button key={t.id} type="button" className={`glass-inset px-3 py-1.5 text-xs rounded-lg hover:text-[var(--neon-violet)] [transition:var(--transition-smooth)] ${currentTaskId === t.id ? 'ring-1 ring-[var(--neon-violet)] text-[var(--neon-violet)]' : ''}`} onClick={() => { setTopic(t.title); setCurrentTaskId(t.id); }}>
-                    {t.title}
-                  </button>
-                ))}
-              </div>
+              {recommendedTasks.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {recommendedTasks.map(t => (
+                    <button 
+                      key={t.id} 
+                      type="button" 
+                      title={t.recommendReason}
+                      className={`glass-inset px-3 py-1.5 text-xs rounded-lg hover:text-[var(--neon-violet)] [transition:var(--transition-smooth)] flex items-center gap-2 ${timerTaskId === t.id ? 'ring-1 ring-[var(--neon-violet)] text-[var(--neon-violet)]' : ''}`} 
+                      onClick={() => setTimerContext(t.title, t.id)}
+                    >
+                      <span className="max-w-[120px] truncate">{t.title}</span>
+                      {t.recommendReason && (
+                        <span className="bg-[var(--glass-card-border)] px-1.5 py-0.5 rounded text-[10px] text-[var(--muted-foreground)]">
+                          {t.recommendReason}
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-[var(--muted-foreground)]">暂无推荐任务，可以手动选择或仅记录时间。</p>
+              )}
             </div>
           )}
         </div>

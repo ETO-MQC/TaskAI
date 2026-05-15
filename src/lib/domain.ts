@@ -60,3 +60,110 @@ export function formatSeconds(seconds: number) {
     ? `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
     : `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
+
+import dayjs from "dayjs";
+import isSameOrBefore from "dayjs/plugin/isSameOrBefore";
+import type { TimerRecord } from "./types";
+dayjs.extend(isSameOrBefore);
+
+export interface RecommendedTask extends Task {
+  recommendReason: string;
+  recommendScore: number;
+}
+
+export function getRecommendedTasks(
+  tasks: Task[],
+  records: TimerRecord[],
+  topic: string,
+  selectedTaskId: string | null
+): RecommendedTask[] {
+  const incompleteTasks = tasks.filter(t => t.status !== "done" && t.status !== "archived");
+  const today = dayjs().startOf('day');
+  
+  const recentTaskIds = new Set<string>();
+  const recentRecords = records.slice(0, 20); // Check recent 20 records
+  for (const r of recentRecords) {
+    if (r.task_id) recentTaskIds.add(r.task_id);
+  }
+
+  const scoredTasks = incompleteTasks.map(task => {
+    let score = 0;
+    const reasons: string[] = [];
+
+    // Is selected
+    if (task.id === selectedTaskId) {
+      score += 100;
+      // Do not add reason for selection to keep tags clean, or add it later if needed
+    }
+
+    // Date rules
+    let isToday = false;
+    let isOverdue = false;
+    if (task.planned_date && dayjs(task.planned_date).isSame(today, "day")) isToday = true;
+    if (task.deadline && dayjs(task.deadline).isSame(today, "day")) isToday = true;
+    
+    if (task.deadline && dayjs(task.deadline).isBefore(today, "day")) isOverdue = true;
+    else if (task.planned_date && dayjs(task.planned_date).isBefore(today, "day")) isOverdue = true;
+
+    if (!task.planned_date && !task.deadline) {
+      // Unplanned tasks shouldn't get "today" penalty or bonus without checks, but the rule says:
+      // "无 planned_date 但未完成" also counts for today candidates if no clear date. We'll give it a slight bonus or we'll just rely on urgency
+    }
+
+    if (isToday) {
+      score += 30;
+      reasons.push("今日任务");
+    } else if (isOverdue) {
+      score += 35;
+      reasons.push("逾期未完成");
+    }
+
+    // Quadrant rules
+    let isUrgent = task.urgency === "urgent";
+    let isImportant = task.importance === "important";
+    
+    if (isUrgent && isImportant) {
+      score += 25; // Q1
+      if (!reasons.includes("逾期未完成") && !reasons.includes("今日任务")) reasons.push("重要且紧急");
+    } else if (!isUrgent && isImportant) {
+      score += 15; // Q2
+      if (!reasons.length) reasons.push("重要优先");
+    }
+    
+    if (isUrgent && !isImportant) {
+      score += 10;
+    }
+
+    // Recent
+    if (recentTaskIds.has(task.id)) {
+      score += 15;
+      reasons.push("曾经关联过");
+    }
+
+    // Topic Match
+    if (topic && topic !== "自由专注" && topic !== "仅记录时间") {
+      const kw = topic.toLowerCase();
+      const inTitle = task.title.toLowerCase().includes(kw);
+      const inNotes = task.description?.toLowerCase().includes(kw);
+      const tags = parseTags(task);
+      const inTags = tags.some(t => t.toLowerCase().includes(kw));
+      
+      if (inTitle || inNotes || inTags) {
+        score += 25;
+        reasons.push("与当前主题匹配");
+      }
+    }
+
+    return {
+      ...task,
+      recommendScore: score,
+      recommendReason: reasons[0] || (score > 0 ? "推荐任务" : "")
+    };
+  });
+
+  // Filter tasks that have at least some score
+  const candidates = scoredTasks.filter(t => t.recommendScore > 0);
+  candidates.sort((a, b) => b.recommendScore - a.recommendScore);
+
+  return candidates.slice(0, 5);
+}

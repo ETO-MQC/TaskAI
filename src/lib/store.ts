@@ -47,9 +47,12 @@ interface AppStore {
   linkPanelOpen: boolean;
   pendingRecord: TimerRecord | null;
   theme: "light" | "dark";
+  timerTopic: string;
+  timerTaskId: string | null;
   setView: (view: View) => void;
   setAiOpen: (open: boolean) => void;
   setTheme: (theme: "light" | "dark") => Promise<void>;
+  setTimerContext: (topic: string, taskId: string | null) => void;
   load: () => Promise<void>;
   createTask: (draft: TaskDraft) => Promise<Task>;
   updateTask: (patch: TaskUpdatePatch) => Promise<void>;
@@ -242,6 +245,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
   linkPanelOpen: false,
   pendingRecord: null,
   theme: "light",
+  timerTopic: "自由专注",
+  timerTaskId: null,
   setView: (view) => set({ view }),
   setAiOpen: (aiOpen) => set({ aiOpen }),
   setTheme: async (theme) => {
@@ -249,6 +254,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     document.documentElement.classList.toggle("dark", theme === "dark");
     await api("save_setting", { key: "theme", value: theme });
   },
+  setTimerContext: (timerTopic, timerTaskId) => set({ timerTopic, timerTaskId }),
   load: async () => {
     const [tasks, timer, records, stats, theme] = await Promise.all([
       api<Task[]>("list_tasks"),
@@ -280,7 +286,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const target_seconds =
       mode === "countdown" && task.estimated_duration ? Math.round(task.estimated_duration * 60) : null;
     await get().startTimer({ topic: task.title, task_id: task.id, mode, target_seconds });
-    set({ view: "timer" });
+    set({ view: "timer", timerTopic: task.title, timerTaskId: task.id });
   },
   startTimer: async (input) => {
     const timer = await api<TimerSnapshot>("start_timer", { input });
