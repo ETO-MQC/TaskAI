@@ -3547,33 +3547,60 @@ function PriorityDot({ quadrant }: { quadrant: number }) {
 
 function TimerOrb({ seconds, progress, paused = false, compact = false, mode = "positive" }: { seconds: number; progress: number; paused?: boolean; compact?: boolean; mode?: TimerMode }) {
   const progressDegrees = Math.min(100, Math.max(0, progress)) * 3.6;
-  const waveLevel = 84 - Math.min(100, Math.max(0, progress)) * 0.52;
-  const modeColor = mode === "pomodoro" ? "var(--prio-p1)" : mode === "countdown" ? "var(--neon-amber)" : "var(--neon-blue)";
+  
+  // Liquid physics: positive rises, others drop
+  let liquidFillPercentage = progress;
+  if (mode === "pomodoro" || mode === "countdown") {
+    liquidFillPercentage = 100 - progress;
+  } else {
+    // positive starts at base 5% to show some liquid
+    liquidFillPercentage = Math.max(5, progress);
+  }
+
+  const waveLevel = 84 - (liquidFillPercentage * 0.70); // up to ~14% from top when full
+  
+  const modeColor = 
+    mode === "pomodoro" ? "oklch(0.68 0.22 350)" : // elegant pink/red
+    mode === "countdown" ? "oklch(0.72 0.20 50)" :  // glass orange/gold
+    "oklch(0.65 0.20 250)";                         // positive: cyan-blue/indigo
+
+  const isIdle = progress === 0 && paused;
+  const isFinished = progress >= 100;
+  const isRunning = !paused && !isFinished && progress > 0;
+  
+  let stateClass = "";
+  if (isFinished) stateClass = "timer-state-finished";
+  else if (paused) stateClass = "timer-state-paused";
+  else if (isIdle) stateClass = "timer-state-idle";
+  else stateClass = "timer-state-running";
+
   return (
     <div
-      className={`timer-orb relative mx-auto grid place-items-center overflow-visible rounded-full ${paused ? "outline-dashed outline-2 outline-offset-4 outline-[var(--ring)]" : ""}`}
+      className={`timer-orb relative mx-auto grid place-items-center overflow-visible rounded-full ${stateClass} ${paused ? "outline-dashed outline-2 outline-offset-4 outline-[var(--ring)] opacity-80" : ""}`}
       style={{
         width: compact ? "clamp(170px, 16vw, 230px)" : "clamp(180px, 18vw, 250px)",
         height: compact ? "clamp(170px, 16vw, 230px)" : "clamp(180px, 18vw, 250px)",
       }}
     >
-      <div className="timer-orb-glow absolute inset-0 rounded-full" />
+      <div className="timer-orb-glow absolute inset-0 rounded-full" style={{ "--glow-color": modeColor } as CSSProperties} />
       <div className="timer-orb-shell absolute inset-[3%] rounded-full" />
       <div
         className="timer-orb-progress absolute inset-[6%] rounded-full"
         style={{
-          background: `conic-gradient(from 220deg, var(--neon-violet) 0deg, var(--neon-blue) ${progressDegrees * 0.55}deg, var(--neon-pink) ${progressDegrees}deg, transparent ${progressDegrees}deg 360deg)`,
+          background: `conic-gradient(from 220deg, ${modeColor} 0deg, color-mix(in oklch, ${modeColor} 80%, white) ${progressDegrees * 0.55}deg, color-mix(in oklch, ${modeColor} 60%, black) ${progressDegrees}deg, transparent ${progressDegrees}deg 360deg)`,
         }}
       />
       <div className="timer-orb-core absolute inset-[18%] rounded-full overflow-hidden">
-        <div className={`timer-orb-wave ${paused ? "opacity-60 scale-95" : "scale-100"} [transition:all_800ms_cubic-bezier(0.34,1.56,0.64,1)]`} style={{ top: `${waveLevel}%`, "--wave-color": modeColor } as CSSProperties}>
+        <div className={`timer-orb-wave [transition:all_1200ms_cubic-bezier(0.34,1.56,0.64,1)]`} style={{ top: `${waveLevel}%`, "--wave-color": modeColor } as CSSProperties}>
         </div>
       </div>
       <div className="relative z-10 flex flex-col items-center justify-center text-center">
-        <div className={`font-mono tabular-nums ${compact ? "text-[32px] md:text-[36px]" : "text-[38px] md:text-[42px]"} font-bold leading-none tracking-wider text-[var(--foreground)] drop-shadow-[0_0_14px_var(--neon-violet)]`}>
+        <div className={`font-mono tabular-nums ${compact ? "text-[32px] md:text-[36px]" : "text-[38px] md:text-[42px]"} font-bold leading-none tracking-wider text-[var(--foreground)] drop-shadow-[0_0_10px_color-mix(in_oklch,var(--background)_80%,transparent)]`}>
           {formatSeconds(seconds)}
         </div>
-        <div className="mt-2 text-xs text-[var(--muted-foreground)]">{seconds > 0 ? "专注中" : "等待开始"}</div>
+        <div className={`mt-2 text-xs font-medium text-[var(--muted-foreground)]`}>
+          {isFinished ? "已完成" : paused && progress > 0 ? "已暂停" : isRunning ? "专注中" : "等待开始"}
+        </div>
       </div>
     </div>
   );
