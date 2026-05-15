@@ -181,6 +181,52 @@ function taskOverdueLabel(task: Task) {
   return dayjs(key).isBefore(dayjs().startOf("day"), "day") ? "逾期" : null;
 }
 
+// ── Lightweight toast system ──
+type ToastItem = { id: number; message: string; exiting: boolean };
+let toastListeners: Array<(toasts: ToastItem[]) => void> = [];
+let toastList: ToastItem[] = [];
+let toastIdCounter = 0;
+
+function notifyToastListeners() {
+  for (const fn of toastListeners) fn([...toastList]);
+}
+
+function showToast(message: string, duration = 3000) {
+  const id = ++toastIdCounter;
+  toastList = [...toastList, { id, message, exiting: false }];
+  notifyToastListeners();
+  window.setTimeout(() => {
+    toastList = toastList.map((t) => (t.id === id ? { ...t, exiting: true } : t));
+    notifyToastListeners();
+    window.setTimeout(() => {
+      toastList = toastList.filter((t) => t.id !== id);
+      notifyToastListeners();
+    }, 220);
+  }, duration);
+}
+
+function useToasts() {
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  useEffect(() => {
+    toastListeners.push(setToasts);
+    return () => { toastListeners = toastListeners.filter((fn) => fn !== setToasts); };
+  }, []);
+  return toasts;
+}
+
+function ToastContainer() {
+  const toasts = useToasts();
+  if (toasts.length === 0) return null;
+  return createPortal(
+    <div className="toast-container">
+      {toasts.map((t) => (
+        <div key={t.id} className={`toast-item${t.exiting ? " toast-exit" : ""}`}>{t.message}</div>
+      ))}
+    </div>,
+    document.body,
+  );
+}
+
 const aiShortcutEventName = "smartfocus_ai_shortcut";
 
 function requestAiInputFocus() {
@@ -269,6 +315,7 @@ function App() {
       )}
       {store.aiOpen && <AiPanel />}
       {store.linkPanelOpen && <LinkRecordPanel />}
+      <ToastContainer />
     </div>
   );
 }
@@ -354,6 +401,13 @@ function WorkbenchView() {
   const gardenProgress = Math.min(100, Math.round((focusSeconds / (4 * 60 * 60)) * 100));
   
   const workbenchRecommended = getRecommendedTasks(tasks, records, timerTopic, timerTaskId);
+
+  // Sync local timerMode with actual timer.mode when timer is active
+  useEffect(() => {
+    if (timer.active && timer.mode && timer.mode !== timerMode) {
+      setTimerMode(timer.mode);
+    }
+  }, [timer.active, timer.mode]);
   
   const displaySeconds =
     timer.mode === "positive" || !timer.remaining_seconds ? timer.elapsed_seconds : timer.remaining_seconds;
@@ -473,6 +527,10 @@ function WorkbenchView() {
                     className="today-task-play grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[var(--background)]/50 border border-[var(--border)] text-[var(--muted-foreground)] transition-all duration-200 hover:bg-[var(--neon-violet)]/20 hover:text-[var(--neon-violet)] hover:border-[var(--neon-violet)]/50 focus:outline-none"
                     onClick={(event) => {
                       event.stopPropagation();
+                      if (timer.active) {
+                        showToast("当前正在计时，请先结束或重置当前计时后再开始新的任务。");
+                        return;
+                      }
                       startFocus(task);
                     }}
                     title="开始执行"
@@ -603,14 +661,18 @@ function WorkbenchView() {
                   {!timer.active ? (
                     <button
                       className="btn-glow flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold"
-                      onClick={() =>
+                      onClick={() => {
+                        if (timer.active) {
+                          showToast("当前正在计时，请先结束或重置后再开始新的计时。");
+                          return;
+                        }
                         startTimer({
                           topic: timerTopic,
                           mode: timerMode,
                           task_id: timerTaskId,
                           target_seconds: modeTargetSeconds(timerMode, selectedTimerMinutes),
-                        })
-                      }
+                        });
+                      }}
                     >
                       <Play size={17} /> 开始
                     </button>
@@ -629,13 +691,20 @@ function WorkbenchView() {
                   </button>
                 </div>
                 <div className="glass-inset inline-flex p-1 text-sm">
-                  {(["positive", "pomodoro", "countdown"] as TimerMode[]).map((mode) => (
+                  {(["positive", "pomodoro", "countdown"] as TimerMode[]).map((m) => (
                     <button
-                      key={mode}
-                      className={`rounded-lg px-4 py-1.5 [transition:var(--transition-smooth)] ${timerMode === mode ? "btn-glow" : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"}`}
-                      onClick={() => setTimerMode(mode)}
+                      key={m}
+                      className={`rounded-lg px-4 py-1.5 [transition:var(--transition-smooth)] ${timerMode === m ? "btn-glow" : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"}`}
+                      onClick={() => {
+                        if (timer.active) {
+                          showToast("当前正在计时，请先暂停、结束或重置后再切换模式。");
+                          return;
+                        }
+                        setTimerMode(m);
+                        showToast(`已切换为${modeLabel(m)}`);
+                      }}
                     >
-                      {modeLabel(mode)}
+                      {modeLabel(m)}
                     </button>
                   ))}
                 </div>
@@ -1260,7 +1329,7 @@ function TaskDetail({ task }: { task: Task | null }) {
 
 function TimerView() {
   const { tasks, records, timer, timerTopic, timerTaskId, setTimerContext, startTimer, pauseTimer, resetTimer, stopTimer } = useAppStore();
-  const [mode, setMode] = useState<TimerMode>("pomodoro");
+  const [mode, setMode] = useState<TimerMode>("positive");
   const [pomodoroMinutes, setPomodoroMinutes] = useState("25");
   const [countdownHours, setCountdownHours] = useState("0");
   const [countdownMinutes, setCountdownMinutes] = useState("30");
@@ -1336,7 +1405,18 @@ function TimerView() {
     stopTimer(timer.task_id ?? null);
   }, [timer.active, timer.paused, timer.mode, timer.remaining_seconds, timer.task_id, stopTimer]);
 
+  // Sync local mode with actual timer.mode when timer starts (e.g., from startFocus)
+  useEffect(() => {
+    if (timer.active && timer.mode && timer.mode !== mode) {
+      setMode(timer.mode);
+    }
+  }, [timer.active, timer.mode]);
+
   const switchMode = (nextMode: TimerMode) => {
+    if (timer.active) {
+      showToast("当前正在计时，请先暂停、结束或重置后再切换模式。");
+      return;
+    }
     setMode(nextMode);
     if (nextMode === "pomodoro" && !pomodoroMinutes) setPomodoroMinutes("25");
     if (nextMode === "countdown") {
@@ -1345,6 +1425,7 @@ function TimerView() {
       setCountdownHours(String(hours));
       setCountdownMinutes(String(minutes));
     }
+    showToast(`已切换为${modeLabel(nextMode)}`);
   };
 
   const startCurrentTimer = () => {

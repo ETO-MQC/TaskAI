@@ -49,7 +49,7 @@ Phase 2 目标是在一期稳定基础上继续增强产品深度：
 
 ## 3. 当前执行 Sprint
 
-当前执行：Sprint 12C.2 Today Stack 任务卡片横向布局修正
+当前执行：Sprint 12C.2 计时启动来源与模式锁定修复
 
 状态：已完成
 
@@ -309,6 +309,42 @@ TODO：
   - 480px 以下小屏添加响应式适配，减小间距和字体。
   - event.stopPropagation() 确保点击开始按钮不触发卡片选择事件。
 - 验收结果：任务卡片显示为「左侧开始按钮 ── 右侧标题（上行）+ 元信息（下行）」结构；标题和属性都在按钮右侧，不会跑到按钮下方；`npm run build` 通过；light/dark 可读；小屏不溢出不重叠；点击按钮启动计时与选卡片互不干扰。
+- 剩余 TODO：无。本轮修改已完全收口。
+- 下一 Sprint 建议：后续进入 Sprint 18：AI 工作区 2.0。
+
+---
+
+### Sprint 12C.2：计时启动来源与模式锁定修复
+
+记录：
+- 实现范围：
+  - 新增轻量 toast 通知系统（`showToast` + `ToastContainer`），使用 CSS 动画进入/退出，支持多条堆叠和自动消失，无新依赖。
+  - Today Stack 任务卡片快捷开始按钮增加运行中计时守卫：计时运行中点击开始时弹出提示"当前正在计时，请先结束或重置当前计时后再开始新的任务。"，不再静默覆盖。
+  - `startFocus(task)` 默认使用 `"positive"` / 正计时模式（store 中 `startFocus` 的 `mode` 参数默认值已是 `"positive"`），任务卡片快捷开始不进入番茄钟。
+  - WorkbenchView 新增 `timerMode` 与 `timer.mode` 同步 effect：计时运行中 `timerMode` 自动跟随 `timer.mode`，确保 UI 高亮与真实模式一致。
+  - WorkbenchView 模式按钮在计时运行中禁止切换，点击时弹出提示"当前正在计时，请先暂停、结束或重置后再切换模式。"；计时未开始时自由切换并弹出确认 toast。
+  - WorkbenchView 开始按钮增加运行中守卫（双重保险，虽已被 `!timer.active` 条件包裹）。
+  - TimerView 默认模式从 `"pomodoro"` 改为 `"positive"`，与 WorkbenchView 默认一致。
+  - TimerView 新增 `mode` 与 `timer.mode` 同步 effect：当计时从其他入口（如 `startFocus`）启动时，TimerView 本地 mode 自动跟随真实模式。
+  - TimerView `switchMode` 函数增加运行中守卫：计时运行中（含暂停）点击其他模式时弹出提示，不允许切换。
+  - TimerView `switchMode` 切换成功时弹出确认 toast，显示当前模式名称。
+  - 模式切换后 `displaySeconds` 自动回到当前模式默认值（正计时 00:00，番茄钟 25:00，倒计时回上次设置）。
+  - 重置后保留当前选择模式，时间回到默认值（正计时 00:00，番茄钟 selectedPomodoroMinutes*60，倒计时 lastCountdownSeconds）。
+  - 未修改 Rust/Tauri 计时核心、未新增 SQLx migration、未新增数据库字段、未修改 `timer_records` 数据结构、未修改 `plan.md`。
+- 验收结果：
+  - `npm run build` 已通过。
+  - Today Stack 任务卡片快捷开始默认进入正计时。
+  - 任务快捷开始会带入 task_id 和 topic（由 `startFocus` 设置 `timerTaskId` 和 `timerTopic`）。
+  - 任务快捷开始后，TimerView 和 WorkbenchView 模式高亮均为正计时。
+  - 任务快捷开始后，结束弹窗默认关联该任务（`startFocus` 设置 `timerTaskId` → `stopTimer` 带入 `task_id`）。
+  - TimerView 手动点击开始时使用当前选中模式。
+  - WorkbenchView 手动点击开始时使用当前选中模式。
+  - 计时运行中点击其他模式不会静默切换，而是弹出提示。
+  - 计时未开始时可自由切换模式。
+  - 重置后时间回到当前模式默认值。
+  - 未新增 migration。
+  - 未修改 plan.md。
+  - 未破坏任务推荐、主题 popover、历史记录和 TimerView 外层滚动结构。
 - 剩余 TODO：无。本轮修改已完全收口。
 - 下一 Sprint 建议：后续进入 Sprint 18：AI 工作区 2.0。
 
