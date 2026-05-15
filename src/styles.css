@@ -482,6 +482,68 @@
       0 14px 36px -18px oklch(0 0 0 / 0.65),
       0 0 24px -18px var(--neon-violet);
   }
+  /* ── Today Stack 任务卡片横向布局 ── */
+  .today-task-card {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem;
+  }
+  .today-task-play {
+    flex-shrink: 0;
+    width: 40px;
+    height: 40px;
+  }
+  .today-task-content {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .today-task-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1.3;
+    color: var(--foreground);
+  }
+  .today-task-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    font-size: 0.8125rem;
+    line-height: 1.25;
+    color: var(--muted-foreground);
+    overflow: hidden;
+    flex-wrap: nowrap;
+  }
+  .today-task-meta > span:not(:first-child) {
+    white-space: nowrap;
+  }
+  .today-task-meta > span:last-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  @media (max-width: 480px) {
+    .today-task-card {
+      gap: 0.625rem;
+      padding: 0.625rem;
+    }
+    .today-task-play {
+      width: 36px;
+      height: 36px;
+    }
+    .today-task-play svg {
+      width: 16px;
+      height: 16px;
+    }
+    .today-task-title {
+      font-size: 14px;
+    }
+  }
   .achievement-scroll {
     scrollbar-width: thin;
     scrollbar-color: oklch(0.62 0.08 286 / 0.34) transparent;

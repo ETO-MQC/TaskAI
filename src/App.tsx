@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { CSSProperties, DragEvent, ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import {
@@ -305,17 +306,38 @@ function WorkbenchView() {
   const [timerMode, setTimerMode] = useState<TimerMode>("positive");
   const [centerPanel, setCenterPanel] = useState<"timer" | "calendar">("timer");
   const [isTopicPopoverOpen, setIsTopicPopoverOpen] = useState(false);
-  const popoverRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+  const [popoverCoords, setPopoverCoords] = useState<{ left: number; top?: number; bottom?: number; openUp: boolean }>({ left: 0, openUp: false });
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
-      if (popoverRef.current && !popoverRef.current.contains(event.target as Node)) {
+      if (popoverRef.current && !popoverRef.current.contains(event.target as Node) && !triggerRef.current?.contains(event.target as Node)) {
         setIsTopicPopoverOpen(false);
       }
     }
     if (isTopicPopoverOpen) document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [isTopicPopoverOpen]);
+
+  useEffect(() => {
+    if (!isTopicPopoverOpen || !triggerRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const spaceAbove = rect.top;
+    const preferOpenUp = spaceBelow < 280 && spaceAbove > 280;
+    const left = Math.max(8, rect.left);
+    if (preferOpenUp) {
+      // position using bottom relative to viewport
+      const bottom = window.innerHeight - rect.top + 8;
+      setPopoverCoords({ left, bottom, openUp: true });
+    } else {
+      const top = rect.bottom + 8;
+      setPopoverCoords({ left, top, openUp: false });
+    }
+  }, [isTopicPopoverOpen, timerTopic]);
+
+  
   const [selectedWorkbenchDate, setSelectedWorkbenchDate] = useState(dayjs().format("YYYY-MM-DD"));
   const today = dayjs().format("YYYY-MM-DD");
   const activeTasks = tasks.filter((task) => task.status !== "archived");
@@ -431,31 +453,46 @@ function WorkbenchView() {
             </div>
             <div className="thin-scrollbar min-h-0 flex-1 space-y-3 overflow-auto px-1 pb-1">
               {todayTasks.map((task) => (
-                <button
+                <div
                   key={task.id}
-                  className="glass-inset interactive-surface flex w-full items-center gap-3 p-3 text-left hover:border-[var(--ring)]"
+                  className="today-task-card group w-full cursor-pointer p-3"
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'row',
+                    flexWrap: 'nowrap',
+                    alignItems: 'center',
+                    gap: '16px',
+                  }}
                   onClick={() => {
                     selectTask(task.id);
-                    setView("tasks");
+                    setView('tasks');
                   }}
                 >
-                  <PriorityDot quadrant={task.quadrant} />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-semibold">{task.title}</span>
-                    <span className="mt-1 block truncate text-xs text-[var(--muted-foreground)]">
-                      Q{task.quadrant} {quadrantLabels[task.quadrant]} · {task.estimated_duration ? formatMinutes(task.estimated_duration) : "未估时"}
-                    </span>
-                  </span>
-                  <span
-                    className="grid h-8 w-8 place-items-center rounded-full border border-white/10 text-[var(--muted-foreground)] [transition:var(--transition-smooth)] hover:text-[var(--neon-violet)]"
+                  {/* 左侧：开始按钮 */}
+                  <button
+                    className="today-task-play grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[var(--background)]/50 border border-[var(--border)] text-[var(--muted-foreground)] transition-all duration-200 hover:bg-[var(--neon-violet)]/20 hover:text-[var(--neon-violet)] hover:border-[var(--neon-violet)]/50 focus:outline-none"
                     onClick={(event) => {
                       event.stopPropagation();
                       startFocus(task);
                     }}
+                    title="开始执行"
                   >
-                    <CirclePlay size={15} />
-                  </span>
-                </button>
+                    <Play size={18} className="translate-x-[1px]" />
+                  </button>
+
+                  {/* 右侧：文字内容区 */}
+                  <div className="today-task-content min-w-0 flex-1 flex flex-col gap-1 overflow-hidden">
+                    <span className="today-task-title truncate text-[15px] font-semibold leading-tight group-hover:text-[var(--neon-blue)] transition-colors duration-200">
+                      {task.title}
+                    </span>
+                    <div className="today-task-meta flex items-center gap-2 text-xs text-[var(--muted-foreground)] flex-nowrap whitespace-nowrap overflow-x-auto thin-scrollbar">
+                      <PriorityDot quadrant={task.quadrant} />
+                      <span>Q{task.quadrant} {quadrantLabels[task.quadrant]}</span>
+                      <span>·</span>
+                      <span>{task.estimated_duration ? formatMinutes(task.estimated_duration) : '未估时'}</span>
+                    </div>
+                  </div>
+                </div>
               ))}
               {todayTasks.length === 0 && (
                 <div className="glass-inset border-dashed p-4 text-sm text-[var(--muted-foreground)]">
@@ -498,11 +535,12 @@ function WorkbenchView() {
                 <TimerOrb compact seconds={workbenchTimerSeconds} progress={workbenchTimerProgress} mode={workbenchTimerActiveMode} />
               </div>
               <div className="min-w-0 space-y-4 self-center md:max-w-[390px]">
-                <div className="relative" ref={popoverRef}>
+                <div>
                   <p className="text-sm text-[var(--muted-foreground)]">当前主题</p>
-                  <button 
+                  <button
+                    ref={el => { triggerRef.current = el; }}
                     className="mt-1 flex items-center gap-2 group hover:opacity-80 transition-opacity text-left max-w-full"
-                    onClick={() => !timer.active && setIsTopicPopoverOpen(!isTopicPopoverOpen)}
+                    onClick={() => !timer.active && setIsTopicPopoverOpen(v => !v)}
                     disabled={timer.active}
                     aria-label="选择关联任务或输入主题"
                   >
@@ -511,31 +549,42 @@ function WorkbenchView() {
                     </h3>
                     {!timer.active && <Edit2 size={12} className="text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 transition-opacity" />}
                   </button>
-                  
-                  {isTopicPopoverOpen && !timer.active && (
-                    <div className="absolute top-full left-0 mt-2 w-80 max-w-[calc(100vw-32px)] z-50 glass-card subtle-card-light rounded-xl p-3 shadow-lg border border-[var(--border)] max-h-[300px] overflow-y-auto thin-scrollbar">
+
+                  {isTopicPopoverOpen && !timer.active && triggerRef.current && createPortal(
+                    <div
+                      ref={popoverRef}
+                      style={{
+                        position: 'absolute',
+                        left: popoverCoords.left,
+                        top: popoverCoords.openUp ? undefined : popoverCoords.top,
+                        bottom: popoverCoords.openUp ? popoverCoords.bottom : undefined,
+                        width: 320,
+                        maxWidth: 'calc(100vw - 32px)',
+                      }}
+                      className="z-[9999] bg-[var(--background)]/95 backdrop-blur-3xl rounded-xl p-3 shadow-[0_12px_48px_rgba(0,0,0,0.5)] border border-white/6 max-h-[320px] overflow-y-auto thin-scrollbar flex flex-col"
+                    >
                       <div className="mb-3">
-                        <input 
-                          className="field w-full text-sm" 
-                          placeholder="输入自由专注主题" 
+                        <input
+                          className="field w-full text-sm !bg-black/20 focus:!bg-black/40"
+                          placeholder="输入自由专注主题"
                           value={timerTopic}
                           onChange={(e) => setTimerContext(e.target.value, timerTaskId)}
                         />
                       </div>
-                      
-                      <div className="space-y-1 mt-3">
-                        <button 
-                          className={`w-full text-left px-2 py-1.5 rounded-lg text-sm transition-colors ${!timerTaskId ? "bg-white/5 text-[var(--neon-blue)] font-medium" : "hover:bg-white/5"}`}
+
+                      <div className="space-y-1">
+                        <button
+                          className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${!timerTaskId ? "bg-white/10 text-[var(--neon-blue)] font-medium" : "hover:bg-white/10"}`}
                           onClick={() => { setTimerContext(timerTopic, null); setIsTopicPopoverOpen(false); }}
                         >
                           仅记录时间 (无关联任务)
                         </button>
-                        
-                        {workbenchRecommended.length > 0 && <div className="text-xs font-semibold text-[var(--muted-foreground)] px-2 pt-2 pb-1">推荐关联任务：</div>}
+
+                        {workbenchRecommended.length > 0 && <div className="text-xs font-semibold text-[var(--muted-foreground)] px-2 pt-3 pb-1.5">推荐关联任务：</div>}
                         {workbenchRecommended.map(t => (
                           <button
                             key={t.id}
-                            className={`w-full flex flex-col items-start px-2 py-1.5 rounded-lg transition-colors ${timerTaskId === t.id ? "bg-[var(--neon-violet)]/10 text-[var(--neon-violet)]" : "hover:bg-white/5"}`}
+                            className={`w-full flex flex-col items-start px-3 py-2 rounded-lg transition-colors ${timerTaskId === t.id ? "bg-[var(--neon-violet)]/20 text-[var(--neon-violet)]" : "hover:bg-white/10"}`}
                             onClick={() => { setTimerContext(t.title, t.id); setIsTopicPopoverOpen(false); }}
                           >
                             <span className="text-sm truncate w-full text-left font-medium">{t.title}</span>
@@ -543,7 +592,8 @@ function WorkbenchView() {
                           </button>
                         ))}
                       </div>
-                    </div>
+                    </div>,
+                    document.body
                   )}
                 </div>
                 <div className="glass-inset p-3 text-xs leading-6 text-[var(--muted-foreground)]">

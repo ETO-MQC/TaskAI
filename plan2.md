@@ -49,9 +49,9 @@ Phase 2 目标是在一期稳定基础上继续增强产品深度：
 
 ## 3. 当前执行 Sprint
 
-当前执行：Sprint 12 计时器高级模式与情境感知
+当前执行：Sprint 12C.2 Today Stack 任务卡片横向布局修正
 
-状态：未开始
+状态：已完成
 
 ## 4. Phase 2 Sprint 列表
 
@@ -282,6 +282,35 @@ TODO：
 
 下一 Sprint 建议：
 - 后续进入 Sprint 18：AI 工作区 2.0。
+
+---
+
+### Sprint 12C.1：Workbench 计时主题弹窗与 Today Stack 卡片布局收口
+
+记录：
+- 实现范围：优化了 Workbench Timeline + Timer 区块内的主题轻量编辑弹窗。加入了动态高度校验（`popoverRef.current.getBoundingClientRect()`），当下方空间小于 280px 时弹窗向上展开跳出边界；应用了背景遮罩更深的全深色 `bg-[var(--background)]/90 backdrop-blur-3xl` 设计并加了高规格层次 `z-[60]` 制裁溢出；将 Today Stack 里面的任务清单样式调整，开始按钮从右侧转移到了左侧的绝对独立居中占位（带圆型轮廓悬停高亮），右侧为 `15px` 粗字体的标题和带圆点/象限/预估耗时的子数据（分层不拥挤不再截断按钮交互）。
+- 验收结果：`npm run build` 通过。弹窗向上/下逻辑生效无遮挡；深浅色可完全清晰阅读；Today 卡内容明确不重叠。
+- 剩余 TODO：无显著 TODO。各项限制逻辑依然跑通。
+- 下一 Sprint 建议：后续进入 Sprint 12C.2：Today Stack 任务卡片横向布局修正。
+
+---
+
+### Sprint 12C.2：Today Stack 任务卡片横向布局修正
+
+记录：
+- 实现范围：修正了 Today Stack 任务卡片内部布局结构，从之前“标题和属性左右横排”改为“左按钮 + 右文字上下两行”的横向布局。具体改动包括：
+  - 将任务卡片内部 `<div>` 从 `flex items-center justify-between gap-3`（标题和属性同一行左右排布）改为 `flex flex-col gap-[5px]`（标题和属性上下两行排布，垂直堆叠）。
+  - 新增 `today-task-card`、`today-task-play`、`today-task-content`、`today-task-title`、`today-task-meta` CSS 类。
+  - `today-task-card`：`display: flex; align-items: center`，确保按钮和右侧文字块在同一横向 row。
+  - `today-task-content`：`flex: 1; min-width: 0; flex-direction: column`，标题在上、属性在下，间隙 5px。
+  - `today-task-title`：`font-size: 15px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap`，单行省略。
+  - `today-task-meta`：`font-size: 0.8125rem (13px)`，弱灰色，单行不换行，`PriorityDot` + 象限标签 + 分隔符 + 预估时长。
+  - 开始按钮保持 40px 圆形，垂直居中，hover 高光；小屏下缩至 36px。
+  - 480px 以下小屏添加响应式适配，减小间距和字体。
+  - event.stopPropagation() 确保点击开始按钮不触发卡片选择事件。
+- 验收结果：任务卡片显示为「左侧开始按钮 ── 右侧标题（上行）+ 元信息（下行）」结构；标题和属性都在按钮右侧，不会跑到按钮下方；`npm run build` 通过；light/dark 可读；小屏不溢出不重叠；点击按钮启动计时与选卡片互不干扰。
+- 剩余 TODO：无。本轮修改已完全收口。
+- 下一 Sprint 建议：后续进入 Sprint 18：AI 工作区 2.0。
 
 ---
 
