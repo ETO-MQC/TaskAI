@@ -4,6 +4,7 @@ export type Importance = "important" | "not_important";
 export type TaskStatus = "todo" | "done" | "archived";
 export type TimerMode = "positive" | "pomodoro" | "countdown";
 export type ReminderStatus = "pending" | "triggered" | "dismissed" | "snoozed";
+export type MaterialStatus = "metadata_only" | "missing" | "queued" | "parsed" | "failed";
 
 export interface Task {
   id: string;
@@ -78,6 +79,46 @@ export interface ReminderInput {
   task_id?: string | null;
   title: string;
   remind_at: string;
+}
+
+export interface Material {
+  id: string;
+  name: string;
+  path: string;
+  file_type: string;
+  size_bytes?: number | null;
+  subject?: string | null;
+  exam_type?: string | null;
+  tags: string;
+  note?: string | null;
+  status: MaterialStatus;
+  exists_on_disk: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PickedMaterial {
+  name: string;
+  path: string;
+  file_type: string;
+  size_bytes?: number | null;
+}
+
+export interface MaterialInput extends PickedMaterial {
+  subject?: string | null;
+  exam_type?: string | null;
+  tags?: string[];
+  note?: string | null;
+  status?: MaterialStatus;
+}
+
+export interface MaterialPatch {
+  id: string;
+  subject?: string | null;
+  exam_type?: string | null;
+  tags?: string[];
+  note?: string | null;
+  status?: MaterialStatus;
 }
 
 export interface AiResponse {

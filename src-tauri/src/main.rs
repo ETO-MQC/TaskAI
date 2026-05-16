@@ -6,7 +6,7 @@ use image::{DynamicImage, ImageBuffer, ImageFormat, Rgba};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::{sqlite::SqlitePoolOptions, FromRow, SqlitePool};
-use std::{io::Cursor, path::PathBuf, sync::Arc, time::Duration};
+use std::{fs, io::Cursor, path::{Path, PathBuf}, sync::Arc, time::Duration};
 use tauri::{
     image::Image,
     tray::{TrayIcon, TrayIconBuilder},
@@ -15,6 +15,7 @@ use tauri::{
 use tauri_plugin_global_shortcut::{
     Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
 };
+use tauri_plugin_dialog::DialogExt;
 use tokio::{sync::Mutex, time::Instant};
 use uuid::Uuid;
 
@@ -110,7 +111,9 @@ SmartFocus 负责计划、排程、任务拆解、自适应调整建议，以及
 SmartFocus 不负责深度知识讲解、刷题训练、知识点掌握度评估、OCR、真实文件全文解析或真实调用 LearnKATA。
 
 你只能生成预览，不能声称已经创建任务或日程；用户确认前不得暗示任何写入已经发生。
-不要声称已经读取真实文件；当前只使用用户提供的资料摘要。
+当前只能基于资料元数据、文件名和用户备注做规划，不能声称已读取文件正文。
+默认不要使用完整 path，除非用户明确需要。
+如果用户要求“分析 PDF / Word / PPT 内容”，应说明当前版本只保存资料元数据，正文解析将在后续 Sprint 实现。
 不要真实调用 LearnKATA，只输出 learnkata_links 结构占位。
 不要把回答写成知识讲解正文，应以计划和安排为主体。
 
@@ -298,6 +301,54 @@ struct ReminderInput {
     remind_at: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
+struct Material {
+    id: String,
+    name: String,
+    path: String,
+    file_type: String,
+    size_bytes: Option<i64>,
+    subject: Option<String>,
+    exam_type: Option<String>,
+    tags: String,
+    note: Option<String>,
+    status: String,
+    exists_on_disk: bool,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PickedMaterial {
+    name: String,
+    path: String,
+    file_type: String,
+    size_bytes: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MaterialInput {
+    name: String,
+    path: String,
+    file_type: String,
+    size_bytes: Option<i64>,
+    subject: Option<String>,
+    exam_type: Option<String>,
+    tags: Option<Vec<String>>,
+    note: Option<String>,
+    status: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MaterialPatch {
+    id: String,
+    subject: Option<String>,
+    exam_type: Option<String>,
+    tags: Option<Vec<String>>,
+    note: Option<String>,
+    status: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct StartTimerInput {
     task_id: Option<String>,
@@ -396,6 +447,44 @@ fn calculate_quadrant(urgency: &str, importance: &str) -> i64 {
 
 fn now_iso() -> String {
     Utc::now().to_rfc3339()
+}
+
+fn infer_material_type(path: &Path, is_dir: bool) -> String {
+    if is_dir {
+        return "folder".to_string();
+    }
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .filter(|ext| !ext.is_empty())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn material_from_path(path: PathBuf, is_dir: bool) -> PickedMaterial {
+    let metadata = fs::metadata(&path).ok();
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| path.to_string_lossy().to_string());
+    PickedMaterial {
+        name,
+        path: path.to_string_lossy().to_string(),
+        file_type: infer_material_type(&path, is_dir),
+        size_bytes: if is_dir {
+            None
+        } else {
+            metadata.map(|item| item.len() as i64)
+        },
+    }
+}
+
+fn normalize_material_status(status: Option<String>) -> Result<String, String> {
+    let status = status.unwrap_or_else(|| "metadata_only".to_string());
+    match status.as_str() {
+        "metadata_only" | "missing" | "queued" | "parsed" | "failed" => Ok(status),
+        _ => Err("invalid material status".to_string()),
+    }
 }
 
 fn quadrant_color(quadrant: i64) -> &'static str {
@@ -1746,6 +1835,145 @@ async fn execute_ai_intents(
 }
 
 #[tauri::command]
+async fn pick_material_files(app: AppHandle) -> Result<Vec<PickedMaterial>, String> {
+    let paths = app
+        .dialog()
+        .file()
+        .blocking_pick_files()
+        .unwrap_or_default();
+    Ok(paths
+        .into_iter()
+        .map(|path| {
+            path.into_path()
+                .map(|path| material_from_path(path, false))
+                .map_err(|e| e.to_string())
+        })
+        .collect::<Result<Vec<_>, String>>()?)
+}
+
+#[tauri::command]
+async fn pick_material_folder(app: AppHandle) -> Result<Option<PickedMaterial>, String> {
+    let Some(path) = app.dialog().file().blocking_pick_folder() else {
+        return Ok(None);
+    };
+    let path = path.into_path().map_err(|e| e.to_string())?;
+    Ok(Some(material_from_path(path, true)))
+}
+
+#[tauri::command]
+async fn create_material(state: State<'_, AppState>, input: MaterialInput) -> Result<Material, String> {
+    let now = now_iso();
+    let status = normalize_material_status(input.status)?;
+    let tags = serde_json::to_string(&input.tags.unwrap_or_default()).map_err(|e| e.to_string())?;
+    let exists_on_disk = Path::new(&input.path).exists();
+    let id = Uuid::new_v4().to_string();
+    sqlx::query(
+        r#"INSERT INTO materials
+        (id, name, path, file_type, size_bytes, subject, exam_type, tags, note, status, exists_on_disk, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+    )
+    .bind(&id)
+    .bind(input.name)
+    .bind(input.path)
+    .bind(input.file_type)
+    .bind(input.size_bytes)
+    .bind(input.subject)
+    .bind(input.exam_type)
+    .bind(tags)
+    .bind(input.note)
+    .bind(status)
+    .bind(exists_on_disk)
+    .bind(&now)
+    .bind(&now)
+    .execute(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+    sqlx::query_as::<_, Material>("SELECT * FROM materials WHERE id = ?")
+        .bind(id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn list_materials(state: State<'_, AppState>) -> Result<Vec<Material>, String> {
+    sqlx::query_as::<_, Material>("SELECT * FROM materials ORDER BY created_at DESC")
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn update_material(state: State<'_, AppState>, patch: MaterialPatch) -> Result<Material, String> {
+    let current = sqlx::query_as::<_, Material>("SELECT * FROM materials WHERE id = ?")
+        .bind(&patch.id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = normalize_material_status(patch.status.or(Some(current.status)))?;
+    let tags = serde_json::to_string(
+        &patch
+            .tags
+            .unwrap_or_else(|| serde_json::from_str::<Vec<String>>(&current.tags).unwrap_or_default()),
+    )
+    .map_err(|e| e.to_string())?;
+    sqlx::query(
+        r#"UPDATE materials
+        SET subject = ?, exam_type = ?, tags = ?, note = ?, status = ?, updated_at = ?
+        WHERE id = ?"#,
+    )
+    .bind(patch.subject.or(current.subject))
+    .bind(patch.exam_type.or(current.exam_type))
+    .bind(tags)
+    .bind(patch.note.or(current.note))
+    .bind(status)
+    .bind(now_iso())
+    .bind(&patch.id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+    sqlx::query_as::<_, Material>("SELECT * FROM materials WHERE id = ?")
+        .bind(patch.id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn remove_material(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    sqlx::query("DELETE FROM materials WHERE id = ?")
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn check_material_exists(state: State<'_, AppState>, id: String) -> Result<Material, String> {
+    let material = sqlx::query_as::<_, Material>("SELECT * FROM materials WHERE id = ?")
+        .bind(&id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    let exists = Path::new(&material.path).exists();
+    let status = if exists { material.status } else { "missing".to_string() };
+    sqlx::query("UPDATE materials SET exists_on_disk = ?, status = ?, updated_at = ? WHERE id = ?")
+        .bind(exists)
+        .bind(status)
+        .bind(now_iso())
+        .bind(&id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    sqlx::query_as::<_, Material>("SELECT * FROM materials WHERE id = ?")
+        .bind(id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn send_ai_message(app: AppHandle, state: State<'_, AppState>, message: String) -> Result<Value, String> {
     let key = sqlx::query_scalar::<_, String>("SELECT value FROM user_settings WHERE key = ?")
         .bind("deepseek_api_key")
@@ -1995,6 +2223,7 @@ mod tests {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let handle = app.handle().clone();
@@ -2048,6 +2277,13 @@ fn main() {
             dismiss_reminder,
             snooze_reminder,
             complete_reminder,
+            pick_material_files,
+            pick_material_folder,
+            create_material,
+            list_materials,
+            update_material,
+            remove_material,
+            check_material_exists,
             list_tasks,
             start_timer,
             stop_timer,

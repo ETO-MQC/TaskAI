@@ -40,7 +40,7 @@ import {
 import dayjs from "dayjs";
 import isBetween from "dayjs/plugin/isBetween";
 import { TaskUpdatePatch, useAppStore } from "./lib/store";
-import type { Importance, Priority, Reminder, Task, TimerMode, Urgency } from "./lib/types";
+import type { Importance, Material, Priority, Reminder, Task, TimerMode, Urgency } from "./lib/types";
 import {
   formatMinutes,
   formatSeconds,
@@ -54,6 +54,7 @@ import {
 import {
   AI_PLANNING_SKILLS,
   buildInboxCaptureMessage,
+  buildMaterialMetadataSummary,
   buildPlanningPrompt,
   routePlanningSkill,
   type InboxCaptureItem,
@@ -1095,11 +1096,22 @@ function RecordListBlock({ title, items }: { title: string; items?: Array<Record
   );
 }
 
+function formatMaterialSize(size?: number | null) {
+  if (size == null) return "文件夹 / 未知大小";
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
 function AiView() {
-  const { createTask, createReminder, reminders } = useAppStore();
+  const { createTask, createReminder, reminders, materials, materialsLoading, materialsError, loadMaterials, addMaterialFiles, addMaterialFolder, updateMaterial, removeMaterialRecord } = useAppStore();
   const [input, setInput] = useState("");
   const [entries, setEntries] = useState<AiWorkspaceEntry[]>([]);
-  const [preferredSkill, setPreferredSkill] = useState<PlanningSkillId | "auto">("auto");
+  const [preferredSkill, setPreferredSkill] = useState<PlanningSkillId | null>(null);
+  const [materialSearch, setMaterialSearch] = useState("");
+  const [materialStatusFilter, setMaterialStatusFilter] = useState<"all" | Material["status"]>("all");
+  const [editingMaterialId, setEditingMaterialId] = useState<string | null>(null);
+  const [materialDraft, setMaterialDraft] = useState({ subject: "", tags: "", note: "" });
   const [lastRoute, setLastRoute] = useState(routePlanningSkill(""));
   const [activeAiToolPanel, setActiveAiToolPanel] = useState<"materials" | "plan" | "reminders" | "more" | "quick" | null>(null);
   const toggleAiToolPanel = (panel: "materials" | "plan" | "reminders" | "more" | "quick") => {
@@ -1113,6 +1125,12 @@ function AiView() {
   const tasks = Array.isArray(preview.parsed?.tasks) ? preview.parsed.tasks : [];
   const selectedTasks = tasks.filter((_, index) => selectedTaskIndexes.includes(index));
   const pendingReminderCount = reminders.filter((item) => item.status === "pending").length;
+  const visibleMaterials = materials.filter((material) => {
+    const haystack = `${material.name} ${material.subject ?? ""} ${material.tags} ${material.note ?? ""}`.toLowerCase();
+    return haystack.includes(materialSearch.toLowerCase()) && (materialStatusFilter === "all" || material.status === materialStatusFilter);
+  });
+
+  useEffect(() => { void loadMaterials(); }, [loadMaterials]);
 
   useEffect(() => {
     if (!listRef.current) return;
@@ -1181,7 +1199,7 @@ function AiView() {
       } else {
         const response = await import("./lib/api").then(({ api }) =>
           api<{ reply?: string; summary?: string }>("send_ai_message", {
-            message: `${buildPlanningPrompt(route.skill)}\n\n用户输入：${text}`,
+            message: `${buildPlanningPrompt(route.skill)}\n\n${buildMaterialMetadataSummary(materials)}\n\n用户输入：${text}`,
           }),
         );
         updatePreviewFromResponse(response);
@@ -1193,7 +1211,7 @@ function AiView() {
       addEntry({ id: crypto.randomUUID(), role: "assistant", kind: "message", content: error instanceof Error ? error.message : "这次处理失败了，请再试一次。" });
     } finally {
       setLoading(false);
-      setPreferredSkill("auto");
+      setPreferredSkill(null);
     }
   };
 
@@ -1254,7 +1272,9 @@ function AiView() {
         <div className="glass-inset flex min-h-[520px] min-w-0 flex-col overflow-hidden p-4">
           <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-[var(--muted-foreground)]">
             <span className="rounded-full border border-white/10 px-2 py-1">{lastRoute.label === "自动判断" ? "自动判断" : `自动识别：${lastRoute.label}`}</span>
-            {preferredSkill !== "auto" && <span className="rounded-full border border-white/10 px-2 py-1">已指定：{AI_PLANNING_SKILLS[preferredSkill].title}</span>}
+            <span className="rounded-full border border-white/10 px-2 py-1">
+              {preferredSkill ? `已指定：${AI_PLANNING_SKILLS[preferredSkill].title}` : "自动判断"}
+            </span>
           </div>
           <div ref={listRef} className="thin-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
             {entries.length === 0 && (
@@ -1294,8 +1314,17 @@ function AiView() {
               <div className="ai-tool-panel ai-popover glass-card absolute bottom-[84px] left-0 z-[60] w-[min(360px,calc(100vw-48px))] p-3 text-sm">
                 {activeAiToolPanel === "quick" && (
                   <div className="grid gap-2 sm:grid-cols-2">
+                    <button className={`glass-inset px-3 py-2 text-left ${preferredSkill == null ? "btn-glow" : ""}`} type="button" onClick={() => { setPreferredSkill(null); showToast("已切回自动判断。"); setActiveAiToolPanel(null); }}>
+                      自动判断
+                    </button>
                     {Object.entries(AI_PLANNING_SKILLS).map(([id, skill]) => (
-                      <button key={id} className="glass-inset px-3 py-2 text-left" type="button" onClick={() => { setPreferredSkill(id as PlanningSkillId); showToast(`已选择：${skill.title}。在下一条消息中生效。`); setActiveAiToolPanel(null); }}>
+                      <button key={id} className={`glass-inset px-3 py-2 text-left ${preferredSkill === id ? "btn-glow" : ""}`} type="button" onClick={() => {
+                        const nextSkill = id as PlanningSkillId;
+                        const shouldClear = preferredSkill === nextSkill;
+                        setPreferredSkill(shouldClear ? null : nextSkill);
+                        showToast(shouldClear ? "已切回自动判断。" : `已选择：${skill.title}。在下一条消息中生效。`);
+                        setActiveAiToolPanel(null);
+                      }}>
                         {skill.title}
                       </button>
                     ))}
@@ -1303,12 +1332,66 @@ function AiView() {
                 )}
                 {activeAiToolPanel === "materials" && (
                   <div className="space-y-3">
-                    <h4 className="font-semibold">资料入口</h4>
-                    <p className="text-[var(--muted-foreground)] leading-6">文件上传、资料索引和真实解析将在 Sprint 19 实现。当前可以在对话中描述资料名称、大纲或课程目录，AI 会先基于文本规划。</p>
-                    <div className="flex gap-2">
-                      <button className="glass-inset px-3 py-1.5 text-xs" type="button" onClick={() => { navigator.clipboard.writeText("我有以下资料需要规划：\n- 资料名称：\n- 科目/课程：\n- 大纲摘要："); showToast("示例提示词已复制到剪贴板"); setActiveAiToolPanel(null); }}>复制示例提示词</button>
-                      <button className="glass-inset px-3 py-1.5 text-xs" type="button" onClick={() => setActiveAiToolPanel(null)}>关闭</button>
+                    <div className="flex items-center justify-between gap-2">
+                      <h4 className="font-semibold">资料库</h4>
+                      <span className="text-xs text-[var(--muted-foreground)]">只保存元数据</span>
                     </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button className="btn-glow rounded-xl px-3 py-1.5 text-xs" type="button" onClick={async () => { const added = await addMaterialFiles(); showToast(added.length ? `已添加 ${added.length} 个资料记录` : "未选择文件"); }}>添加文件</button>
+                      <button className="glass-inset px-3 py-1.5 text-xs" type="button" onClick={async () => { const added = await addMaterialFolder(); showToast(added ? "已添加文件夹记录" : "未选择文件夹"); }}>添加文件夹</button>
+                    </div>
+                    <div className="grid grid-cols-[minmax(0,1fr)_110px] gap-2">
+                      <input className="field min-w-0" value={materialSearch} onChange={(event) => setMaterialSearch(event.target.value)} placeholder="搜索资料" />
+                      <select className="field" value={materialStatusFilter} onChange={(event) => setMaterialStatusFilter(event.target.value as typeof materialStatusFilter)}>
+                        <option value="all">全部状态</option>
+                        <option value="metadata_only">metadata_only</option>
+                        <option value="missing">missing</option>
+                        <option value="queued">queued</option>
+                        <option value="parsed">parsed</option>
+                        <option value="failed">failed</option>
+                      </select>
+                    </div>
+                    {materialsError && <p className="text-xs text-[var(--prio-p1)]">{materialsError}</p>}
+                    {materialsLoading ? <p className="text-[var(--muted-foreground)]">加载中...</p> : visibleMaterials.length === 0 ? (
+                      <p className="text-[var(--muted-foreground)]">还没有资料记录。添加后，AI 只能使用名称、类型、科目、标签和备注做规划。</p>
+                    ) : (
+                      <div className="thin-scrollbar max-h-[360px] space-y-2 overflow-auto pr-1">
+                        {visibleMaterials.map((material) => {
+                          let tags: string[] = [];
+                          try { tags = JSON.parse(material.tags) as string[]; } catch { tags = []; }
+                          const editing = editingMaterialId === material.id;
+                          return (
+                            <div key={material.id} className="glass-inset space-y-2 p-3 text-xs">
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <p className="truncate font-medium">{material.name}</p>
+                                  <p className="text-[var(--muted-foreground)]">{material.file_type} · {material.subject || "未设科目"} · {material.status}</p>
+                                </div>
+                                <button className="glass-inset px-2 py-1" type="button" onClick={() => { navigator.clipboard.writeText(material.path); showToast("路径已复制"); }}>复制路径</button>
+                              </div>
+                              <p className="text-[var(--muted-foreground)]">{formatMaterialSize(material.size_bytes)} · {dayjs(material.created_at).format("YYYY-MM-DD HH:mm")}</p>
+                              <p>{tags.length ? tags.join(" / ") : "无标签"}</p>
+                              <p className="line-clamp-2 text-[var(--muted-foreground)]">{material.note || "无备注"}</p>
+                              {editing && (
+                                <div className="space-y-2">
+                                  <input className="field w-full" value={materialDraft.subject} onChange={(event) => setMaterialDraft((draft) => ({ ...draft, subject: event.target.value }))} placeholder="科目" />
+                                  <input className="field w-full" value={materialDraft.tags} onChange={(event) => setMaterialDraft((draft) => ({ ...draft, tags: event.target.value }))} placeholder="标签，逗号分隔" />
+                                  <textarea className="field min-h-20 w-full" value={materialDraft.note} onChange={(event) => setMaterialDraft((draft) => ({ ...draft, note: event.target.value }))} placeholder="备注" />
+                                </div>
+                              )}
+                              <div className="flex flex-wrap gap-2">
+                                {editing ? (
+                                  <button className="btn-glow rounded-xl px-3 py-1.5" type="button" onClick={async () => { await updateMaterial({ id: material.id, subject: materialDraft.subject || null, tags: materialDraft.tags.split(/[,，]/).map((tag) => tag.trim()).filter(Boolean), note: materialDraft.note || null }); setEditingMaterialId(null); showToast("资料已更新"); }}>保存</button>
+                                ) : (
+                                  <button className="glass-inset px-3 py-1.5" type="button" onClick={() => { setEditingMaterialId(material.id); setMaterialDraft({ subject: material.subject ?? "", tags: tags.join(", "), note: material.note ?? "" }); }}>编辑</button>
+                                )}
+                                <button className="glass-inset px-3 py-1.5" type="button" onClick={async () => { if (!window.confirm("仅从资料库移除，不删除原文件。")) return; await removeMaterialRecord(material.id); showToast("已从资料库移除"); }}>移除</button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 )}
                 {activeAiToolPanel === "reminders" && (

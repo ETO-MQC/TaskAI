@@ -996,3 +996,16 @@ Next sprint suggestion:
 ### 下一 Sprint 建议
 
 - 继续 Sprint 18T 的视觉 QA 和产品验收后再进入 Sprint 19。
+
+---
+
+## Sprint 19：资料库与文件上传基础
+
+- 产品定位：新增本地学习资料索引，只保存元数据，不读取正文、不 OCR、不上传云端。
+- 数据层：新增 `materials` 表，独立于 tasks / reminders / timer_records，记录名称、路径、类型、大小、科目、考试类型、标签、备注、状态与磁盘存在性。
+- Rust / Tauri：新增文件多选、文件夹选择、创建、列表、更新、移除记录、存在性检查命令；文件夹仅保存自身元数据，不递归扫描。
+- 前端：补齐 `Material` 类型、API fallback、Zustand materials 状态与 CRUD；AI 工作区“添加资料”改为真实资料入口，支持添加、搜索、筛选、编辑备注/科目/标签、复制路径、移除记录。
+- AI 边界：规划请求仅附带资料元数据摘要（name / file_type / subject / tags / note / status），默认不传完整 path；明确不能声称已读取正文，正文解析留给后续 Sprint。
+- 验收结果：本 Sprint 以最小可用闭环交付；资料记录删除仅删除库内记录，不触碰原文件；不影响任务、提醒、计时与 AI 收件箱链路。
+- 剩余 TODO：Tauri 实机文件选择手测、缺失文件状态批量刷新策略、后续解析队列与正文能力。
+- 下一 Sprint 建议：进入 Sprint 20 前，先完成 Sprint 19 的实机选择验证与交互收口。

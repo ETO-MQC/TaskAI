@@ -41,7 +41,9 @@ SmartFocus 不负责：深度知识讲解、刷题训练、知识点掌握度评
 工作边界：
 - 只生成预览，不声称已经创建任务或日程。
 - 用户确认前不得暗示任何写入已经发生。
-- 不声称已经读取真实文件；当前只使用用户输入的资料摘要。
+- 当前只能基于资料元数据、文件名和用户备注做规划，不能声称已读取文件正文。
+- 默认不要使用完整 path，除非用户明确需要。
+- 如果用户要求“分析 PDF / Word / PPT 内容”，应说明当前版本只保存资料元数据，正文解析将在后续 Sprint 实现。
 - 不真实调用 LearnKATA，只输出 learnkata_links 占位结构。
 - 你应以计划和安排为主体，不把回答写成知识讲解正文。
 
@@ -118,7 +120,7 @@ export const AI_PLANNING_SKILLS = {
   },
   daily_plan: {
     label: "daily_plan",
-    title: "日常收件箱",
+    title: "今日计划",
     prompt:
       "把自然语言记录转为日常任务预览，尽量抽取 title、deadline、planned_date、estimated_duration、urgency、importance、tags，并说明任何不确定项。",
   },
@@ -160,7 +162,7 @@ export const AI_PLANNING_SKILLS = {
   },
   inbox_capture: {
     label: "inbox_capture",
-    title: "AI 收件箱",
+    title: "日常收件箱",
     prompt:
       "把用户自然语言提取成待确认草稿。区分 deadline 与 planned_date；只有用户明确表达提醒时才填写 reminder_at；不确定时保留 null 并写 clarification_questions；不要声称已经创建任务。",
   },
@@ -173,13 +175,39 @@ export function buildPlanningPrompt(skillId: PlanningSkillId) {
 ${AI_PLANNING_SKILLS[skillId].prompt}`;
 }
 
+export function buildMaterialMetadataSummary(
+  materials: Array<{
+    name: string;
+    file_type: string;
+    subject?: string | null;
+    tags: string;
+    note?: string | null;
+    status: string;
+  }>,
+) {
+  if (materials.length === 0) return "资料元数据：暂无。";
+  const rows = materials.map((material) => {
+    let tags: string[] = [];
+    try { tags = JSON.parse(material.tags) as string[]; } catch { tags = []; }
+    return {
+      name: material.name,
+      file_type: material.file_type,
+      subject: material.subject ?? null,
+      tags,
+      note: material.note ?? null,
+      status: material.status,
+    };
+  });
+  return `资料元数据（未读取正文，未包含 path）：${JSON.stringify(rows)}`;
+}
+
 export type RoutedPlanningSkill = {
   skill: PlanningSkillId;
   label: string;
 };
 
-export function routePlanningSkill(input: string, preferredSkill?: PlanningSkillId | "auto"): RoutedPlanningSkill {
-  if (preferredSkill && preferredSkill !== "auto") {
+export function routePlanningSkill(input: string, preferredSkill?: PlanningSkillId | null): RoutedPlanningSkill {
+  if (preferredSkill) {
     return { skill: preferredSkill, label: AI_PLANNING_SKILLS[preferredSkill].title };
   }
 

@@ -8,6 +8,10 @@ import type {
   TimerSnapshot,
   Reminder,
   ReminderInput,
+  Material,
+  MaterialInput,
+  MaterialPatch,
+  PickedMaterial,
 } from "./types";
 import { calculateQuadrant } from "./domain";
 
@@ -31,6 +35,7 @@ const taskKey = "smartfocus.tasks";
 const recordKey = "smartfocus.timer_records";
 const settingsKey = "smartfocus.settings";
 const reminderKey = "smartfocus.reminders";
+const materialKey = "smartfocus.materials";
 
 const defaultShortcutSettings = {
   toggle_ai: "Ctrl+Shift+A",
@@ -433,6 +438,68 @@ class FallbackApi {
   async list_timer_records(task_id?: string | null): Promise<TimerRecord[]> {
     const records = readJson<TimerRecord[]>(recordKey, []);
     return task_id ? records.filter((record) => record.task_id === task_id) : records;
+  }
+
+  async pick_material_files(): Promise<PickedMaterial[]> {
+    return [];
+  }
+
+  async pick_material_folder(): Promise<PickedMaterial | null> {
+    return null;
+  }
+
+  async list_materials(): Promise<Material[]> {
+    return readJson<Material[]>(materialKey, []);
+  }
+
+  async create_material(input: MaterialInput): Promise<Material> {
+    const materials = await this.list_materials();
+    const stamp = now();
+    const material: Material = {
+      id: crypto.randomUUID(),
+      name: input.name,
+      path: input.path,
+      file_type: input.file_type,
+      size_bytes: input.size_bytes ?? null,
+      subject: input.subject ?? null,
+      exam_type: input.exam_type ?? null,
+      tags: JSON.stringify(input.tags ?? []),
+      note: input.note ?? null,
+      status: input.status ?? "metadata_only",
+      exists_on_disk: true,
+      created_at: stamp,
+      updated_at: stamp,
+    };
+    writeJson(materialKey, [material, ...materials]);
+    return material;
+  }
+
+  async update_material(patch: MaterialPatch): Promise<Material> {
+    const materials = await this.list_materials();
+    const current = materials.find((item) => item.id === patch.id);
+    if (!current) throw new Error("material not found");
+    const material: Material = {
+      ...current,
+      subject: patch.subject ?? current.subject,
+      exam_type: patch.exam_type ?? current.exam_type,
+      tags: patch.tags ? JSON.stringify(patch.tags) : current.tags,
+      note: patch.note ?? current.note,
+      status: patch.status ?? current.status,
+      updated_at: now(),
+    };
+    writeJson(materialKey, materials.map((item) => (item.id === patch.id ? material : item)));
+    return material;
+  }
+
+  async remove_material(id: string): Promise<void> {
+    writeJson(materialKey, (await this.list_materials()).filter((item) => item.id !== id));
+  }
+
+  async check_material_exists(id: string): Promise<Material> {
+    const materials = await this.list_materials();
+    const material = materials.find((item) => item.id === id);
+    if (!material) throw new Error("material not found");
+    return material;
   }
 
   async create_reminder(input: ReminderInput): Promise<Reminder> {

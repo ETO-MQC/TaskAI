@@ -9,6 +9,8 @@ import type {
   TaskInput,
   Reminder,
   ReminderInput,
+  Material,
+  MaterialPatch,
   TimerMode,
   TimerRecord,
   TimerSnapshot,
@@ -44,6 +46,9 @@ interface AppStore {
   timer: TimerSnapshot;
   records: TimerRecord[];
   reminders: Reminder[];
+  materials: Material[];
+  materialsLoading: boolean;
+  materialsError: string | null;
   stats: DashboardStats | null;
   aiMessages: AiMessage[];
   aiOpen: boolean;
@@ -60,6 +65,11 @@ interface AppStore {
   createTask: (draft: TaskDraft) => Promise<Task>;
   createReminder: (input: ReminderInput) => Promise<Reminder>;
   refreshReminders: () => Promise<Reminder[]>;
+  loadMaterials: () => Promise<Material[]>;
+  addMaterialFiles: () => Promise<Material[]>;
+  addMaterialFolder: () => Promise<Material | null>;
+  updateMaterial: (patch: MaterialPatch) => Promise<void>;
+  removeMaterialRecord: (id: string) => Promise<void>;
   dismissReminder: (id: string) => Promise<void>;
   snoozeReminder: (id: string) => Promise<void>;
   completeReminder: (id: string) => Promise<void>;
@@ -252,6 +262,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
   timer: emptyTimer,
   records: [],
   reminders: [],
+  materials: [],
+  materialsLoading: false,
+  materialsError: null,
   stats: null,
   aiMessages: [],
   aiOpen: false,
@@ -269,17 +282,18 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
   setTimerContext: (timerTopic, timerTaskId) => set({ timerTopic, timerTaskId }),
   load: async () => {
-    const [tasks, timer, records, reminders, stats, theme] = await Promise.all([
+    const [tasks, timer, records, reminders, materials, stats, theme] = await Promise.all([
       api<Task[]>("list_tasks"),
       api<TimerSnapshot>("get_timer_snapshot").catch(() => emptyTimer),
       api<TimerRecord[]>("list_timer_records", { task_id: null }).catch(() => []),
       api<Reminder[]>("list_reminders").catch(() => []),
+      api<Material[]>("list_materials").catch(() => []),
       api<DashboardStats>("get_dashboard_stats").catch(() => null),
       api<string | null>("get_setting", { key: "theme" }).catch(() => null),
     ]);
     const normalizedTheme = theme === "dark" ? "dark" : "light";
     document.documentElement.classList.toggle("dark", normalizedTheme === "dark");
-    set({ tasks, timer, records, reminders, stats, theme: normalizedTheme });
+    set({ tasks, timer, records, reminders, materials, stats, theme: normalizedTheme });
   },
   createTask: async (draft) => {
     const task = await api<Task>("create_task", { input: draftToInput(draft) });
@@ -296,6 +310,58 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const reminders = await api<Reminder[]>("list_reminders");
     set({ reminders });
     return reminders;
+  },
+  loadMaterials: async () => {
+    set({ materialsLoading: true, materialsError: null });
+    try {
+      const materials = await api<Material[]>("list_materials");
+      set({ materials, materialsLoading: false });
+      return materials;
+    } catch (error) {
+      const materialsError = error instanceof Error ? error.message : "资料加载失败";
+      set({ materialsLoading: false, materialsError });
+      return [];
+    }
+  },
+  addMaterialFiles: async () => {
+    set({ materialsLoading: true, materialsError: null });
+    try {
+      const picked = await api<Array<{ name: string; path: string; file_type: string; size_bytes?: number | null }>>("pick_material_files");
+      const created = await Promise.all(
+        picked.map((item) => api<Material>("create_material", { input: { ...item, status: "metadata_only" } })),
+      );
+      await get().loadMaterials();
+      return created;
+    } catch (error) {
+      const materialsError = error instanceof Error ? error.message : "添加文件失败";
+      set({ materialsLoading: false, materialsError });
+      return [];
+    }
+  },
+  addMaterialFolder: async () => {
+    set({ materialsLoading: true, materialsError: null });
+    try {
+      const picked = await api<{ name: string; path: string; file_type: string; size_bytes?: number | null } | null>("pick_material_folder");
+      if (!picked) {
+        set({ materialsLoading: false });
+        return null;
+      }
+      const material = await api<Material>("create_material", { input: { ...picked, status: "metadata_only" } });
+      await get().loadMaterials();
+      return material;
+    } catch (error) {
+      const materialsError = error instanceof Error ? error.message : "添加文件夹失败";
+      set({ materialsLoading: false, materialsError });
+      return null;
+    }
+  },
+  updateMaterial: async (patch) => {
+    await api<Material>("update_material", { patch });
+    await get().loadMaterials();
+  },
+  removeMaterialRecord: async (id) => {
+    await api<void>("remove_material", { id });
+    await get().loadMaterials();
   },
   dismissReminder: async (id) => {
     await api<Reminder>("dismiss_reminder", { id });
