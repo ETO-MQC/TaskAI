@@ -933,3 +933,66 @@ Remaining TODO:
 
 Next sprint suggestion:
 - Do not enter Sprint 19 until Sprint 18T receives product acceptance and a viewport QA pass; once accepted, Sprint 19 can begin from a cleaner AI shell.
+
+---
+
+## 2026-05-16 Sprint 18T.1：AI 工作区底部工具栏与弹窗交互收口
+
+### 目标
+
+对 AI 页面底部 5 个小按钮（添加资料、计划结果、提醒、更多、/ 快捷）做交互收口，实现统一的弹窗管理逻辑。
+
+### 修复内容
+
+1. **统一弹窗状态**：引入 `activeAiToolPanel` 单一状态（类型为 `"materials" | "plan" | "reminders" | "more" | "quick" | null`），替代原先分散的 `menuOpen`、`toolsOpen`、`planOpen` 三个布尔状态。
+2. **互斥弹窗逻辑**：`toggleAiToolPanel(panel)` 实现点击同一按钮关闭、点击不同按钮先关旧后开新，保证同一时间最多一个弹窗。
+3. **点击空白关闭**：`useEffect` 监听全局 click 事件，点击 `.ai-tool-panel`、`.ai-plan-drawer`、`[data-ai-toolbar]` 之外区域自动关闭。
+4. **Escape 关闭**：监听全局 keydown 事件，Escape 键关闭当前弹窗。
+5. **弹窗层级统一**：popover 使用 `z-[60]`，plan drawer 保持现有 `z-25`，backdrop 保持 `z-24`。
+
+### 底部按钮现在分别做什么
+
+| 按钮 | 功能 |
+|------|------|
+| 添加资料 | 弹出资料入口轻量面板，说明 Sprint 19 占位状态，提供"复制示例提示词"和"关闭"按钮。不做真实文件上传。 |
+| 计划结果 | 切换 Plan Canvas 侧边抽屉（桌面端）或滑入浮层（移动端）。无结构化结果时按钮 disabled。 |
+| 提醒 | 弹出提醒中心面板，读取真实 reminders 数据，分"已触发"和"即将到来"两组展示，支持空状态。 |
+| 更多 | 弹出更多操作菜单，包含 AI 工作流说明、低 token 使用说明、LearnKATA 联动边界、清空当前输入、关闭。均为轻量 toast 或本地操作。 |
+| / 快捷 | 弹出快捷指令网格（9 个 skill），点击设置 preferredSkill 并 toast 提示，不直接创建任务。 |
+
+### 弹窗互斥逻辑
+
+- `toggleAiToolPanel("materials")` → 当前若是 "reminders"，先关闭提醒再打开资料。
+- 点击已打开的按钮 → `setActiveAiToolPanel(null)` 关闭。
+- Plan Canvas 与 popover 不互斥（plan 走独立 drawer 渲染），但点击任何 popover 按钮时依然先关 other popover。
+- `activeAiToolPanel !== "plan"` 时才渲染 popover div。
+
+### 视觉
+
+- Popover 使用现有玻璃拟态 `.glass-card` + `ai-popover`，新增 `ai-tool-panel` 入口动画（淡入 + 微上移）。
+- 移动端 popover 自动转为 bottom sheet（`position:fixed; bottom:0; border-radius 上圆角`），带 `ai-bottom-sheet-in` 动画。
+- Plan drawer 保留现有 CSS（侧边栏/滑入），仅将 `planOpen` 替换为 `activeAiToolPanel === "plan"`。
+
+### 验收结果
+
+- `npm run build`: ✅ passed.
+- `git diff --check`: ✅ passed (existing LF/CRLF warnings only).
+- 五个按钮均可点击，各自弹出对应面板。
+- 任意时刻最多只有一个弹窗打开。
+- 点击另一个按钮时旧弹窗自动关闭，新弹窗打开。
+- 点击空白处或按 Escape 关闭弹窗。
+- 弹窗不重叠、不遮挡输入框、不撑开页面。
+- light / dark 均可读。
+- 没有新增数据库字段。
+- 没有新增 SQLx migration。
+- `plan.md` 未修改。
+
+### 剩余 TODO
+
+- 提醒面板目前只展示列表，未提供 dismiss/snooze/complete 操作按钮（可后续增强）。
+- 提醒面板的 "查看关联任务" 跳转未实现（需 selectTask + setView 联动）。
+- 移动端 bottom sheet 的拖拽关闭手势未实现。
+
+### 下一 Sprint 建议
+
+- 继续 Sprint 18T 的视觉 QA 和产品验收后再进入 Sprint 19。

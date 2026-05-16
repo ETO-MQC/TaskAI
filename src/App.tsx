@@ -1101,9 +1101,10 @@ function AiView() {
   const [entries, setEntries] = useState<AiWorkspaceEntry[]>([]);
   const [preferredSkill, setPreferredSkill] = useState<PlanningSkillId | "auto">("auto");
   const [lastRoute, setLastRoute] = useState(routePlanningSkill(""));
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [toolsOpen, setToolsOpen] = useState(false);
-  const [planOpen, setPlanOpen] = useState(false);
+  const [activeAiToolPanel, setActiveAiToolPanel] = useState<"materials" | "plan" | "reminders" | "more" | "quick" | null>(null);
+  const toggleAiToolPanel = (panel: "materials" | "plan" | "reminders" | "more" | "quick") => {
+    setActiveAiToolPanel((current) => (current === panel ? null : panel));
+  };
   const [loading, setLoading] = useState(false);
   const [preview, setPreview] = useState<StructuredPreviewState>({ parsed: null, raw: "", error: null });
   const [selectedTaskIndexes, setSelectedTaskIndexes] = useState<number[]>([]);
@@ -1117,6 +1118,19 @@ function AiView() {
     if (!listRef.current) return;
     listRef.current.scrollTop = listRef.current.scrollHeight;
   }, [entries]);
+
+  useEffect(() => {
+    if (!activeAiToolPanel) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setActiveAiToolPanel(null); };
+    const onClick = (e: MouseEvent) => {
+      const el = e.target as HTMLElement;
+      if (el.closest(".ai-tool-panel") || el.closest(".ai-plan-drawer") || el.closest("[data-ai-toolbar]")) return;
+      setActiveAiToolPanel(null);
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("click", onClick);
+    return () => { window.removeEventListener("keydown", onKey); window.removeEventListener("click", onClick); };
+  }, [activeAiToolPanel]);
 
   const addEntry = (entry: AiWorkspaceEntry) => setEntries((current) => [...current, entry]);
   const updateInboxEntry = (id: string, updater: (entry: Extract<AiWorkspaceEntry, { kind: "inbox" }>) => Extract<AiWorkspaceEntry, { kind: "inbox" }>) =>
@@ -1263,34 +1277,83 @@ function AiView() {
             ))}
           </div>
           {preview.parsed && (
-            <button className="glass-inset mt-3 flex flex-wrap items-center justify-between gap-2 p-3 text-left text-sm" type="button" onClick={() => setPlanOpen(true)}>
+            <button className="glass-inset mt-3 flex flex-wrap items-center justify-between gap-2 p-3 text-left text-sm" type="button" onClick={() => toggleAiToolPanel("plan")}>
               <span className="font-medium">计划结果</span>
               <span className="text-[var(--muted-foreground)]">{tasks.length} 个任务 · {stringList(preview.parsed.warnings).length} 条风险提醒 · 点击展开计划结果</span>
             </button>
           )}
           <div className="relative mt-3 border-t border-white/10 pt-3">
-            <div className="mb-2 flex flex-wrap gap-2 text-xs">
-              <button className="glass-inset px-3 py-1.5" type="button" onClick={() => showToast("文件上传、资料索引和真实解析将在后续 Sprint 实现。")}>添加资料</button>
-              <button className="glass-inset px-3 py-1.5" type="button" onClick={() => setPlanOpen(true)} disabled={!preview.parsed}>计划结果</button>
-              <button className="glass-inset px-3 py-1.5" type="button" onClick={() => showToast(`当前有 ${pendingReminderCount} 条待触发提醒。`)}>提醒</button>
-              <button className="glass-inset px-3 py-1.5" type="button" onClick={() => setToolsOpen((value) => !value)}>更多</button>
-              <button className="glass-inset px-3 py-1.5" type="button" onClick={() => setMenuOpen((value) => !value)}>/ 快捷</button>
+            <div className="mb-2 flex flex-wrap gap-2 text-xs" data-ai-toolbar>
+              <button className={`glass-inset px-3 py-1.5 ${activeAiToolPanel === "materials" ? "btn-glow" : ""}`} type="button" onClick={() => toggleAiToolPanel("materials")}>添加资料</button>
+              <button className={`glass-inset px-3 py-1.5 ${activeAiToolPanel === "plan" ? "btn-glow" : ""}`} type="button" onClick={() => toggleAiToolPanel("plan")} disabled={!preview.parsed}>计划结果</button>
+              <button className={`glass-inset px-3 py-1.5 ${activeAiToolPanel === "reminders" ? "btn-glow" : ""}`} type="button" onClick={() => toggleAiToolPanel("reminders")}>提醒</button>
+              <button className={`glass-inset px-3 py-1.5 ${activeAiToolPanel === "more" ? "btn-glow" : ""}`} type="button" onClick={() => toggleAiToolPanel("more")}>更多</button>
+              <button className={`glass-inset px-3 py-1.5 ${activeAiToolPanel === "quick" ? "btn-glow" : ""}`} type="button" onClick={() => toggleAiToolPanel("quick")}>/ 快捷</button>
             </div>
-            {(menuOpen || toolsOpen) && (
-              <div className="ai-popover glass-card absolute bottom-[84px] left-0 z-10 w-[min(360px,calc(100vw-48px))] p-3 text-sm">
-                {menuOpen && (
+            {activeAiToolPanel && activeAiToolPanel !== "plan" && (
+              <div className="ai-tool-panel ai-popover glass-card absolute bottom-[84px] left-0 z-[60] w-[min(360px,calc(100vw-48px))] p-3 text-sm">
+                {activeAiToolPanel === "quick" && (
                   <div className="grid gap-2 sm:grid-cols-2">
                     {Object.entries(AI_PLANNING_SKILLS).map(([id, skill]) => (
-                      <button key={id} className="glass-inset px-3 py-2 text-left" type="button" onClick={() => { setPreferredSkill(id as PlanningSkillId); setMenuOpen(false); }}>
+                      <button key={id} className="glass-inset px-3 py-2 text-left" type="button" onClick={() => { setPreferredSkill(id as PlanningSkillId); showToast(`已选择：${skill.title}。在下一条消息中生效。`); setActiveAiToolPanel(null); }}>
                         {skill.title}
                       </button>
                     ))}
                   </div>
                 )}
-                {toolsOpen && (
-                  <div className="space-y-2 text-[var(--muted-foreground)]">
-                    <button className="glass-inset block w-full px-3 py-2 text-left" type="button" onClick={() => showToast("文件上传、资料索引和真实解析将在后续 Sprint 实现。")}>资料入口</button>
-                    <button className="glass-inset block w-full px-3 py-2 text-left" type="button" onClick={() => showToast("SmartFocus 负责计划、任务、日程和计时；LearnKATA 负责讲解、练习、测验和掌握度。")}>LearnKATA 联动</button>
+                {activeAiToolPanel === "materials" && (
+                  <div className="space-y-3">
+                    <h4 className="font-semibold">资料入口</h4>
+                    <p className="text-[var(--muted-foreground)] leading-6">文件上传、资料索引和真实解析将在 Sprint 19 实现。当前可以在对话中描述资料名称、大纲或课程目录，AI 会先基于文本规划。</p>
+                    <div className="flex gap-2">
+                      <button className="glass-inset px-3 py-1.5 text-xs" type="button" onClick={() => { navigator.clipboard.writeText("我有以下资料需要规划：\n- 资料名称：\n- 科目/课程：\n- 大纲摘要："); showToast("示例提示词已复制到剪贴板"); setActiveAiToolPanel(null); }}>复制示例提示词</button>
+                      <button className="glass-inset px-3 py-1.5 text-xs" type="button" onClick={() => setActiveAiToolPanel(null)}>关闭</button>
+                    </div>
+                  </div>
+                )}
+                {activeAiToolPanel === "reminders" && (
+                  <div className="space-y-3">
+                    <h4 className="font-semibold">提醒中心</h4>
+                    {reminders.length === 0 ? (
+                      <p className="text-[var(--muted-foreground)]">暂无提醒。创建任务时可以设置提醒时间。</p>
+                    ) : (
+                      <div className="thin-scrollbar max-h-[280px] space-y-2 overflow-auto">
+                        {(() => {
+                          const triggered = reminders.filter((r) => r.status === "triggered");
+                          const upcoming = reminders.filter((r) => r.status === "pending");
+                          return (
+                            <>
+                              {triggered.length > 0 && (
+                                <>
+                                  <p className="text-xs font-semibold text-[var(--neon-pink)]">🔔 已触发 ({triggered.length})</p>
+                                  {triggered.slice(0, 5).map((r) => (
+                                    <div key={r.id} className="glass-inset p-2 text-xs"><p className="font-medium">{r.title}</p><p className="text-[var(--muted-foreground)]">{dayjs(r.remind_at).format("MM-DD HH:mm")}</p></div>
+                                  ))}
+                                </>
+                              )}
+                              {upcoming.length > 0 && (
+                                <>
+                                  <p className="text-xs font-semibold text-[var(--muted-foreground)] mt-2">⏳ 即将到来 ({upcoming.length})</p>
+                                  {upcoming.slice(0, 5).map((r) => (
+                                    <div key={r.id} className="glass-inset p-2 text-xs"><p className="font-medium">{r.title}</p><p className="text-[var(--muted-foreground)]">{dayjs(r.remind_at).format("MM-DD HH:mm")}</p></div>
+                                  ))}
+                                </>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </div>
+                    )}
+                    <button className="glass-inset px-3 py-1.5 text-xs w-full" type="button" onClick={() => setActiveAiToolPanel(null)}>关闭</button>
+                  </div>
+                )}
+                {activeAiToolPanel === "more" && (
+                  <div className="space-y-2">
+                    <button className="glass-inset block w-full px-3 py-2 text-left text-sm" type="button" onClick={() => { showToast("AI 工作流：说出目标 → AI 规划 → 预览 → 确认 → 应用为任务。整个过程对话优先。"); setActiveAiToolPanel(null); }}>📋 AI 工作流说明</button>
+                    <button className="glass-inset block w-full px-3 py-2 text-left text-sm" type="button" onClick={() => { showToast("AI 只使用任务、日期、目标和资料摘要，不反复索取无关上下文。资料全文解析留给后续 Sprint。"); setActiveAiToolPanel(null); }}>📉 低 token 使用说明</button>
+                    <button className="glass-inset block w-full px-3 py-2 text-left text-sm" type="button" onClick={() => { showToast("SmartFocus 负责计划、任务、日程和计时；LearnKATA 负责讲解、练习、测验和掌握度。两者通过 learnkata_links 联动。"); setActiveAiToolPanel(null); }}>🔗 LearnKATA 联动边界</button>
+                    <button className="glass-inset block w-full px-3 py-2 text-left text-sm" type="button" onClick={() => { setInput(""); setActiveAiToolPanel(null); }}>🗑️ 清空当前输入</button>
+                    <button className="glass-inset block w-full px-3 py-2 text-left text-sm" type="button" onClick={() => setActiveAiToolPanel(null)}>✕ 关闭</button>
                   </div>
                 )}
               </div>
@@ -1304,13 +1367,13 @@ function AiView() {
           </div>
         </div>
         {preview.parsed && (
-          <aside className={`ai-plan-drawer glass-inset thin-scrollbar min-h-0 overflow-y-auto p-4 ${planOpen ? "is-open" : ""}`}>
+          <aside className={`ai-plan-drawer glass-inset thin-scrollbar min-h-0 overflow-y-auto p-4 ${activeAiToolPanel === "plan" ? "is-open" : ""}`}>
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="section-label">计划结果</p>
                 <h3 className="mt-2 font-semibold">结构化计划预览</h3>
               </div>
-              <button className="glass-inset px-3 py-1.5 text-xs xl:hidden" type="button" onClick={() => setPlanOpen(false)}>??</button>
+              <button className="glass-inset px-3 py-1.5 text-xs xl:hidden" type="button" onClick={() => setActiveAiToolPanel(null)}>✕</button>
             </div>
             <PlanCanvasBody
               preview={preview}
@@ -1324,7 +1387,7 @@ function AiView() {
           </aside>
         )}
       </div>
-      {preview.parsed && planOpen && <button className="ai-drawer-backdrop xl:hidden" type="button" aria-label="关闭计划结果" onClick={() => setPlanOpen(false)} />}
+      {preview.parsed && activeAiToolPanel === "plan" && <button className="ai-drawer-backdrop xl:hidden" type="button" aria-label="关闭计划结果" onClick={() => setActiveAiToolPanel(null)} />}
     </section>
   );
 }
