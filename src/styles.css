@@ -426,6 +426,18 @@
     position: relative;
     z-index: 1;
   }
+  .ai-workspace-grid {
+    align-items: stretch;
+  }
+  @media (max-width: 1023px) {
+    .ai-workspace {
+      height: auto;
+      overflow: visible;
+    }
+    .ai-workspace-grid {
+      min-height: auto;
+    }
+  }
   .glass-card:hover {
     border-color: var(--glass-card-border-hover);
     box-shadow: var(--shadow-elevated);

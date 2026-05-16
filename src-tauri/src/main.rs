@@ -105,6 +105,18 @@ create_task 的 data 字段：
 返回 create_task，data.title="写周报"，priority="high"，urgency="urgent"，importance="important"，deadline 为今天 18:00 的 ISO 时间，planned_date 为今天日期，tags=["工作"]。
 "#;
 
+const LEARNING_PLANNING_SYSTEM_PROMPT: &str = r#"你是 SmartFocus 的学习规划助手。
+请只返回 JSON，字段包括：
+intent="learning_planning_preview",
+summary, goal, exam_type, tasks, events, review_plan, materials, adaptive_rules, learnkata_links, warnings, needs_user_confirmation=true。
+你只能生成预览，不能声称已经创建任务或日程。
+当前不具备真实文件读取、OCR 或文档解析能力，不要声称已经读取资料内容。
+任何写入都必须等待用户确认。
+tasks 可包含字段 title, description, importance, urgency, estimated_duration, deadline, planned_date, tags, source_material, knowledge_points。
+events 仅用于预览时间块，不要假设已经创建日程。
+adaptive_rules 用于说明后续调整逻辑。
+learnkata_links 仅作为未来联动占位，不要真实调用 LearnKATA。"#;
+
 #[derive(Clone)]
 struct AppState {
     db: SqlitePool,
@@ -1626,9 +1638,23 @@ async fn send_ai_message(app: AppHandle, state: State<'_, AppState>, message: St
 
     let client = reqwest::Client::new();
     let local_now = Local::now();
+    let planning_request = message.contains("学习规划")
+        || message.contains("今日计划")
+        || message.contains("本周计划")
+        || message.contains("期末复习")
+        || message.contains("考研复习")
+        || message.contains("考公备考")
+        || message.contains("课程学习")
+        || message.contains("资料整理")
+        || message.contains("LearnKATA");
+    let prompt_base = if planning_request {
+        LEARNING_PLANNING_SYSTEM_PROMPT
+    } else {
+        SPRINT_10_SYSTEM_PROMPT
+    };
     let system_prompt = format!(
         "{}\n当前本地日期：{}，当前本地时间：{}，时区：Asia/Shanghai。",
-        SPRINT_10_SYSTEM_PROMPT,
+        prompt_base,
         local_now.format("%Y-%m-%d"),
         local_now.format("%H:%M")
     );

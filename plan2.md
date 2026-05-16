@@ -746,27 +746,8 @@ TODO：
 
 下一 Sprint 建议：
 - 转展 Sprint 12（计时器高级模式与情境感知），补齐番茄钟休息周期事件及历史相关筛选机制开发。
- 
- # #   2 0 2 6 - 0 5 - 1 6   S p r i n t   1 2 D ����ehV4l�l�R;uirt�X:_NƉɉ6e�S 
- �r`��]�[b0 
-  
- �[�s��V� 
- -   9hnc�N�Rۏ�^OMR-NT	NB\4l�l�y�R�ck���e
-NGS0ju���/ P���eNM�	�0 
- -   	N�y���e!j_�b	g�[�^�vƉɉ:_�;N��r���Oc�s�t��Na0 
- -   W a i t / R u n / P a u s e / F i n i s h e d   I{�r`N�v�QY�SIQN)>eirt�R;u�te0 
-  
- ��6e�~�g� 
- -   n p m   r u n   b u i l d   �Ǐ0 
- -   ck���e  /   ju���  /   P���e4l�l��r�NTFOΘ<h�~ N0 
- -   peW[npf���O���N���v�S	g�S�S�TsQT�!j_�S8h�_R u s t ���e�R��0 
-  
- iRYO  T O D O � 
- -   �OcT�~vQ�N  S p r i n t   �v|Q�[�~�b0 
-  
- N N  S p r i n t   �^��� 
- -   �S�N _U\T�~*g�[byr'`0 
- ## 2026-05-16 Sprint 12D：计时器水波动画物理增强与视觉收口
+
+## 2026-05-16 Sprint 12D：计时器水波动画物理增强与视觉收口
 状态：已完成。
 
 实现范围：
@@ -777,10 +758,44 @@ NGS0ju���/ P���eNM�	�0 
 验收结果：
 - npm run build 校验通过。
 - 三种模式颜色不同但风格统一。
-- 数字清晰被保证，不覆盖原有历史和关联模式及核心Rust计时功能。
+- 数字清晰被保证，不覆盖原有历史和关联模式及核心 Rust 计时功能。
 
 剩余 TODO：
 - 观察长时间运行下的性能表现。
 
 下一 Sprint 建议：
 - 继续开展之后阶段或后续其他 Sprint 任务。
+
+## 2026-05-16 Sprint 18：AI 学习规划工作区 2.0
+
+状态：部分完成 / 阶段性完成，待用户验收
+
+实现范围：
+- AI 页面已从普通聊天页升级为学习规划工作区。
+- 支持今日计划、本周计划、期末复习、考研复习、考公备考、课程学习、资料整理、LearnKATA 联动设想等模板入口。
+- 支持结构化学习计划预览，包含 summary、goal、tasks、events、review_plan、materials、adaptive_rules、learnkata_links、warnings。
+- 支持解析纯 JSON、Markdown JSON code block、自然语言夹带 JSON，以及解析失败原文回退。
+- 支持勾选预览中的 tasks，并在确认后应用为任务。
+- 应用任务时只使用现有字段，不直接写 quadrant。
+- 应用为日程暂未启用，因为当前没有独立事件表或稳定事件写入契约。
+- 文件上传仅为占位，不做真实文件读取、OCR 或文档解析。
+- LearnKATA 当前仅为未来联动占位，不真实调用外部应用。
+
+验收结果：
+- `npm run build` 已通过。
+- `git diff --check` 已通过（仅有既有 LF/CRLF warning）。
+- 未新增数据库字段。
+- 未新增 SQLx migration。
+- 未修改 `plan.md`。
+- `npm run tauri:build` 本轮未验证。
+
+剩余 TODO：
+- 修复用户验收中发现的中文文案和编码问题。
+- 补充 AI 页面多视口验收。
+- 后续 Sprint 19 实现资料库与文件上传基础。
+- 后续 Sprint 20 实现资料解析与知识点抽取。
+- 后续 Sprint 21 实现自适应学习排程。
+- 后续 Sprint 22 实现 LearnKATA 联动。
+
+下一 Sprint 建议：
+- 完成 Sprint 18.1 中文文案与编码热修复后，再进入 Sprint 19。

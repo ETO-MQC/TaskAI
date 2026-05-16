@@ -465,6 +465,48 @@ class FallbackApi {
   }
 
   async send_ai_message(message: string): Promise<AiResponse> {
+    if (
+      /学习规划|今日计划|本周计划|期末复习|考研复习|考公备考|课程学习|资料整理|LearnKATA/.test(message)
+    ) {
+      return {
+        intent: "learning_planning_preview",
+        action: "preview",
+        data: {},
+        needs_clarification: false,
+        clarification: null,
+        reply: JSON.stringify({
+          intent: "learning_planning_preview",
+          summary: "已生成一份学习规划预览；当前为本地演示结果，真实 AI 会基于你的描述进一步细化。",
+          goal: "先把目标拆成可执行任务，再由你确认是否写入任务列表。",
+          exam_type: "custom",
+          tasks: [
+            {
+              title: "梳理学习目标与范围",
+              description: "明确考试/课程目标、日期和每天可用时间。",
+              importance: 1,
+              urgency: 1,
+              estimated_duration: 30,
+              deadline: null,
+              planned_date: localDateKey(),
+              tags: ["规划"],
+              source_material: null,
+              knowledge_points: ["目标拆解"],
+            },
+          ],
+          events: [],
+          review_plan: [],
+          materials: [],
+          adaptive_rules: [
+            { condition: "如果某天未完成核心任务", adjustment: "自动顺延，并压缩低优先级任务。" },
+          ],
+          learnkata_links: [
+            { knowledge_point: "目标拆解", suggested_activity: "review", note: "后续可进入 LearnKATA 做训练结构映射。" },
+          ],
+          warnings: ["当前仅为预览，不会自动创建任务或读取真实文件。"],
+          needs_user_confirmation: true,
+        }),
+      };
+    }
     const intent = fallbackCreateTaskIntent(message);
     if (intent) return intent;
     return {

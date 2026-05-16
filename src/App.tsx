@@ -76,6 +76,78 @@ const emptyDraft = {
   tags: "",
 };
 
+type LearningTaskPreview = {
+  title?: string;
+  description?: string;
+  importance?: unknown;
+  urgency?: unknown;
+  estimated_duration?: unknown;
+  deadline?: string | null;
+  planned_date?: string | null;
+  tags?: unknown;
+  source_material?: string | null;
+  knowledge_points?: unknown;
+};
+
+type LearningPlanPreview = {
+  intent?: string;
+  summary?: string;
+  goal?: string;
+  exam_type?: string | null;
+  tasks?: LearningTaskPreview[];
+  events?: Array<Record<string, unknown>>;
+  review_plan?: Array<Record<string, unknown>>;
+  materials?: Array<Record<string, unknown>>;
+  adaptive_rules?: Array<Record<string, unknown>>;
+  learnkata_links?: Array<Record<string, unknown>>;
+  warnings?: unknown[];
+  needs_user_confirmation?: boolean;
+};
+
+type StructuredPreviewState = {
+  parsed: LearningPlanPreview | null;
+  raw: string;
+  error: string | null;
+};
+
+const learningTemplates = [
+  {
+    label: "今日计划",
+    prompt: "根据我今天的任务、可用时间和紧急程度，帮我生成今日学习/工作计划。请输出 JSON，包含 summary、tasks、events、warnings。",
+  },
+  {
+    label: "本周计划",
+    prompt: "根据我的未完成任务和计划日期，帮我生成本周安排。请输出 JSON，包含 tasks、events、review_plan、warnings。",
+  },
+  {
+    label: "期末复习",
+    prompt: "请帮我制定期末复习计划。请按照课程、章节、复习轮次、每日任务、重点难点、预计时长来拆解，并输出 JSON。",
+  },
+  {
+    label: "考研复习",
+    prompt: "请帮我制定考研复习计划，包含科目、阶段目标、每日任务、复习轮次、资料清单、重点知识点和风险提醒。请输出 JSON。",
+  },
+  {
+    label: "考公备考",
+    prompt: "请帮我规划行测、申论、常识和每日复习节奏，拆解为任务、时间块、阶段目标和资料清单。请输出 JSON。",
+  },
+  {
+    label: "课程学习",
+    prompt: "请根据课程目标生成学习路线、阶段任务、知识点清单、复习节点和练习安排。请输出 JSON。",
+  },
+  {
+    label: "资料整理",
+    prompt: "我会提供资料名称、考试目标和学习时间，请帮我整理资料优先级、学习顺序和每日计划。请输出 JSON。",
+  },
+  {
+    label: "LearnKATA 联动设想",
+    prompt: "请把当前学习计划拆成适合后续导入 LearnKATA 的知识点、练习任务和掌握度追踪结构。请输出 JSON。",
+  },
+] as const;
+
+const learningPlanningConstraint =
+  "你是 SmartFocus 的学习规划助手。你的任务是生成可预览的结构化学习计划。请优先输出 JSON，字段包括 summary、goal、exam_type、tasks、events、review_plan、materials、adaptive_rules、learnkata_links、warnings、needs_user_confirmation。不要声称已经创建任务或日程。任何写入都必须等待用户确认。文件资料当前只作为用户描述或未来入口，不要声称已经读取真实文件。";
+
 function defaultTaskDate() {
   return dayjs().format("YYYY-MM-DD");
 }
@@ -203,6 +275,64 @@ function showToast(message: string, duration = 3000) {
       notifyToastListeners();
     }, 220);
   }, duration);
+}
+
+function parseLearningPlanText(text: string): StructuredPreviewState {
+  const candidates = [
+    text.trim(),
+    text.match(/```json\s*([\s\S]*?)```/i)?.[1]?.trim() ?? "",
+    (() => {
+      const start = text.indexOf("{");
+      const end = text.lastIndexOf("}");
+      return start >= 0 && end > start ? text.slice(start, end + 1) : "";
+    })(),
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as LearningPlanPreview;
+      return { parsed, raw: text, error: null };
+    } catch {
+      // Try the next candidate.
+    }
+  }
+
+  return {
+    parsed: null,
+    raw: text,
+    error: text.trim() ? "未能解析为完整 JSON，已保留原文预览。" : null,
+  };
+}
+
+function stringList(value: unknown) {
+  return Array.isArray(value) ? value.map((item) => `${item}`.trim()).filter(Boolean) : [];
+}
+
+function toUrgency(value: unknown): Urgency {
+  if (value === "urgent" || value === 1 || value === true || value === "1") return "urgent";
+  return "not_urgent";
+}
+
+function toImportance(value: unknown): Importance {
+  if (value === "important" || value === 1 || value === true || value === "1") return "important";
+  return "not_important";
+}
+
+function previewTaskDraft(task: LearningTaskPreview) {
+  return {
+    ...emptyDraft,
+    title: typeof task.title === "string" ? task.title : "未命名学习任务",
+    description: typeof task.description === "string" ? task.description : "",
+    urgency: toUrgency(task.urgency),
+    importance: toImportance(task.importance),
+    estimated_duration:
+      typeof task.estimated_duration === "number" && Number.isFinite(task.estimated_duration)
+        ? String(task.estimated_duration)
+        : "",
+    deadline: typeof task.deadline === "string" ? task.deadline : "",
+    planned_date: typeof task.planned_date === "string" ? task.planned_date : "",
+    tags: stringList(task.tags).join(", "),
+  };
 }
 
 function useToasts() {
@@ -821,7 +951,15 @@ function WorkbenchView() {
   );
 }
 
-function AiPanel({ embedded = false }: { embedded?: boolean }) {
+function AiPanel({
+  embedded = false,
+  draftPrompt,
+  onResponse,
+}: {
+  embedded?: boolean;
+  draftPrompt?: string;
+  onResponse?: (response: unknown) => void;
+}) {
   const { aiMessages, setAiOpen, sendAi } = useAppStore();
   const [input, setInput] = useState("");
   const [listening, setListening] = useState(false);
@@ -856,6 +994,10 @@ function AiPanel({ embedded = false }: { embedded?: boolean }) {
     listRef.current.scrollTop = listRef.current.scrollHeight;
   }, [aiMessages]);
 
+  useEffect(() => {
+    if (draftPrompt) setInput(draftPrompt);
+  }, [draftPrompt]);
+
   function startSpeech() {
     const SpeechRecognition =
       (window as unknown as { SpeechRecognition?: typeof window.SpeechRecognition; webkitSpeechRecognition?: typeof window.SpeechRecognition }).SpeechRecognition ||
@@ -869,7 +1011,9 @@ function AiPanel({ embedded = false }: { embedded?: boolean }) {
     recognition.onresult = (event) => {
       const text = event.results[0]?.[0]?.transcript?.trim() ?? "";
       setInput(text);
-      if (text) sendAi(text);
+      if (text) {
+        void sendAi(text).then(onResponse);
+      }
     };
     recognition.start();
   }
@@ -909,7 +1053,7 @@ function AiPanel({ embedded = false }: { embedded?: boolean }) {
         onSubmit={(event) => {
           event.preventDefault();
           if (!input.trim()) return;
-          sendAi(input);
+          void sendAi(input).then(onResponse);
           setInput("");
         }}
       >
@@ -932,31 +1076,139 @@ function AiPanel({ embedded = false }: { embedded?: boolean }) {
   );
 }
 
-function AiView() {
+function PreviewBlock({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="glass-card flex h-full min-h-0 flex-col overflow-hidden p-5">
-      <Header title="AI 助手" subtitle="任务拆解、日程安排和计时指令入口" />
-      <div className="grid min-h-0 flex-1 gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
-        <div className="glass-inset flex min-h-[420px] flex-col overflow-hidden p-4">
-          <AiPanel embedded />
+    <section className="glass-inset p-3">
+      <h4 className="font-semibold">{title}</h4>
+      <div className="mt-2 text-sm leading-6">{children}</div>
+    </section>
+  );
+}
+
+function RecordListBlock({ title, items }: { title: string; items?: Array<Record<string, unknown>> }) {
+  return (
+    <PreviewBlock title={title}>
+      {Array.isArray(items) && items.length > 0 ? (
+        <div className="space-y-2">
+          {items.map((item, index) => (
+            <pre key={`${title}-${index}`} className="whitespace-pre-wrap break-words rounded-xl border border-white/10 p-3 text-xs leading-6">
+              {JSON.stringify(item, null, 2)}
+            </pre>
+          ))}
+        </div>
+      ) : (
+        <p>暂无结构化结果</p>
+      )}
+    </PreviewBlock>
+  );
+}
+
+function AiView() {
+  const { createTask } = useAppStore();
+  const [draftPrompt, setDraftPrompt] = useState("");
+  const [preview, setPreview] = useState<StructuredPreviewState>({ parsed: null, raw: "", error: null });
+  const [selectedTaskIndexes, setSelectedTaskIndexes] = useState<number[]>([]);
+  const [applyResults, setApplyResults] = useState<Array<{ title: string; status: "success" | "failed"; message: string }>>([]);
+  const tasks = Array.isArray(preview.parsed?.tasks) ? preview.parsed.tasks : [];
+  const selectedTasks = tasks.filter((_, index) => selectedTaskIndexes.includes(index));
+
+  const updatePreviewFromResponse = (response: unknown) => {
+    const record = response && typeof response === "object" ? (response as Record<string, unknown>) : {};
+    const candidate = typeof record.reply === "string" && record.reply.trim() ? record.reply : JSON.stringify(record, null, 2);
+    const parsed = parseLearningPlanText(candidate);
+    if (!parsed.parsed && record.intent === "learning_planning_preview") {
+      parsed.parsed = record as LearningPlanPreview;
+      parsed.error = null;
+    }
+    setPreview(parsed);
+    setSelectedTaskIndexes(Array.isArray(parsed.parsed?.tasks) ? parsed.parsed.tasks.map((_, index) => index) : []);
+    setApplyResults([]);
+  };
+
+  const applySelectedTasks = async () => {
+    if (selectedTasks.length === 0) return;
+    if (!window.confirm(`确认将 ${selectedTasks.length} 个勾选任务应用到任务列表吗？只会写入现有字段，不会直接写入 quadrant。`)) return;
+    const results: Array<{ title: string; status: "success" | "failed"; message: string }> = [];
+    for (const task of selectedTasks) {
+      const draft = previewTaskDraft(task);
+      try {
+        await createTask(draft);
+        results.push({ title: draft.title, status: "success", message: "应用成功" });
+      } catch (error) {
+        results.push({ title: draft.title, status: "failed", message: error instanceof Error ? error.message : "应用失败" });
+      }
+    }
+    setApplyResults(results);
+  };
+
+  return (
+    <section className="glass-card ai-workspace flex h-full min-h-0 flex-col overflow-hidden p-5">
+      <Header title="AI 助手" subtitle="任务拆解、日程安排和学习规划入口" />
+      <div className="ai-workspace-grid grid min-h-0 flex-1 gap-5 lg:grid-cols-[minmax(0,0.6fr)_minmax(340px,0.4fr)]">
+        <div className="glass-inset flex min-h-[520px] flex-col overflow-hidden p-4">
+          <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {learningTemplates.map((template) => (
+              <button key={template.label} type="button" className="glass-inset interactive-surface p-3 text-left text-sm" onClick={() => setDraftPrompt(`${learningPlanningConstraint}\n\n${template.prompt}`)}>
+                <span className="font-semibold">{template.label}</span>
+              </button>
+            ))}
+          </div>
+          <AiPanel embedded draftPrompt={draftPrompt} onResponse={updatePreviewFromResponse} />
         </div>
         <aside className="thin-scrollbar grid min-h-0 gap-4 overflow-y-auto pr-1">
           <div className="glass-inset p-4">
             <p className="section-label">Result Preview</p>
             <h3 className="mt-2 font-semibold">AI 生成结果预览区</h3>
-            <p className="mt-2 text-sm text-[var(--muted-foreground)]">任务拆解、计划草案和资料整理结果会先显示在这里，确认后再写入本地数据。</p>
+            {!preview.parsed && !preview.raw && <p className="mt-2 text-sm text-[var(--muted-foreground)]">AI 生成的任务、日程、复习计划和资料整理结果会显示在这里。</p>}
+            {preview.error && <p className="mt-3 text-sm text-[var(--neon-amber)]">{preview.error}</p>}
+            {preview.parsed ? (
+              <div className="mt-4 space-y-3 text-sm">
+                <PreviewBlock title="概览"><p>{preview.parsed.summary || "暂无概览"}</p><p className="mt-2 text-[var(--muted-foreground)]">{preview.parsed.goal || "暂无目标"}</p></PreviewBlock>
+                <PreviewBlock title={`任务 (${tasks.length})`}>
+                  <div className="space-y-3">
+                    {tasks.map((task, index) => (
+                      <label key={`${task.title ?? "task"}-${index}`} className="block rounded-xl border border-white/10 p-3">
+                        <div className="flex items-start gap-3">
+                          <input type="checkbox" checked={selectedTaskIndexes.includes(index)} onChange={() => setSelectedTaskIndexes((current) => current.includes(index) ? current.filter((item) => item !== index) : [...current, index])} />
+                          <div className="min-w-0">
+                            <p className="font-semibold">{task.title || "未命名学习任务"}</p>
+                            <p className="mt-1 text-[var(--muted-foreground)]">{task.description || "暂无说明"}</p>
+                            <p className="mt-2 text-xs text-[var(--muted-foreground)]">重要性 {`${task.importance ?? "-"}`} · 紧急度 {`${task.urgency ?? "-"}`} · 预计 {`${task.estimated_duration ?? "-"} 分钟`}</p>
+                            <p className="mt-1 text-xs text-[var(--muted-foreground)]">planned_date {task.planned_date || "-"} · deadline {task.deadline || "-"}</p>
+                            <p className="mt-1 text-xs text-[var(--muted-foreground)]">tags {stringList(task.tags).join(" / ") || "-"} · source_material {task.source_material || "-"}</p>
+                            <p className="mt-1 text-xs text-[var(--muted-foreground)]">knowledge_points {stringList(task.knowledge_points).join(" / ") || "-"}</p>
+                          </div>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </PreviewBlock>
+                <RecordListBlock title="日程 / 时间块" items={preview.parsed.events} />
+                <RecordListBlock title="复习计划" items={preview.parsed.review_plan} />
+                <RecordListBlock title="资料清单" items={preview.parsed.materials} />
+                <RecordListBlock title="自适应规则" items={preview.parsed.adaptive_rules} />
+                <RecordListBlock title="LearnKATA 联动" items={preview.parsed.learnkata_links} />
+                <PreviewBlock title="风险提醒">{stringList(preview.parsed.warnings).length > 0 ? <ul className="list-disc space-y-1 pl-5">{stringList(preview.parsed.warnings).map((warning) => <li key={warning}>{warning}</li>)}</ul> : <p>暂无风险提醒</p>}</PreviewBlock>
+              </div>
+            ) : preview.raw ? <pre className="mt-4 whitespace-pre-wrap break-words rounded-xl border border-white/10 p-3 text-xs leading-6">{preview.raw}</pre> : null}
           </div>
-          <button className="glass-inset interactive-surface p-4 text-left" type="button">
+          <div className="glass-inset grid gap-3 p-4 sm:grid-cols-2">
+            <button className="btn-glow rounded-xl px-4 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50" type="button" disabled={selectedTasks.length === 0} onClick={applySelectedTasks}>应用为任务</button>
+            <button className="glass-inset px-4 py-2 text-sm" type="button" onClick={() => navigator.clipboard.writeText(preview.raw || JSON.stringify(preview.parsed ?? {}, null, 2))}>复制 JSON</button>
+            <button className="glass-inset px-4 py-2 text-sm opacity-60" type="button" disabled>应用为日程</button>
+            <p className="text-xs text-[var(--muted-foreground)] sm:col-span-2">当前仅预览，不会自动创建任务或日程。日程写入需要后续稳定事件写入契约，目前暂不启用。</p>
+            {applyResults.length > 0 && <div className="sm:col-span-2 space-y-2">{applyResults.map((result, index) => <p key={`${result.title}-${index}`} className={result.status === "success" ? "text-[var(--neon-blue)]" : "text-[var(--neon-pink)]"}>{result.title}：{result.message}</p>)}</div>}
+          </div>
+          <button className="glass-inset interactive-surface p-4 text-left" type="button" onClick={() => showToast("文件上传、资料索引和真实解析将在 Sprint 19 实现。") }>
             <p className="section-label">Upload</p>
-            <h3 className="mt-2 font-semibold">文件上传入口</h3>
-            <p className="mt-2 text-sm text-[var(--muted-foreground)]">预留资料、课件、PDF 和笔记导入。</p>
+            <h3 className="mt-2 font-semibold">添加资料 / 文件上传</h3>
+            <p className="mt-2 text-sm text-[var(--muted-foreground)]">文件上传、资料索引和真实解析将在 Sprint 19 实现。</p>
           </button>
-          {["学习规划", "考研 / 考公规划", "资料规划"].map((label) => (
-            <button key={label} className="glass-inset interactive-surface p-4 text-left" type="button">
-              <h3 className="font-semibold">{label}</h3>
-              <p className="mt-2 text-sm text-[var(--muted-foreground)]">预留模板入口，本轮只稳定工作区结构。</p>
-            </button>
-          ))}
+          <div className="glass-inset p-4">
+            <p className="section-label">LearnKATA</p>
+            <h3 className="mt-2 font-semibold">LearnKATA 联动</h3>
+            <p className="mt-2 text-sm text-[var(--muted-foreground)]">LearnKATA 当前仅作为未来联动占位，不会真实调用外部应用。</p>
+          </div>
         </aside>
       </div>
     </section>

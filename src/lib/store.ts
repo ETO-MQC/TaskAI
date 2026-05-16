@@ -178,7 +178,11 @@ function summarizeAiResponse(response: AiResponse) {
   if (response.updated_task) return `已更新任务「${response.updated_task.title}」。`;
   if (response.intent === "start_timer" && response.timer) return `已开始计时：${response.timer.topic ?? "专注"}`;
   if (response.intent === "stop_timer") return "已停止当前计时。";
-  return response.reply;
+  if (response.intent === "learning_planning_preview") {
+    const summary = (response as unknown as { summary?: string }).summary;
+    return summary || "已生成学习规划预览，等待你确认是否应用为任务。";
+  }
+  return response.reply || "已收到 AI 响应。";
 }
 
 function formatShortDateTime(value: string) {
