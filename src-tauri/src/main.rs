@@ -105,17 +105,72 @@ create_task 的 data 字段：
 返回 create_task，data.title="写周报"，priority="high"，urgency="urgent"，importance="important"，deadline 为今天 18:00 的 ISO 时间，planned_date 为今天日期，tags=["工作"]。
 "#;
 
-const LEARNING_PLANNING_SYSTEM_PROMPT: &str = r#"你是 SmartFocus 的学习规划助手。
-请只返回 JSON，字段包括：
-intent="learning_planning_preview",
-summary, goal, exam_type, tasks, events, review_plan, materials, adaptive_rules, learnkata_links, warnings, needs_user_confirmation=true。
-你只能生成预览，不能声称已经创建任务或日程。
-当前不具备真实文件读取、OCR 或文档解析能力，不要声称已经读取资料内容。
-任何写入都必须等待用户确认。
-tasks 可包含字段 title, description, importance, urgency, estimated_duration, deadline, planned_date, tags, source_material, knowledge_points。
-events 仅用于预览时间块，不要假设已经创建日程。
-adaptive_rules 用于说明后续调整逻辑。
-learnkata_links 仅作为未来联动占位，不要真实调用 LearnKATA。"#;
+const LEARNING_PLANNING_SYSTEM_PROMPT: &str = r#"你是 SmartFocus 的 AI 计划编排助手。
+SmartFocus 负责计划、排程、任务拆解、自适应调整建议，以及 LearnKATA 联动结构输出。
+SmartFocus 不负责深度知识讲解、刷题训练、知识点掌握度评估、OCR、真实文件全文解析或真实调用 LearnKATA。
+
+你只能生成预览，不能声称已经创建任务或日程；用户确认前不得暗示任何写入已经发生。
+不要声称已经读取真实文件；当前只使用用户提供的资料摘要。
+不要真实调用 LearnKATA，只输出 learnkata_links 结构占位。
+不要把回答写成知识讲解正文，应以计划和安排为主体。
+
+请只返回 JSON：
+{
+  "intent": "learning_planning_preview",
+  "summary": "",
+  "goal": "",
+  "exam_type": null,
+  "tasks": [],
+  "events": [],
+  "review_plan": [],
+  "materials": [],
+  "adaptive_rules": [],
+  "learnkata_links": [],
+  "warnings": [],
+  "clarification_questions": [],
+  "needs_user_confirmation": true
+}
+
+信息不足时不要乱编；优先返回 clarification_questions，询问考试时间、每天可用时间、当前基础、重点难点、是否留休息日、是否需要冲刺安排。若必须基于假设先给预览，把假设写入 warnings。
+
+字段要求：
+- tasks 可包含 title、description、importance、urgency、estimated_duration、deadline、planned_date、tags、source_material、knowledge_points。
+- 不要输出 quadrant；quadrant 由 Rust 根据 urgency + importance 计算。
+- events 仅用于预览排程，不代表已经创建独立日程。
+- adaptive_rules 只表达建议，不自动执行全局重排。
+- learnkata_links 仅包含 knowledge_point、suggested_activity(explain|quiz|review|practice)、note。
+
+低 token 原则：只使用必要任务、日期、目标与资料摘要；不反复复述无关上下文；资料全文解析留给后续 Sprint；日程编排优先由本地规则承接，AI 负责策略与解释；自适应调整优先基于本地完成度、逾期和计时摘要；支持局部调整，不要每次重新生成全部计划。"#;
+
+
+
+const INBOX_CAPTURE_SYSTEM_PROMPT: &str = r#"You are SmartFocus inbox_capture parser.
+Only generate a draft preview. Do not create tasks, write the database, or claim that anything has been created.
+Resolve time expressions against the user's local current date and timezone. Keep deadline and planned_date distinct.
+If a value cannot be parsed reliably, keep it null and add clarification_questions. Do not invent unstated facts.
+urgency and importance may be inferred from wording. reminder_at may be null.
+Return JSON only:
+{
+  "intent": "inbox_capture",
+  "items": [
+    {
+      "type": "task | event | deadline | reminder",
+      "title": "string",
+      "notes": "string",
+      "deadline": "YYYY-MM-DDTHH:mm:ss | null",
+      "planned_date": "YYYY-MM-DD | null",
+      "reminder_at": "YYYY-MM-DDTHH:mm:ss | null",
+      "estimated_duration": 60,
+      "urgency": 1,
+      "importance": 1,
+      "tags": ["string"],
+      "confidence": 0.0,
+      "clarification_questions": ["string"]
+    }
+  ],
+  "warnings": ["string"],
+  "needs_user_confirmation": true
+}"#;
 
 #[derive(Clone)]
 struct AppState {
@@ -221,6 +276,26 @@ struct TimerRecord {
     duration: f64,
     note: Option<String>,
     created_at: String,
+}
+
+
+
+#[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
+struct Reminder {
+    id: String,
+    task_id: Option<String>,
+    title: String,
+    remind_at: String,
+    status: String,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReminderInput {
+    task_id: Option<String>,
+    title: String,
+    remind_at: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -845,6 +920,102 @@ async fn delete_task(state: State<'_, AppState>, id: String) -> Result<(), Strin
         .await
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+
+
+#[tauri::command]
+async fn create_reminder(state: State<'_, AppState>, input: ReminderInput) -> Result<Reminder, String> {
+    let now = now_iso();
+    let id = Uuid::new_v4().to_string();
+    sqlx::query(
+        r#"INSERT INTO reminders
+        (id, task_id, title, remind_at, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, 'pending', ?, ?)"#,
+    )
+    .bind(&id)
+    .bind(input.task_id)
+    .bind(input.title.trim())
+    .bind(input.remind_at)
+    .bind(&now)
+    .bind(&now)
+    .execute(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+    get_reminder_by_id(&state.db, &id).await
+}
+
+async fn get_reminder_by_id(db: &SqlitePool, id: &str) -> Result<Reminder, String> {
+    sqlx::query_as::<_, Reminder>("SELECT * FROM reminders WHERE id = ?")
+        .bind(id)
+        .fetch_one(db)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn list_reminders(state: State<'_, AppState>) -> Result<Vec<Reminder>, String> {
+    sqlx::query_as::<_, Reminder>("SELECT * FROM reminders ORDER BY remind_at ASC, created_at ASC")
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn trigger_due_reminders(state: State<'_, AppState>) -> Result<Vec<Reminder>, String> {
+    let now = now_iso();
+    sqlx::query("UPDATE reminders SET status = 'triggered', updated_at = ? WHERE status = 'pending' AND remind_at <= ?")
+        .bind(&now)
+        .bind(&now)
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    sqlx::query_as::<_, Reminder>("SELECT * FROM reminders WHERE status = 'triggered' ORDER BY remind_at ASC, created_at ASC")
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn dismiss_reminder(state: State<'_, AppState>, id: String) -> Result<Reminder, String> {
+    sqlx::query("UPDATE reminders SET status = 'dismissed', updated_at = ? WHERE id = ?")
+        .bind(now_iso())
+        .bind(&id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    get_reminder_by_id(&state.db, &id).await
+}
+
+#[tauri::command]
+async fn snooze_reminder(state: State<'_, AppState>, id: String) -> Result<Reminder, String> {
+    let reminder = get_reminder_by_id(&state.db, &id).await?;
+    let next = DateTime::parse_from_rfc3339(&reminder.remind_at)
+        .map_err(|e| e.to_string())?
+        .with_timezone(&Utc)
+        + chrono::Duration::minutes(10);
+    sqlx::query("UPDATE reminders SET status = 'pending', remind_at = ?, updated_at = ? WHERE id = ?")
+        .bind(next.to_rfc3339())
+        .bind(now_iso())
+        .bind(&id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    get_reminder_by_id(&state.db, &id).await
+}
+
+#[tauri::command]
+async fn complete_reminder(state: State<'_, AppState>, id: String) -> Result<Reminder, String> {
+    let reminder = get_reminder_by_id(&state.db, &id).await?;
+    if let Some(task_id) = reminder.task_id.as_deref() {
+        sqlx::query("UPDATE tasks SET status = 'done', updated_at = ? WHERE id = ?")
+            .bind(now_iso())
+            .bind(task_id)
+            .execute(&state.db)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    dismiss_reminder(state, id).await
 }
 
 #[tauri::command]
@@ -1638,6 +1809,7 @@ async fn send_ai_message(app: AppHandle, state: State<'_, AppState>, message: St
 
     let client = reqwest::Client::new();
     let local_now = Local::now();
+    let inbox_request = message.starts_with("INBOX_CAPTURE_REQUEST\n");
     let planning_request = message.contains("学习规划")
         || message.contains("今日计划")
         || message.contains("本周计划")
@@ -1647,7 +1819,9 @@ async fn send_ai_message(app: AppHandle, state: State<'_, AppState>, message: St
         || message.contains("课程学习")
         || message.contains("资料整理")
         || message.contains("LearnKATA");
-    let prompt_base = if planning_request {
+    let prompt_base = if inbox_request {
+        INBOX_CAPTURE_SYSTEM_PROMPT
+    } else if planning_request {
         LEARNING_PLANNING_SYSTEM_PROMPT
     } else {
         SPRINT_10_SYSTEM_PROMPT
@@ -1708,7 +1882,9 @@ async fn send_ai_message(app: AppHandle, state: State<'_, AppState>, message: St
             "reply": assistant_content
         })
     });
-    execute_ai_intents(&app, &state, &mut parsed).await?;
+    if !inbox_request {
+        execute_ai_intents(&app, &state, &mut parsed).await?;
+    }
     Ok(parsed)
 }
 
@@ -1866,6 +2042,12 @@ fn main() {
             create_task,
             update_task,
             delete_task,
+            create_reminder,
+            list_reminders,
+            trigger_due_reminders,
+            dismiss_reminder,
+            snooze_reminder,
+            complete_reminder,
             list_tasks,
             start_timer,
             stop_timer,

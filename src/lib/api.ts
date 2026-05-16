@@ -6,6 +6,8 @@ import type {
   TimerMode,
   TimerRecord,
   TimerSnapshot,
+  Reminder,
+  ReminderInput,
 } from "./types";
 import { calculateQuadrant } from "./domain";
 
@@ -28,6 +30,7 @@ async function getInvoke(): Promise<Invoke | null> {
 const taskKey = "smartfocus.tasks";
 const recordKey = "smartfocus.timer_records";
 const settingsKey = "smartfocus.settings";
+const reminderKey = "smartfocus.reminders";
 
 const defaultShortcutSettings = {
   toggle_ai: "Ctrl+Shift+A",
@@ -49,6 +52,83 @@ function localDateKey(value: string | Date = new Date()) {
 
 function localDateTimeWithOffset(date: Date, hour: number, minute = 0) {
   return `${localDateKey(date)}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00+08:00`;
+}
+
+function dateAt(date: Date, hour = 9, minute = 0) {
+  return localDateTimeWithOffset(date, hour, minute);
+}
+
+function nextWeekday(base: Date, weekday: number, nextWeek = false) {
+  const date = new Date(base);
+  const current = date.getDay();
+  let delta = (weekday - current + 7) % 7;
+  if (delta === 0 || nextWeek) delta += 7;
+  date.setDate(date.getDate() + delta);
+  return date;
+}
+
+function fallbackInboxCapture(message: string): AiResponse {
+  const raw = message.split("用户输入：").pop()?.trim() ?? message.trim();
+  const nowDate = new Date();
+  const today = new Date(nowDate);
+  const tomorrow = new Date(nowDate); tomorrow.setDate(today.getDate() + 1);
+  const afterTomorrow = new Date(nowDate); afterTomorrow.setDate(today.getDate() + 2);
+  const item = {
+    type: "task",
+    title: raw.replace(/，.*$/, "").replace(/。$/, "") || "未命名任务",
+    notes: raw,
+    deadline: null as string | null,
+    planned_date: null as string | null,
+    reminder_at: null as string | null,
+    estimated_duration: null as number | null,
+    urgency: 0,
+    importance: /作业|注册|提交|交/.test(raw) ? 1 : 0,
+    tags: /复习|学习|单词/.test(raw) ? ["学习"] : [],
+    confidence: 0.78,
+    clarification_questions: [] as string[],
+  };
+  const explicitDate = raw.match(/(\d{1,2})月(\d{1,2})[号日]/);
+  const timeMatch = raw.match(/(?:晚上|今晚)\s*(\d{1,2})\s*点|(?:上午|明早)\s*(\d{1,2})\s*点/);
+  const hour = timeMatch ? Number(timeMatch[1] ?? timeMatch[2]) + (timeMatch[1] ? 12 : 0) : 9;
+  if (/今天/.test(raw)) item.planned_date = localDateKey(today);
+  if (/明天/.test(raw)) item.planned_date = localDateKey(tomorrow);
+  if (/后天/.test(raw)) item.planned_date = localDateKey(afterTomorrow);
+  if (/今晚/.test(raw)) item.planned_date = localDateKey(today);
+  if (/这周五/.test(raw)) item.deadline = dateAt(nextWeekday(today, 5), 23, 59);
+  if (/下周三/.test(raw)) item.deadline = dateAt(nextWeekday(today, 3, true), 23, 59);
+  if (explicitDate) {
+    const explicit = new Date(today.getFullYear(), Number(explicitDate[1]) - 1, Number(explicitDate[2]));
+    item.deadline = dateAt(explicit, 23, 59);
+  }
+  if (/今晚|明早|上午|晚上/.test(raw)) {
+    const basis = /明早|明天/.test(raw) ? tomorrow : today;
+    if (/提醒/.test(raw)) item.reminder_at = dateAt(basis, hour, 0);
+    else item.planned_date = localDateKey(basis);
+  }
+  const duration = raw.match(/(\d+)\s*分钟/);
+  if (duration) item.estimated_duration = Number(duration[1]);
+  if (/提前一天提醒|截止前一天提醒/.test(raw) && item.deadline) {
+    const reminder = new Date(item.deadline);
+    reminder.setDate(reminder.getDate() - 1);
+    reminder.setHours(9, 0, 0, 0);
+    item.reminder_at = dateAt(reminder, 9, 0);
+  }
+  const weekdayReminder = raw.match(/周([一二三四五六日天])(?:晚上)?提醒/);
+  if (weekdayReminder) {
+    const weekdayMap: Record<string, number> = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 日: 0, 天: 0 };
+    const reminderDay = nextWeekday(today, weekdayMap[weekdayReminder[1]]);
+    item.reminder_at = dateAt(reminderDay, /晚上/.test(raw) ? 20 : 9, 0);
+  }
+  if (/过几天提醒/.test(raw)) item.clarification_questions.push("“过几天”还不够明确，请告诉我具体哪一天或几天后提醒。");
+  if (!item.deadline && /之前|前完成|截止/.test(raw)) item.clarification_questions.push("我还需要一个明确的截止日期。");
+  return {
+    intent: "inbox_capture",
+    action: "preview",
+    data: {},
+    needs_clarification: false,
+    clarification: null,
+    reply: JSON.stringify({ intent: "inbox_capture", items: [item], warnings: [], needs_user_confirmation: true }),
+  };
 }
 
 function fallbackCreateTaskIntent(message: string): AiResponse | null {
@@ -355,6 +435,66 @@ class FallbackApi {
     return task_id ? records.filter((record) => record.task_id === task_id) : records;
   }
 
+  async create_reminder(input: ReminderInput): Promise<Reminder> {
+    const reminder: Reminder = {
+      id: crypto.randomUUID(),
+      task_id: input.task_id ?? null,
+      title: input.title,
+      remind_at: input.remind_at,
+      status: "pending",
+      created_at: now(),
+      updated_at: now(),
+    };
+    writeJson(reminderKey, [reminder, ...readJson<Reminder[]>(reminderKey, [])]);
+    return reminder;
+  }
+
+  async list_reminders(): Promise<Reminder[]> {
+    return readJson<Reminder[]>(reminderKey, []);
+  }
+
+  async trigger_due_reminders(): Promise<Reminder[]> {
+    const current = readJson<Reminder[]>(reminderKey, []);
+    const nowTime = Date.now();
+    const next = current.map((reminder) =>
+      reminder.status === "pending" && new Date(reminder.remind_at).getTime() <= nowTime
+        ? { ...reminder, status: "triggered" as const, updated_at: now() }
+        : reminder,
+    );
+    writeJson(reminderKey, next);
+    return next.filter((reminder) => reminder.status === "triggered");
+  }
+
+  async dismiss_reminder(id: string): Promise<Reminder> {
+    const next = readJson<Reminder[]>(reminderKey, []).map((reminder) =>
+      reminder.id === id ? { ...reminder, status: "dismissed" as const, updated_at: now() } : reminder,
+    );
+    writeJson(reminderKey, next);
+    const reminder = next.find((item) => item.id === id);
+    if (!reminder) throw new Error("Reminder not found");
+    return reminder;
+  }
+
+  async snooze_reminder(id: string): Promise<Reminder> {
+    const next = readJson<Reminder[]>(reminderKey, []).map((reminder) => {
+      if (reminder.id !== id) return reminder;
+      const remindAt = new Date(reminder.remind_at);
+      remindAt.setMinutes(remindAt.getMinutes() + 10);
+      return { ...reminder, status: "pending" as const, remind_at: remindAt.toISOString(), updated_at: now() };
+    });
+    writeJson(reminderKey, next);
+    const reminder = next.find((item) => item.id === id);
+    if (!reminder) throw new Error("Reminder not found");
+    return reminder;
+  }
+
+  async complete_reminder(id: string): Promise<Reminder> {
+    const reminder = readJson<Reminder[]>(reminderKey, []).find((item) => item.id === id);
+    if (!reminder) throw new Error("Reminder not found");
+    if (reminder.task_id) await this.update_task({ id: reminder.task_id, status: "done" });
+    return this.dismiss_reminder(id);
+  }
+
   async link_timer_record(input: { record_id: string; task_id?: string | null }): Promise<TimerRecord> {
     const records = readJson<TimerRecord[]>(recordKey, []);
     const record = records.find((item) => item.id === input.record_id);
@@ -465,6 +605,7 @@ class FallbackApi {
   }
 
   async send_ai_message(message: string): Promise<AiResponse> {
+    if (message.startsWith("INBOX_CAPTURE_REQUEST\n")) return fallbackInboxCapture(message);
     if (
       /学习规划|今日计划|本周计划|期末复习|考研复习|考公备考|课程学习|资料整理|LearnKATA/.test(message)
     ) {

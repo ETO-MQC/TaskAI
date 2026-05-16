@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { CSSProperties, DragEvent, ReactNode } from "react";
+import type { CSSProperties, Dispatch, DragEvent, ReactNode, SetStateAction } from "react";
 import ReactMarkdown from "react-markdown";
 import {
   BarChart3,
@@ -40,7 +40,7 @@ import {
 import dayjs from "dayjs";
 import isBetween from "dayjs/plugin/isBetween";
 import { TaskUpdatePatch, useAppStore } from "./lib/store";
-import type { Importance, Priority, Task, TimerMode, Urgency } from "./lib/types";
+import type { Importance, Priority, Reminder, Task, TimerMode, Urgency } from "./lib/types";
 import {
   formatMinutes,
   formatSeconds,
@@ -51,6 +51,15 @@ import {
   quadrantColors,
   quadrantLabels,
 } from "./lib/domain";
+import {
+  AI_PLANNING_SKILLS,
+  buildInboxCaptureMessage,
+  buildPlanningPrompt,
+  routePlanningSkill,
+  type InboxCaptureItem,
+  type InboxCapturePreview,
+  type PlanningSkillId,
+} from "./lib/aiPlanning";
 
 dayjs.extend(isBetween);
 
@@ -101,6 +110,7 @@ type LearningPlanPreview = {
   adaptive_rules?: Array<Record<string, unknown>>;
   learnkata_links?: Array<Record<string, unknown>>;
   warnings?: unknown[];
+  clarification_questions?: unknown[];
   needs_user_confirmation?: boolean;
 };
 
@@ -110,43 +120,11 @@ type StructuredPreviewState = {
   error: string | null;
 };
 
-const learningTemplates = [
-  {
-    label: "今日计划",
-    prompt: "根据我今天的任务、可用时间和紧急程度，帮我生成今日学习/工作计划。请输出 JSON，包含 summary、tasks、events、warnings。",
-  },
-  {
-    label: "本周计划",
-    prompt: "根据我的未完成任务和计划日期，帮我生成本周安排。请输出 JSON，包含 tasks、events、review_plan、warnings。",
-  },
-  {
-    label: "期末复习",
-    prompt: "请帮我制定期末复习计划。请按照课程、章节、复习轮次、每日任务、重点难点、预计时长来拆解，并输出 JSON。",
-  },
-  {
-    label: "考研复习",
-    prompt: "请帮我制定考研复习计划，包含科目、阶段目标、每日任务、复习轮次、资料清单、重点知识点和风险提醒。请输出 JSON。",
-  },
-  {
-    label: "考公备考",
-    prompt: "请帮我规划行测、申论、常识和每日复习节奏，拆解为任务、时间块、阶段目标和资料清单。请输出 JSON。",
-  },
-  {
-    label: "课程学习",
-    prompt: "请根据课程目标生成学习路线、阶段任务、知识点清单、复习节点和练习安排。请输出 JSON。",
-  },
-  {
-    label: "资料整理",
-    prompt: "我会提供资料名称、考试目标和学习时间，请帮我整理资料优先级、学习顺序和每日计划。请输出 JSON。",
-  },
-  {
-    label: "LearnKATA 联动设想",
-    prompt: "请把当前学习计划拆成适合后续导入 LearnKATA 的知识点、练习任务和掌握度追踪结构。请输出 JSON。",
-  },
-] as const;
+type InboxDraft = InboxCaptureItem & { edited?: boolean };
+type AiWorkspaceEntry =
+  | { id: string; role: "user" | "assistant"; kind: "message"; content: string }
+  | { id: string; role: "assistant"; kind: "inbox"; drafts: InboxDraft[]; warnings: string[]; results: Array<{ title: string; status: "success" | "failed"; message: string }> };
 
-const learningPlanningConstraint =
-  "你是 SmartFocus 的学习规划助手。你的任务是生成可预览的结构化学习计划。请优先输出 JSON，字段包括 summary、goal、exam_type、tasks、events、review_plan、materials、adaptive_rules、learnkata_links、warnings、needs_user_confirmation。不要声称已经创建任务或日程。任何写入都必须等待用户确认。文件资料当前只作为用户描述或未来入口，不要声称已经读取真实文件。";
 
 function defaultTaskDate() {
   return dayjs().format("YYYY-MM-DD");
@@ -341,6 +319,19 @@ function useToasts() {
     toastListeners.push(setToasts);
     return () => { toastListeners = toastListeners.filter((fn) => fn !== setToasts); };
   }, []);
+
+  useEffect(() => {
+    const poll = async () => {
+      const due = await import("./lib/api").then(({ api }) => api<Reminder[]>("trigger_due_reminders")).catch(() => []);
+      if (due.length > 0) {
+        await useAppStore.getState().refreshReminders();
+        for (const reminder of due) showToast(`提醒：${reminder.title}`, 4500);
+      }
+    };
+    void poll();
+    const intervalId = window.setInterval(poll, 30000);
+    return () => window.clearInterval(intervalId);
+  }, []);
   return toasts;
 }
 
@@ -445,6 +436,7 @@ function App() {
       )}
       {store.aiOpen && <AiPanel />}
       {store.linkPanelOpen && <LinkRecordPanel />}
+      <ReminderDock />
       <ToastContainer />
     </div>
   );
@@ -1104,13 +1096,31 @@ function RecordListBlock({ title, items }: { title: string; items?: Array<Record
 }
 
 function AiView() {
-  const { createTask } = useAppStore();
-  const [draftPrompt, setDraftPrompt] = useState("");
+  const { createTask, createReminder, reminders } = useAppStore();
+  const [input, setInput] = useState("");
+  const [entries, setEntries] = useState<AiWorkspaceEntry[]>([]);
+  const [preferredSkill, setPreferredSkill] = useState<PlanningSkillId | "auto">("auto");
+  const [lastRoute, setLastRoute] = useState(routePlanningSkill(""));
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const [planOpen, setPlanOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [preview, setPreview] = useState<StructuredPreviewState>({ parsed: null, raw: "", error: null });
   const [selectedTaskIndexes, setSelectedTaskIndexes] = useState<number[]>([]);
   const [applyResults, setApplyResults] = useState<Array<{ title: string; status: "success" | "failed"; message: string }>>([]);
+  const listRef = useRef<HTMLDivElement | null>(null);
   const tasks = Array.isArray(preview.parsed?.tasks) ? preview.parsed.tasks : [];
   const selectedTasks = tasks.filter((_, index) => selectedTaskIndexes.includes(index));
+  const pendingReminderCount = reminders.filter((item) => item.status === "pending").length;
+
+  useEffect(() => {
+    if (!listRef.current) return;
+    listRef.current.scrollTop = listRef.current.scrollHeight;
+  }, [entries]);
+
+  const addEntry = (entry: AiWorkspaceEntry) => setEntries((current) => [...current, entry]);
+  const updateInboxEntry = (id: string, updater: (entry: Extract<AiWorkspaceEntry, { kind: "inbox" }>) => Extract<AiWorkspaceEntry, { kind: "inbox" }>) =>
+    setEntries((current) => current.map((entry) => entry.id === id && entry.kind === "inbox" ? updater(entry) : entry));
 
   const updatePreviewFromResponse = (response: unknown) => {
     const record = response && typeof response === "object" ? (response as Record<string, unknown>) : {};
@@ -1125,6 +1135,88 @@ function AiView() {
     setApplyResults([]);
   };
 
+  const submit = async (message = input) => {
+    const text = message.trim();
+    if (!text || loading) return;
+    const route = routePlanningSkill(text, preferredSkill);
+    setLastRoute(route);
+    setLoading(true);
+    setEntries((current) => [...current, { id: crypto.randomUUID(), role: "user", kind: "message", content: text }]);
+    setInput("");
+    try {
+      if (route.skill === "inbox_capture") {
+        const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Shanghai";
+        const response = await import("./lib/api").then(({ api }) =>
+          api<{ reply: string }>("send_ai_message", {
+            message: buildInboxCaptureMessage(text, dayjs().format("YYYY-MM-DD HH:mm:ss"), timezone),
+          }),
+        );
+        const parsed = parseInboxCaptureText(response.reply);
+        if (!parsed) {
+          addEntry({ id: crypto.randomUUID(), role: "assistant", kind: "message", content: "这次没有拿到可确认的任务草稿。你可以再补一句更明确的截止时间或提醒时间。" });
+        } else {
+          addEntry({
+            id: crypto.randomUUID(),
+            role: "assistant",
+            kind: "inbox",
+            drafts: parsed.items,
+            warnings: parsed.warnings ?? [],
+            results: [],
+          });
+        }
+      } else {
+        const response = await import("./lib/api").then(({ api }) =>
+          api<{ reply?: string; summary?: string }>("send_ai_message", {
+            message: `${buildPlanningPrompt(route.skill)}\n\n用户输入：${text}`,
+          }),
+        );
+        updatePreviewFromResponse(response);
+        const parsed = parseLearningPlanText(response.reply ?? JSON.stringify(response));
+        const summary = parsed.parsed?.summary || response.summary || "我整理出了一版结构化计划，计划结果已就绪。";
+        addEntry({ id: crypto.randomUUID(), role: "assistant", kind: "message", content: summary });
+      }
+    } catch (error) {
+      addEntry({ id: crypto.randomUUID(), role: "assistant", kind: "message", content: error instanceof Error ? error.message : "这次处理失败了，请再试一次。" });
+    } finally {
+      setLoading(false);
+      setPreferredSkill("auto");
+    }
+  };
+
+  const patchInboxDraft = (entryId: string, index: number, patch: Partial<InboxDraft>) =>
+    updateInboxEntry(entryId, (entry) => ({
+      ...entry,
+      drafts: entry.drafts.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch, edited: true } : item),
+    }));
+
+  const confirmInboxDrafts = async (entryId: string) => {
+    const entry = entries.find((item): item is Extract<AiWorkspaceEntry, { kind: "inbox" }> => item.id === entryId && item.kind === "inbox");
+    if (!entry) return;
+    const results: Array<{ title: string; status: "success" | "failed"; message: string }> = [];
+    for (const draft of entry.drafts) {
+      try {
+        const task = await createTask({
+          ...emptyDraft,
+          title: draft.title,
+          description: draft.notes,
+          deadline: draft.deadline ?? "",
+          planned_date: draft.planned_date ?? "",
+          estimated_duration: draft.estimated_duration == null ? "" : String(draft.estimated_duration),
+          urgency: draft.urgency ? "urgent" : "not_urgent",
+          importance: draft.importance ? "important" : "not_important",
+          tags: draft.tags.join(", "),
+        });
+        if (draft.reminder_at) {
+          await createReminder({ task_id: task.id, title: draft.title, remind_at: toLocalIso(draft.reminder_at) ?? draft.reminder_at });
+        }
+        results.push({ title: draft.title, status: "success", message: draft.reminder_at ? "任务与提醒已创建" : "任务已创建" });
+      } catch (error) {
+        results.push({ title: draft.title, status: "failed", message: error instanceof Error ? error.message : "创建失败" });
+      }
+    }
+    updateInboxEntry(entryId, (current) => ({ ...current, results }));
+  };
+
   const applySelectedTasks = async () => {
     if (selectedTasks.length === 0) return;
     if (!window.confirm(`确认将 ${selectedTasks.length} 个勾选任务应用到任务列表吗？只会写入现有字段，不会直接写入 quadrant。`)) return;
@@ -1135,7 +1227,7 @@ function AiView() {
         await createTask(draft);
         results.push({ title: draft.title, status: "success", message: "应用成功" });
       } catch (error) {
-        results.push({ title: draft.title, status: "failed", message: error instanceof Error ? error.message : "应用失败" });
+        results.push({ title: draft.title, status: "failed", message: error instanceof Error ? error.message : "创建失败" });
       }
     }
     setApplyResults(results);
@@ -1143,78 +1235,245 @@ function AiView() {
 
   return (
     <section className="glass-card ai-workspace flex h-full min-h-0 flex-col overflow-hidden p-5">
-      <Header title="AI 助手" subtitle="任务拆解、日程安排和学习规划入口" />
-      <div className="ai-workspace-grid grid min-h-0 flex-1 gap-5 lg:grid-cols-[minmax(0,0.6fr)_minmax(340px,0.4fr)]">
-        <div className="glass-inset flex min-h-[520px] flex-col overflow-hidden p-4">
-          <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            {learningTemplates.map((template) => (
-              <button key={template.label} type="button" className="glass-inset interactive-surface p-3 text-left text-sm" onClick={() => setDraftPrompt(`${learningPlanningConstraint}\n\n${template.prompt}`)}>
-                <span className="font-semibold">{template.label}</span>
-              </button>
+      <Header title="AI 计划编排" subtitle="用自然语言记录任务、安排计划、调整日程" />
+      <div className="ai-dialogue-shell mt-4 grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_auto]">
+        <div className="glass-inset flex min-h-[520px] min-w-0 flex-col overflow-hidden p-4">
+          <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-[var(--muted-foreground)]">
+            <span className="rounded-full border border-white/10 px-2 py-1">{lastRoute.label === "自动判断" ? "自动判断" : `自动识别：${lastRoute.label}`}</span>
+            {preferredSkill !== "auto" && <span className="rounded-full border border-white/10 px-2 py-1">已指定：{AI_PLANNING_SKILLS[preferredSkill].title}</span>}
+          </div>
+          <div ref={listRef} className="thin-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+            {entries.length === 0 && (
+              <div className="glass-inset max-w-2xl p-5 text-sm leading-7">
+                告诉我你想记录、规划或调整什么。例如：“下周三之前交发展经济学作业，周二晚上提醒我写提纲”，或者“我两周后期末考试，每天学两小时，帮我安排复习”。
+              </div>
+            )}
+            {entries.map((entry) => entry.kind === "message" ? (
+              <div key={entry.id} className={`max-w-[82%] rounded-xl p-4 text-sm leading-6 ${entry.role === "user" ? "btn-glow ml-auto text-[var(--primary-foreground)]" : "glass-inset"}`}>
+                {entry.content}
+              </div>
+            ) : (
+              <InboxDraftCard
+                key={entry.id}
+                entry={entry}
+                onPatch={(index, patch) => patchInboxDraft(entry.id, index, patch)}
+                onConfirm={() => confirmInboxDrafts(entry.id)}
+                onCancel={() => updateInboxEntry(entry.id, (current) => ({ ...current, drafts: [], warnings: [], results: [] }))}
+              />
             ))}
           </div>
-          <AiPanel embedded draftPrompt={draftPrompt} onResponse={updatePreviewFromResponse} />
-        </div>
-        <aside className="thin-scrollbar grid min-h-0 gap-4 overflow-y-auto pr-1">
-          <div className="glass-inset p-4">
-            <p className="section-label">Result Preview</p>
-            <h3 className="mt-2 font-semibold">AI 生成结果预览区</h3>
-            {!preview.parsed && !preview.raw && <p className="mt-2 text-sm text-[var(--muted-foreground)]">AI 生成的任务、日程、复习计划和资料整理结果会显示在这里。</p>}
-            {preview.error && <p className="mt-3 text-sm text-[var(--neon-amber)]">{preview.error}</p>}
-            {preview.parsed ? (
-              <div className="mt-4 space-y-3 text-sm">
-                <PreviewBlock title="概览"><p>{preview.parsed.summary || "暂无概览"}</p><p className="mt-2 text-[var(--muted-foreground)]">{preview.parsed.goal || "暂无目标"}</p></PreviewBlock>
-                <PreviewBlock title={`任务 (${tasks.length})`}>
-                  <div className="space-y-3">
-                    {tasks.map((task, index) => (
-                      <label key={`${task.title ?? "task"}-${index}`} className="block rounded-xl border border-white/10 p-3">
-                        <div className="flex items-start gap-3">
-                          <input type="checkbox" checked={selectedTaskIndexes.includes(index)} onChange={() => setSelectedTaskIndexes((current) => current.includes(index) ? current.filter((item) => item !== index) : [...current, index])} />
-                          <div className="min-w-0">
-                            <p className="font-semibold">{task.title || "未命名学习任务"}</p>
-                            <p className="mt-1 text-[var(--muted-foreground)]">{task.description || "暂无说明"}</p>
-                            <p className="mt-2 text-xs text-[var(--muted-foreground)]">重要性 {`${task.importance ?? "-"}`} · 紧急度 {`${task.urgency ?? "-"}`} · 预计 {`${task.estimated_duration ?? "-"} 分钟`}</p>
-                            <p className="mt-1 text-xs text-[var(--muted-foreground)]">planned_date {task.planned_date || "-"} · deadline {task.deadline || "-"}</p>
-                            <p className="mt-1 text-xs text-[var(--muted-foreground)]">tags {stringList(task.tags).join(" / ") || "-"} · source_material {task.source_material || "-"}</p>
-                            <p className="mt-1 text-xs text-[var(--muted-foreground)]">knowledge_points {stringList(task.knowledge_points).join(" / ") || "-"}</p>
-                          </div>
-                        </div>
-                      </label>
+          {preview.parsed && (
+            <button className="glass-inset mt-3 flex flex-wrap items-center justify-between gap-2 p-3 text-left text-sm" type="button" onClick={() => setPlanOpen(true)}>
+              <span className="font-medium">计划结果</span>
+              <span className="text-[var(--muted-foreground)]">{tasks.length} 个任务 · {stringList(preview.parsed.warnings).length} 条风险提醒 · 点击展开计划结果</span>
+            </button>
+          )}
+          <div className="relative mt-3 border-t border-white/10 pt-3">
+            <div className="mb-2 flex flex-wrap gap-2 text-xs">
+              <button className="glass-inset px-3 py-1.5" type="button" onClick={() => showToast("文件上传、资料索引和真实解析将在后续 Sprint 实现。")}>添加资料</button>
+              <button className="glass-inset px-3 py-1.5" type="button" onClick={() => setPlanOpen(true)} disabled={!preview.parsed}>计划结果</button>
+              <button className="glass-inset px-3 py-1.5" type="button" onClick={() => showToast(`当前有 ${pendingReminderCount} 条待触发提醒。`)}>提醒</button>
+              <button className="glass-inset px-3 py-1.5" type="button" onClick={() => setToolsOpen((value) => !value)}>更多</button>
+              <button className="glass-inset px-3 py-1.5" type="button" onClick={() => setMenuOpen((value) => !value)}>/ 快捷</button>
+            </div>
+            {(menuOpen || toolsOpen) && (
+              <div className="ai-popover glass-card absolute bottom-[84px] left-0 z-10 w-[min(360px,calc(100vw-48px))] p-3 text-sm">
+                {menuOpen && (
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {Object.entries(AI_PLANNING_SKILLS).map(([id, skill]) => (
+                      <button key={id} className="glass-inset px-3 py-2 text-left" type="button" onClick={() => { setPreferredSkill(id as PlanningSkillId); setMenuOpen(false); }}>
+                        {skill.title}
+                      </button>
                     ))}
                   </div>
-                </PreviewBlock>
-                <RecordListBlock title="日程 / 时间块" items={preview.parsed.events} />
-                <RecordListBlock title="复习计划" items={preview.parsed.review_plan} />
-                <RecordListBlock title="资料清单" items={preview.parsed.materials} />
-                <RecordListBlock title="自适应规则" items={preview.parsed.adaptive_rules} />
-                <RecordListBlock title="LearnKATA 联动" items={preview.parsed.learnkata_links} />
-                <PreviewBlock title="风险提醒">{stringList(preview.parsed.warnings).length > 0 ? <ul className="list-disc space-y-1 pl-5">{stringList(preview.parsed.warnings).map((warning) => <li key={warning}>{warning}</li>)}</ul> : <p>暂无风险提醒</p>}</PreviewBlock>
+                )}
+                {toolsOpen && (
+                  <div className="space-y-2 text-[var(--muted-foreground)]">
+                    <button className="glass-inset block w-full px-3 py-2 text-left" type="button" onClick={() => showToast("文件上传、资料索引和真实解析将在后续 Sprint 实现。")}>资料入口</button>
+                    <button className="glass-inset block w-full px-3 py-2 text-left" type="button" onClick={() => showToast("SmartFocus 负责计划、任务、日程和计时；LearnKATA 负责讲解、练习、测验和掌握度。")}>LearnKATA 联动</button>
+                  </div>
+                )}
               </div>
-            ) : preview.raw ? <pre className="mt-4 whitespace-pre-wrap break-words rounded-xl border border-white/10 p-3 text-xs leading-6">{preview.raw}</pre> : null}
+            )}
+            <form className="grid grid-cols-[minmax(0,1fr)_auto] gap-3" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+              <input className="glass-inset min-w-0 px-4 py-3 text-sm outline-none [transition:var(--transition-smooth)] focus:border-[var(--ring)]" value={input} onChange={(event) => setInput(event.target.value)} placeholder="说出你想记录、规划或调整的事情..." />
+              <button className="btn-glow grid h-12 w-14 place-items-center rounded-xl text-sm font-semibold" type="submit" disabled={loading} title="发送" aria-label="发送">
+                <Send size={18} />
+              </button>
+            </form>
           </div>
-          <div className="glass-inset grid gap-3 p-4 sm:grid-cols-2">
-            <button className="btn-glow rounded-xl px-4 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50" type="button" disabled={selectedTasks.length === 0} onClick={applySelectedTasks}>应用为任务</button>
-            <button className="glass-inset px-4 py-2 text-sm" type="button" onClick={() => navigator.clipboard.writeText(preview.raw || JSON.stringify(preview.parsed ?? {}, null, 2))}>复制 JSON</button>
-            <button className="glass-inset px-4 py-2 text-sm opacity-60" type="button" disabled>应用为日程</button>
-            <p className="text-xs text-[var(--muted-foreground)] sm:col-span-2">当前仅预览，不会自动创建任务或日程。日程写入需要后续稳定事件写入契约，目前暂不启用。</p>
-            {applyResults.length > 0 && <div className="sm:col-span-2 space-y-2">{applyResults.map((result, index) => <p key={`${result.title}-${index}`} className={result.status === "success" ? "text-[var(--neon-blue)]" : "text-[var(--neon-pink)]"}>{result.title}：{result.message}</p>)}</div>}
-          </div>
-          <button className="glass-inset interactive-surface p-4 text-left" type="button" onClick={() => showToast("文件上传、资料索引和真实解析将在 Sprint 19 实现。") }>
-            <p className="section-label">Upload</p>
-            <h3 className="mt-2 font-semibold">添加资料 / 文件上传</h3>
-            <p className="mt-2 text-sm text-[var(--muted-foreground)]">文件上传、资料索引和真实解析将在 Sprint 19 实现。</p>
-          </button>
-          <div className="glass-inset p-4">
-            <p className="section-label">LearnKATA</p>
-            <h3 className="mt-2 font-semibold">LearnKATA 联动</h3>
-            <p className="mt-2 text-sm text-[var(--muted-foreground)]">LearnKATA 当前仅作为未来联动占位，不会真实调用外部应用。</p>
-          </div>
-        </aside>
+        </div>
+        {preview.parsed && (
+          <aside className={`ai-plan-drawer glass-inset thin-scrollbar min-h-0 overflow-y-auto p-4 ${planOpen ? "is-open" : ""}`}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="section-label">计划结果</p>
+                <h3 className="mt-2 font-semibold">结构化计划预览</h3>
+              </div>
+              <button className="glass-inset px-3 py-1.5 text-xs xl:hidden" type="button" onClick={() => setPlanOpen(false)}>??</button>
+            </div>
+            <PlanCanvasBody
+              preview={preview}
+              tasks={tasks}
+              selectedTaskIndexes={selectedTaskIndexes}
+              setSelectedTaskIndexes={setSelectedTaskIndexes}
+              selectedTasks={selectedTasks}
+              applySelectedTasks={applySelectedTasks}
+              applyResults={applyResults}
+            />
+          </aside>
+        )}
       </div>
+      {preview.parsed && planOpen && <button className="ai-drawer-backdrop xl:hidden" type="button" aria-label="关闭计划结果" onClick={() => setPlanOpen(false)} />}
     </section>
   );
 }
 
+function InboxDraftCard({ entry, onPatch, onConfirm, onCancel }: {
+  entry: Extract<AiWorkspaceEntry, { kind: "inbox" }>;
+  onPatch: (index: number, patch: Partial<InboxDraft>) => void;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  if (entry.drafts.length === 0) return <div className="glass-inset max-w-[82%] p-4 text-sm">已取消这组草稿。</div>;
+  return (
+    <section className="glass-inset max-w-[92%] p-3 text-sm">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <span className="font-semibold">我先整理成草稿，你确认后再创建</span>
+        <span className="text-xs text-[var(--muted-foreground)]">{entry.drafts.length} 项</span>
+      </div>
+      <div className="space-y-3">
+        {entry.drafts.map((draft, index) => (
+          <div key={`${draft.title}-${index}`} className="rounded-xl border border-white/10 p-3">
+            <div className="grid gap-2 md:grid-cols-2">
+              <input className="field" value={draft.title} onChange={(event) => onPatch(index, { title: event.target.value })} />
+              <input className="field" type="datetime-local" value={(draft.reminder_at ?? "").slice(0, 16)} onChange={(event) => onPatch(index, { reminder_at: event.target.value || null })} />
+              <input className="field" type="datetime-local" value={(draft.deadline ?? "").slice(0, 16)} onChange={(event) => onPatch(index, { deadline: event.target.value || null })} />
+              <input className="field" type="date" value={draft.planned_date ?? ""} onChange={(event) => onPatch(index, { planned_date: event.target.value || null })} />
+              <input className="field" type="number" min="0" placeholder="预计分钟" value={draft.estimated_duration ?? ""} onChange={(event) => onPatch(index, { estimated_duration: event.target.value ? Number(event.target.value) : null })} />
+              <div className="grid grid-cols-2 gap-2">
+                <select className="field" value={draft.urgency} onChange={(event) => onPatch(index, { urgency: Number(event.target.value) as 0 | 1 })}>
+                  <option value={0}>不紧急</option><option value={1}>紧急</option>
+                </select>
+                <select className="field" value={draft.importance} onChange={(event) => onPatch(index, { importance: Number(event.target.value) as 0 | 1 })}>
+                  <option value={0}>不重要</option><option value={1}>重要</option>
+                </select>
+              </div>
+            </div>
+            <textarea className="field mt-2 min-h-16 w-full" value={draft.notes} onChange={(event) => onPatch(index, { notes: event.target.value })} />
+            <div className="mt-2 flex flex-wrap gap-2 text-xs">
+              <span className="rounded-full border border-white/10 px-2 py-1" >置信度 {Math.round((draft.confidence ?? 0) * 100)}%</span>
+              <span className="rounded-full border border-white/10 px-2 py-1">tags {draft.tags.join(" / ") || "-"}</span>
+            </div>
+            {draft.clarification_questions.length > 0 && <p className="mt-2 text-xs text-[var(--neon-amber)]">{draft.clarification_questions.join(" / ")}</p>}
+          </div>
+        ))}
+      </div>
+      {entry.warnings.length > 0 && <p className="mt-3 text-xs text-[var(--neon-amber)]">{entry.warnings.join(" / ")}</p>}
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button className="btn-glow rounded-xl px-4 py-2 text-sm" type="button" onClick={onConfirm}>??</button>
+        <button className="glass-inset px-4 py-2 text-sm" type="button" onClick={onCancel}>??</button>
+      </div>
+      {entry.results.length > 0 && <div className="mt-3 space-y-1 text-xs">{entry.results.map((item) => <p key={item.title} className={item.status === "success" ? "text-[var(--neon-blue)]" : "text-[var(--neon-pink)]"}>{item.title}：{item.message}</p>)}</div>}
+    </section>
+  );
+}
+
+function PlanCanvasBody({ preview, tasks, selectedTaskIndexes, setSelectedTaskIndexes, selectedTasks, applySelectedTasks, applyResults }: {
+  preview: StructuredPreviewState;
+  tasks: LearningTaskPreview[];
+  selectedTaskIndexes: number[];
+  setSelectedTaskIndexes: Dispatch<SetStateAction<number[]>>;
+  selectedTasks: LearningTaskPreview[];
+  applySelectedTasks: () => Promise<void>;
+  applyResults: Array<{ title: string; status: "success" | "failed"; message: string }>;
+}) {
+  if (!preview.parsed) return null;
+  return (
+    <div className="mt-4 space-y-3 text-sm">
+      <PreviewBlock title="计划结果"><p>{preview.parsed.summary || "暂无概览"}</p><p className="mt-2 text-[var(--muted-foreground)]">{preview.parsed.goal || "暂无目标"}</p></PreviewBlock>
+      {stringList(preview.parsed.clarification_questions).length > 0 && <PreviewBlock title="待追问信息"><ul className="list-disc space-y-1 pl-5">{stringList(preview.parsed.clarification_questions).map((item) => <li key={item}>{item}</li>)}</ul></PreviewBlock>}
+      <PreviewBlock title={`任务 (${tasks.length})`}>
+        <div className="space-y-3">
+          {tasks.map((task, index) => (
+            <label key={`${task.title ?? "task"}-${index}`} className="block rounded-xl border border-white/10 p-3">
+              <div className="flex items-start gap-3">
+                <input type="checkbox" checked={selectedTaskIndexes.includes(index)} onChange={() => setSelectedTaskIndexes((current) => current.includes(index) ? current.filter((item) => item !== index) : [...current, index])} />
+                <div className="min-w-0">
+                  <p className="font-semibold">{task.title || "未命名任务"}</p>
+                  <p className="mt-1 text-[var(--muted-foreground)]">{task.description || "暂无说明"}</p>
+                  <p className="mt-2 text-xs text-[var(--muted-foreground)]">紧急度 {`${task.urgency ?? "-"}`} · 重要性 {`${task.importance ?? "-"}`} · 预计 {`${task.estimated_duration ?? "-"} 分钟`}</p>
+                  <p className="mt-1 text-xs text-[var(--muted-foreground)]">计划日期 {task.planned_date || "-"} · 截止时间 {task.deadline || "-"}</p>
+                </div>
+              </div>
+            </label>
+          ))}
+        </div>
+      </PreviewBlock>
+      <RecordListBlock title="日程" items={preview.parsed.events} />
+      <RecordListBlock title="复习计划" items={preview.parsed.review_plan} />
+      <RecordListBlock title="资料" items={preview.parsed.materials} />
+      <RecordListBlock title="自适应规则" items={preview.parsed.adaptive_rules} />
+      <RecordListBlock title="LearnKATA 联动" items={preview.parsed.learnkata_links} />
+      <PreviewBlock title="风险提醒">{stringList(preview.parsed.warnings).length > 0 ? <ul className="list-disc space-y-1 pl-5">{stringList(preview.parsed.warnings).map((warning) => <li key={warning}>{warning}</li>)}</ul> : <p>暂无风险提醒</p>}</PreviewBlock>
+      <div className="glass-inset grid gap-3 p-3 sm:grid-cols-2">
+        <button className="btn-glow rounded-xl px-4 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50" type="button" disabled={selectedTasks.length === 0} onClick={applySelectedTasks}>应用为任务</button>
+        <button className="glass-inset px-4 py-2 text-sm" type="button" onClick={() => navigator.clipboard.writeText(preview.raw || JSON.stringify(preview.parsed ?? {}, null, 2))}>复制 JSON</button>
+        <button className="glass-inset px-4 py-2 text-sm opacity-60" type="button" disabled>应用为日程</button>
+        <p className="text-xs text-[var(--muted-foreground)] sm:col-span-2">当前只预览并可应用为任务；尚无独立事件表，因此“应用为日程”继续禁用。quadrant 仍由 Rust 根据 urgency + importance 计算。</p>
+        {applyResults.length > 0 && <div className="sm:col-span-2 space-y-2">{applyResults.map((result, index) => <p key={`${result.title}-${index}`} className={result.status === "success" ? "text-[var(--neon-blue)]" : "text-[var(--neon-pink)]"}>{result.title}：{result.message}</p>)}</div>}
+      </div>
+    </div>
+  );
+}
+
+function toLocalIso(value?: string | null) {
+  if (!value) return null;
+  const parsed = dayjs(value);
+  return parsed.isValid() ? parsed.format() : value;
+}
+
+function parseInboxCaptureText(text: string) {
+  const parsed = parseLearningPlanText(text);
+  const candidate = parsed.parsed as unknown as InboxCapturePreview | null;
+  return candidate?.intent === "inbox_capture" && Array.isArray(candidate.items) ? candidate : null;
+}
+
+
+function ReminderDock() {
+  const { reminders, dismissReminder, snoozeReminder, completeReminder, tasks, selectTask, setView } = useAppStore();
+  const triggered = reminders.filter((item) => item.status === "triggered");
+  const upcoming = reminders.filter((item) => item.status === "pending");
+  const todayKey = dayjs().format("YYYY-MM-DD");
+  if (reminders.length === 0) return null;
+  return (
+    <aside className="reminder-dock glass-card fixed bottom-4 left-24 z-20 w-[min(360px,calc(100vw-32px))] p-3">
+      <div className="flex items-center justify-between">
+        <span className="section-label">提醒中心</span>
+        <span className="text-xs text-[var(--muted-foreground)]">今日 {reminders.filter((item) => item.remind_at.startsWith(todayKey)).length}</span>
+      </div>
+      <div className="mt-2 space-y-2">
+        {[...triggered, ...upcoming.slice(0, 2)].map((reminder) => (
+          <div key={reminder.id} className="rounded-xl border border-white/10 p-2 text-sm">
+            <button className="w-full text-left font-medium" type="button" onClick={() => {
+              const task = tasks.find((item) => item.id === reminder.task_id);
+              if (task) { selectTask(task.id); setView("tasks"); }
+            }}>{reminder.title}</button>
+            <p className="mt-1 text-xs text-[var(--muted-foreground)]">{dayjs(reminder.remind_at).format("MM-DD HH:mm")} · {reminder.status}</p>
+            {reminder.status === "triggered" && (
+              <div className="mt-2 flex gap-2">
+                <button className="glass-inset px-2 py-1 text-xs" onClick={() => completeReminder(reminder.id)}>完成</button>
+                <button className="glass-inset px-2 py-1 text-xs" onClick={() => dismissReminder(reminder.id)}>忽略</button>
+                <button className="glass-inset px-2 py-1 text-xs" onClick={() => snoozeReminder(reminder.id)}>10 分钟后</button>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      <p className="mt-2 text-xs text-[var(--muted-foreground)]">已触发 {triggered.length} · 即将到来 {upcoming.length} · 已忽略 {reminders.filter((item) => item.status === "dismissed").length}</p>
+    </aside>
+  );
+}
 function TasksView() {
   const { tasks, selectedTaskId, selectTask, updateTask } = useAppStore();
   const [dateFilter, setDateFilter] = useState<TaskDateFilter>("today");
@@ -2638,7 +2897,7 @@ function CalendarView() {
             </div>
             <p className="mt-2 text-xs leading-5 text-[var(--muted-foreground)]">Reason: {suggestion.reason}</p>
             <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">Risk: {suggestion.risk}</p>
-            <div className="mt-2 text-xs text-[var(--muted-foreground)]">Confidence {Math.round(suggestion.confidence * 100)}%</div>
+            <div className="mt-2 text-xs text-[var(--muted-foreground)]" >置信度 {Math.round(suggestion.confidence * 100)}%</div>
           </div>
         ))}
       </div>

@@ -7,6 +7,8 @@ import type {
   Priority,
   Task,
   TaskInput,
+  Reminder,
+  ReminderInput,
   TimerMode,
   TimerRecord,
   TimerSnapshot,
@@ -41,6 +43,7 @@ interface AppStore {
   selectedTaskId: string | null;
   timer: TimerSnapshot;
   records: TimerRecord[];
+  reminders: Reminder[];
   stats: DashboardStats | null;
   aiMessages: AiMessage[];
   aiOpen: boolean;
@@ -55,6 +58,11 @@ interface AppStore {
   setTimerContext: (topic: string, taskId: string | null) => void;
   load: () => Promise<void>;
   createTask: (draft: TaskDraft) => Promise<Task>;
+  createReminder: (input: ReminderInput) => Promise<Reminder>;
+  refreshReminders: () => Promise<Reminder[]>;
+  dismissReminder: (id: string) => Promise<void>;
+  snoozeReminder: (id: string) => Promise<void>;
+  completeReminder: (id: string) => Promise<void>;
   updateTask: (patch: TaskUpdatePatch) => Promise<void>;
   deleteTask: (id: string) => Promise<void>;
   selectTask: (id: string | null) => void;
@@ -243,6 +251,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   selectedTaskId: null,
   timer: emptyTimer,
   records: [],
+  reminders: [],
   stats: null,
   aiMessages: [],
   aiOpen: false,
@@ -260,22 +269,45 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
   setTimerContext: (timerTopic, timerTaskId) => set({ timerTopic, timerTaskId }),
   load: async () => {
-    const [tasks, timer, records, stats, theme] = await Promise.all([
+    const [tasks, timer, records, reminders, stats, theme] = await Promise.all([
       api<Task[]>("list_tasks"),
       api<TimerSnapshot>("get_timer_snapshot").catch(() => emptyTimer),
       api<TimerRecord[]>("list_timer_records", { task_id: null }).catch(() => []),
+      api<Reminder[]>("list_reminders").catch(() => []),
       api<DashboardStats>("get_dashboard_stats").catch(() => null),
       api<string | null>("get_setting", { key: "theme" }).catch(() => null),
     ]);
     const normalizedTheme = theme === "dark" ? "dark" : "light";
     document.documentElement.classList.toggle("dark", normalizedTheme === "dark");
-    set({ tasks, timer, records, stats, theme: normalizedTheme });
+    set({ tasks, timer, records, reminders, stats, theme: normalizedTheme });
   },
   createTask: async (draft) => {
     const task = await api<Task>("create_task", { input: draftToInput(draft) });
     await get().load();
     set({ selectedTaskId: task.id });
     return task;
+  },
+  createReminder: async (input) => {
+    const reminder = await api<Reminder>("create_reminder", { input });
+    await get().refreshReminders();
+    return reminder;
+  },
+  refreshReminders: async () => {
+    const reminders = await api<Reminder[]>("list_reminders");
+    set({ reminders });
+    return reminders;
+  },
+  dismissReminder: async (id) => {
+    await api<Reminder>("dismiss_reminder", { id });
+    await get().refreshReminders();
+  },
+  snoozeReminder: async (id) => {
+    await api<Reminder>("snooze_reminder", { id });
+    await get().refreshReminders();
+  },
+  completeReminder: async (id) => {
+    await api<Reminder>("complete_reminder", { id });
+    await get().load();
   },
   updateTask: async (patch) => {
     await api<Task>("update_task", { patch });

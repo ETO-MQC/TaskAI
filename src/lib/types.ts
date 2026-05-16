@@ -3,6 +3,7 @@ export type Urgency = "urgent" | "not_urgent";
 export type Importance = "important" | "not_important";
 export type TaskStatus = "todo" | "done" | "archived";
 export type TimerMode = "positive" | "pomodoro" | "countdown";
+export type ReminderStatus = "pending" | "triggered" | "dismissed" | "snoozed";
 
 export interface Task {
   id: string;
@@ -61,6 +62,22 @@ export interface TimerRecord {
   duration: number;
   note?: string | null;
   created_at: string;
+}
+
+export interface Reminder {
+  id: string;
+  task_id?: string | null;
+  title: string;
+  remind_at: string;
+  status: ReminderStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ReminderInput {
+  task_id?: string | null;
+  title: string;
+  remind_at: string;
 }
 
 export interface AiResponse {
