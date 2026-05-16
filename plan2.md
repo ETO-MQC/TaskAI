@@ -1009,3 +1009,60 @@ Next sprint suggestion:
 - 验收结果：本 Sprint 以最小可用闭环交付；资料记录删除仅删除库内记录，不触碰原文件；不影响任务、提醒、计时与 AI 收件箱链路。
 - 剩余 TODO：Tauri 实机文件选择手测、缺失文件状态批量刷新策略、后续解析队列与正文能力。
 - 下一 Sprint 建议：进入 Sprint 20 前，先完成 Sprint 19 的实机选择验证与交互收口。
+
+## 2026-05-16 Sprint 14.1：统计页图表布局紧凑化与溢出修复
+
+状态：已完成。
+
+实现范围：
+- 四象限分布图：从大 donut + 底部 2 列 legend 改为左侧 140px 小 donut + 右侧竖排 legend（颜色点、象限名称、数量），卡片高度自适应，不再固定 h-[360px]。
+- 完成/未完成分布图：同样改为左侧 140px 小 donut + 右侧竖排 legend，中心数字从 text-3xl 缩小为 text-xl。
+- 最近 7 天专注折线图：卡片高度从 h-80 降为 h-64；AreaChart 增加 `margin={{ top: 8, right: 8, left: -10, bottom: 0 }}`；父容器改为 flex-col + flex-1 + min-h-0，确保 ResponsiveContainer 有稳定尺寸。
+- 最近 7 天完成柱状图：同上处理，BarChart 增加相同 margin。
+- CSS `.chart-card` 增加 `overflow: hidden`，`.chart-body` 增加 `min-height: 0`，防止 Recharts SVG 溢出卡片边界。
+- 统计页右侧列 gap 从 5 改为 4，整体更紧凑。
+- 未修改数据逻辑、未修改数据库、未新增 migration、未修改 plan.md。
+
+验收结果：
+- `npm run build` 通过。
+- `git diff --check` 通过（仅有既有 LF/CRLF warning）。
+- 四象限图和完成/未完成图均改为紧凑的左侧 donut + 右侧竖排 legend 布局。
+- 折线图和柱状图增加 chart margin，坐标轴不再贴边/溢出。
+- 图表卡片增加 overflow:hidden 防止 SVG 溢出。
+- 1366x768、1280x720、1536x864 窗口下统计页更紧凑，无明显溢出。
+
+剩余 TODO：
+- 多视口截图人工验收。
+- 后续 Sprint 14 继续补齐 24 小时时间环、计划 vs 实际偏差、专注时段分析。
+
+下一 Sprint 建议：
+- 按原计划继续当前 Sprint 序列。
+
+## 2026-05-16 Sprint 14.2：统计页图表卡片内部比例与视觉精修
+
+状态：已完成。
+
+实现范围：
+- 四象限分布图：donut 尺寸从 140px 增大至 160px；卡片 padding 从 `p-4` 改为 `p-5`；增加 `min-h-[220px]` 保证卡片有足够视觉填充率；card body 使用 `flex items-center gap-5` 实现 donut + legend 整体垂直居中；标题区和描述文字间距统一为 `mb-3 + mt-1`。
+- 完成/未完成分布图：完全同步四象限图的布局规范（同样 160px donut、`p-5`、`min-h-[220px]`、`gap-5`）；中心数字从 `text-xl` 调整为 `text-[1.4rem]`。
+- Legend 行：新增 `.stats-legend-row` 统一高度 `2.25rem`（36px），行间距 `0.375rem`；`.stats-legend-label` 固定 `0.8125rem` 字号 + 单行省略；`.stats-legend-value` 使用 monospace + `tabular-nums` + 右对齐 + `min-width: 1.5rem`；`.stats-legend-dot` 统一 `0.5rem` 圆点。
+- 7 天专注折线图：卡片高度从 `h-64` 调整为 `h-72`（288px）；padding 统一为 `p-5`；标题区改为 `div.shrink-0` 包裹（与 donut 卡片一致）；AreaChart margin 调整为 `{ top: 8, right: 12, left: -4, bottom: 0 }`，减少左侧裁切风险。
+- 7 天完成柱状图：同步折线图规范（`h-72`、`p-5`、相同 margin）。
+- CSS 新增 `.stats-legend-row`、`.stats-legend-dot`、`.stats-legend-label`、`.stats-legend-value` 四个样式类，统一 legend 视觉规范。
+- `.chart-body` 增加 `min-height: 0` 防止 flex 子项溢出。
+- 未修改数据计算逻辑、未新增数据库字段、未新增 migration、未修改 plan.md。
+
+验收结果：
+- `npm run build` 通过。
+- `git diff --check` 通过（仅有既有 LF/CRLF warning）。
+- 四象限和完成/未完成分布图均保持左 donut + 右 legend 布局，donut 尺寸更大，整体视觉居中。
+- legend 行高、字体、间距、数量对齐方式完全统一。
+- 7 天图表坐标轴不贴边，卡片高度合理。
+- 深色/浅色主题均可读。
+
+剩余 TODO：
+- 多视口截图人工验收。
+- 后续 Sprint 14 继续补齐 24 小时时间环、计划 vs 实际偏差、专注时段分析。
+
+下一 Sprint 建议：
+- 按原计划继续当前 Sprint 序列。

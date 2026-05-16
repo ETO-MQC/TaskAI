@@ -2401,74 +2401,116 @@ function StatsView() {
           <StatCard label="今日专注" value={formatMinutes(todayMinutes)} />
           <StatCard label="今日番茄" value={pomodoroCount} />
           <StatCard label="达成率" value={`${completionRate}%`} />
-          <div className="glass-card chart-card col-span-2 h-80 p-4 md:col-span-3">
-            <h3 className="mb-3 text-sm font-semibold">最近 7 天专注时长</h3>
-            <p className="mb-2 text-xs text-[var(--muted-foreground)]">来自 timer_records，包含当前正在运行的计时。</p>
-            <ResponsiveContainer>
-              <AreaChart data={trend}>
-                <XAxis dataKey="day" tick={{ fill: "var(--muted-foreground)", fontSize: 11 }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fill: "var(--muted-foreground)", fontSize: 11 }} axisLine={false} tickLine={false} />
-                <Tooltip contentStyle={chartTooltipStyle} cursor={{ stroke: "var(--ring)", strokeDasharray: "4 4" }} />
-                <Area type="monotone" dataKey="minutes" name="分钟" stroke="var(--neon-blue)" fill="oklch(0.72 0.2 240 / 0.22)" />
-              </AreaChart>
-            </ResponsiveContainer>
+          <div className="glass-card chart-card col-span-2 flex h-72 flex-col p-5 md:col-span-3">
+            <div className="mb-2 shrink-0">
+              <h3 className="text-sm font-semibold">最近 7 天专注时长</h3>
+              <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">来自 timer_records，包含当前正在运行的计时。</p>
+            </div>
+            <div className="min-h-0 flex-1">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={trend} margin={{ top: 8, right: 12, left: -4, bottom: 0 }}>
+                  <XAxis dataKey="day" tick={{ fill: "var(--muted-foreground)", fontSize: 11 }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fill: "var(--muted-foreground)", fontSize: 11 }} axisLine={false} tickLine={false} />
+                  <Tooltip contentStyle={chartTooltipStyle} cursor={{ stroke: "var(--ring)", strokeDasharray: "4 4" }} />
+                  <Area type="monotone" dataKey="minutes" name="分钟" stroke="var(--neon-blue)" fill="oklch(0.72 0.2 240 / 0.22)" />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
           </div>
-          <div className="glass-card chart-card col-span-2 h-80 p-4 md:col-span-3">
-            <h3 className="mb-3 text-sm font-semibold">最近 7 天完成任务数</h3>
-            <p className="mb-2 text-xs text-[var(--muted-foreground)]">按任务完成更新时间统计，不用示例数据填充。</p>
-            <ResponsiveContainer>
-              <BarChart data={trend}>
-                <XAxis dataKey="day" tick={{ fill: "var(--muted-foreground)", fontSize: 11 }} axisLine={false} tickLine={false} />
-                <YAxis allowDecimals={false} tick={{ fill: "var(--muted-foreground)", fontSize: 11 }} axisLine={false} tickLine={false} />
-                <Tooltip contentStyle={chartTooltipStyle} cursor={{ fill: "oklch(0.7 0.24 295 / 0.08)" }} />
-                <Bar dataKey="completed" name="完成数" fill="var(--neon-violet)" radius={[6, 6, 2, 2]} />
-              </BarChart>
-            </ResponsiveContainer>
+          <div className="glass-card chart-card col-span-2 flex h-72 flex-col p-5 md:col-span-3">
+            <div className="mb-2 shrink-0">
+              <h3 className="text-sm font-semibold">最近 7 天完成任务数</h3>
+              <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">按任务完成更新时间统计，不用示例数据填充。</p>
+            </div>
+            <div className="min-h-0 flex-1">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={trend} margin={{ top: 8, right: 12, left: -4, bottom: 0 }}>
+                  <XAxis dataKey="day" tick={{ fill: "var(--muted-foreground)", fontSize: 11 }} axisLine={false} tickLine={false} />
+                  <YAxis allowDecimals={false} tick={{ fill: "var(--muted-foreground)", fontSize: 11 }} axisLine={false} tickLine={false} />
+                  <Tooltip contentStyle={chartTooltipStyle} cursor={{ fill: "oklch(0.7 0.24 295 / 0.08)" }} />
+                  <Bar dataKey="completed" name="完成数" fill="var(--neon-violet)" radius={[6, 6, 2, 2]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           </div>
         </div>
-        <div className="grid grid-cols-1 gap-5">
-          <div className="glass-card chart-card h-[360px] p-4">
-            <h3 className="mb-3 text-sm font-semibold">四象限任务分布</h3>
-            <p className="mb-2 text-xs text-[var(--muted-foreground)]">由任务的 urgency / importance 计算结果汇总。</p>
-            <div className="relative h-[210px]">
-            <ResponsiveContainer>
-              <PieChart>
-                <Pie data={quadrantData} dataKey="count" nameKey="label" innerRadius="64%" outerRadius="86%" paddingAngle={4} cornerRadius={8} stroke="oklch(1 0 0 / 0.18)" strokeWidth={1}>
-                  {quadrantData.map((entry) => <Cell key={entry.quadrant} fill={quadrantColors[entry.quadrant]} />)}
-                </Pie>
-                <Tooltip contentStyle={chartTooltipStyle} />
-              </PieChart>
-            </ResponsiveContainer>
-            <DonutCenter value={quadrantTotal} label="tasks" />
+        <div className="grid grid-cols-1 gap-4">
+          <div className="glass-card chart-card flex min-h-[220px] flex-col p-5">
+            <div className="mb-3 shrink-0">
+              <h3 className="text-sm font-semibold">四象限任务分布</h3>
+              <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">由任务的 urgency / importance 计算结果汇总。</p>
             </div>
-            <ChartLegend items={quadrantLegend} />
+            <div className="flex min-h-0 flex-1 items-center gap-5">
+              <div className="relative shrink-0" style={{ width: 160, height: 160 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={quadrantData} dataKey="count" nameKey="label" innerRadius="56%" outerRadius="84%" paddingAngle={4} cornerRadius={6} stroke="oklch(1 0 0 / 0.18)" strokeWidth={1}>
+                      {quadrantData.map((entry) => <Cell key={entry.quadrant} fill={quadrantColors[entry.quadrant]} />)}
+                    </Pie>
+                    <Tooltip contentStyle={chartTooltipStyle} />
+                  </PieChart>
+                </ResponsiveContainer>
+                <div className="pointer-events-none absolute inset-0 grid place-items-center">
+                  <div className="text-center">
+                    <div className="font-mono text-[1.4rem] font-semibold leading-none tabular-nums text-[var(--foreground)]">{quadrantTotal}</div>
+                    <div className="mt-0.5 text-[10px] leading-4 text-[var(--muted-foreground)]">tasks</div>
+                  </div>
+                </div>
+              </div>
+              <div className="stats-legend flex min-w-0 flex-1 flex-col">
+                {quadrantLegend.map((item) => (
+                  <div key={item.label} className="stats-legend-row">
+                    <span className="stats-legend-dot" style={{ background: item.color, boxShadow: `0 0 8px ${item.color}` }} />
+                    <span className="stats-legend-label">{item.label}</span>
+                    <span className="stats-legend-value">{item.value}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
-          <div className="glass-card chart-card h-[360px] p-4">
-            <h3 className="mb-3 text-sm font-semibold">完成 / 未完成分布</h3>
-            <p className="mb-2 text-xs text-[var(--muted-foreground)]">展示当前真实任务状态，归档任务不计入未完成。</p>
-            <div className="relative h-[210px]">
-            <ResponsiveContainer>
-              <PieChart>
-                <defs>
-                  <linearGradient id="doneGradient" x1="0" x2="1" y1="0" y2="1">
-                    <stop offset="0%" stopColor="var(--neon-blue)" />
-                    <stop offset="100%" stopColor="var(--neon-violet)" />
-                  </linearGradient>
-                  <linearGradient id="openGradient" x1="0" x2="1" y1="0" y2="1">
-                    <stop offset="0%" stopColor="var(--neon-pink)" />
-                    <stop offset="100%" stopColor="var(--neon-violet)" />
-                  </linearGradient>
-                </defs>
-                <Pie data={statusData} dataKey="value" nameKey="name" innerRadius="64%" outerRadius="86%" paddingAngle={5} cornerRadius={9} stroke="oklch(1 0 0 / 0.18)" strokeWidth={1}>
-                  <Cell fill="url(#doneGradient)" />
-                  <Cell fill="url(#openGradient)" />
-                </Pie>
-                <Tooltip contentStyle={chartTooltipStyle} />
-              </PieChart>
-            </ResponsiveContainer>
-            <DonutCenter value={statusTotal} label="tasks" />
+          <div className="glass-card chart-card flex min-h-[220px] flex-col p-5">
+            <div className="mb-3 shrink-0">
+              <h3 className="text-sm font-semibold">完成 / 未完成分布</h3>
+              <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">展示当前真实任务状态，归档任务不计入未完成。</p>
             </div>
-            <ChartLegend items={statusLegend} />
+            <div className="flex min-h-0 flex-1 items-center gap-5">
+              <div className="relative shrink-0" style={{ width: 160, height: 160 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <defs>
+                      <linearGradient id="doneGradient" x1="0" x2="1" y1="0" y2="1">
+                        <stop offset="0%" stopColor="var(--neon-blue)" />
+                        <stop offset="100%" stopColor="var(--neon-violet)" />
+                      </linearGradient>
+                      <linearGradient id="openGradient" x1="0" x2="1" y1="0" y2="1">
+                        <stop offset="0%" stopColor="var(--neon-pink)" />
+                        <stop offset="100%" stopColor="var(--neon-violet)" />
+                      </linearGradient>
+                    </defs>
+                    <Pie data={statusData} dataKey="value" nameKey="name" innerRadius="56%" outerRadius="84%" paddingAngle={5} cornerRadius={7} stroke="oklch(1 0 0 / 0.18)" strokeWidth={1}>
+                      <Cell fill="url(#doneGradient)" />
+                      <Cell fill="url(#openGradient)" />
+                    </Pie>
+                    <Tooltip contentStyle={chartTooltipStyle} />
+                  </PieChart>
+                </ResponsiveContainer>
+                <div className="pointer-events-none absolute inset-0 grid place-items-center">
+                  <div className="text-center">
+                    <div className="font-mono text-[1.4rem] font-semibold leading-none tabular-nums text-[var(--foreground)]">{statusTotal}</div>
+                    <div className="mt-0.5 text-[10px] leading-4 text-[var(--muted-foreground)]">tasks</div>
+                  </div>
+                </div>
+              </div>
+              <div className="stats-legend flex min-w-0 flex-1 flex-col">
+                {statusLegend.map((item) => (
+                  <div key={item.label} className="stats-legend-row">
+                    <span className="stats-legend-dot" style={{ background: item.color, boxShadow: `0 0 8px ${item.color}` }} />
+                    <span className="stats-legend-label">{item.label}</span>
+                    <span className="stats-legend-value">{item.value}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
           <div className="grid grid-cols-3 gap-3">
             <StatCard label="连续专注" value={`${streak} 天`} />

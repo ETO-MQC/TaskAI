@@ -860,9 +860,11 @@
     background:
       radial-gradient(420px 220px at 50% 0%, oklch(0.7 0.24 295 / 0.11), transparent 70%),
       var(--glass-card-bg);
+    overflow: hidden;
   }
   .chart-body {
     position: relative;
+    min-height: 0;
   }
   .chart-legend {
     display: grid;
@@ -884,6 +886,46 @@
     height: 0.55rem;
     flex: none;
     border-radius: 999px;
+  }
+  /* ── Stats donut legend rows ── */
+  .stats-legend-row {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    height: 2.25rem;
+    border: 1px solid var(--glass-inset-border);
+    border-radius: 0.875rem;
+    background: var(--glass-inset-bg);
+    padding: 0 0.75rem;
+  }
+  .stats-legend-row + .stats-legend-row {
+    margin-top: 0.375rem;
+  }
+  .stats-legend-dot {
+    width: 0.5rem;
+    height: 0.5rem;
+    flex: none;
+    border-radius: 999px;
+  }
+  .stats-legend-label {
+    flex: 1;
+    min-width: 0;
+    font-size: 0.8125rem;
+    line-height: 1.25;
+    color: var(--foreground);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .stats-legend-value {
+    flex: none;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 0.8125rem;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.25;
+    color: var(--foreground);
+    text-align: right;
+    min-width: 1.5rem;
   }
   @media (max-width: 640px) {
     .chart-legend {
