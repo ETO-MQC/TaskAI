@@ -49,11 +49,43 @@ Phase 2 目标是在一期稳定基础上继续增强产品深度：
 
 ## 3. 当前执行 Sprint
 
-当前执行：Sprint 12C.2 计时启动来源与模式锁定修复
+当前执行：Sprint 20A 学习项目一键规划 MVP
 
 状态：已完成
 
 ## 4. Phase 2 Sprint 列表
+
+### Sprint 20A：学习项目一键规划 MVP
+
+产品定位：
+- 让 SmartFocus 从“能接收任务”前进一步，成为学生可直接用自然语言驱动的学习规划入口。
+- 用户只需说清学习目标并提供大纲/目录/考试范围，AI 负责判断信息是否足够、追问、生成结构化项目和每日安排。
+
+实现范围：
+- AI 页保留“对话优先 + 底部工具栏”结构，在 `/ 快捷` 与“添加资料”面板增加轻量入口。
+- 新增学习项目 drawer：支持标题、科目、考试类型、截止日期、每日可用时间、休息日、当前基础、大纲/目录、备注。
+- AI 输出升级为结构化 JSON：`goal / clarification_questions / chapters / daily_plan / review_rounds / adaptive_rules / learnkata_links / warnings`。
+- 计划结果面板展示概览、追问、章节与知识点、每日安排、复习轮次、任务预览、自适应规则、LearnKATA 占位和风险提醒。
+- 用户确认后可将每日计划任务应用到 `tasks`，并写入 `planned_date`；前端不直接写 `quadrant`。
+- 粘贴大纲可保存为 `materials` 中的 `text` 类型资料摘要，`note` 保存低 token 摘要、结构化章节和原文节选；后续 AI 规划复用摘要而非重复发送全文。
+
+保存方式：
+- 复用现有 `materials` 与 `tasks` 表；本 Sprint 未新增字段、未新增 migration。
+- 资料摘要继续以 `metadata_only` 保存，保持“未读取正文”的产品边界。
+
+验收结果：
+- 可从 AI 页进入“建立学习项目 / 粘贴大纲生成计划”流程。
+- AI 在信息不足时返回 `clarification_questions`，信息足够时可输出章节、知识点、难度、优先级、预计耗时与 `daily_plan`。
+- 每日任务可勾选并应用为 `tasks`，`planned_date` 可进入既有日历链路。
+- LearnKATA 仅保留未来联动结构；未做 PDF / Word / PPT 正文解析、OCR、图片读取或外部调用。
+
+剩余 TODO：
+- 真实模型返回的 schema 稳定性还需在真实 API 场景下继续磨合。
+- 学习项目摘要目前复用 `materials.note`，后续如要做更强检索，可在更晚 Sprint 再评估是否需要专门字段。
+- 自适应规则本轮只生成建议，尚未进入自动重排引擎。
+
+下一 Sprint 建议：
+- Sprint 20B 可围绕“学习项目生命周期”继续推进，例如基于完成情况做局部重排、资料摘要的更细粒度复用、以及 LearnKATA 的真实边界联动，但仍应避免直接跨入正文解析。
 
 ### Sprint 17：核心交互稳定与任务页增强
 

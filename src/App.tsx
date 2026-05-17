@@ -56,6 +56,7 @@ import {
   buildInboxCaptureMessage,
   buildMaterialMetadataSummary,
   buildPlanningPrompt,
+  buildTaskLoadSummary,
   routePlanningSkill,
   type InboxCaptureItem,
   type InboxCapturePreview,
@@ -89,6 +90,7 @@ const emptyDraft = {
 type LearningTaskPreview = {
   title?: string;
   description?: string;
+  notes?: string;
   importance?: unknown;
   urgency?: unknown;
   estimated_duration?: unknown;
@@ -99,12 +101,40 @@ type LearningTaskPreview = {
   knowledge_points?: unknown;
 };
 
+type LearningChapterPreview = {
+  title?: string;
+  knowledge_points?: unknown;
+  difficulty?: string;
+  priority?: string;
+  estimated_minutes?: number;
+  reason?: string;
+};
+
+type LearningDailyPlanPreview = {
+  date?: string;
+  title?: string;
+  tasks?: LearningTaskPreview[];
+  total_minutes?: number;
+  note?: string;
+};
+
 type LearningPlanPreview = {
   intent?: string;
   summary?: string;
-  goal?: string;
+  goal?: string | {
+    title?: string;
+    subject?: string;
+    exam_type?: string | null;
+    deadline?: string | null;
+    daily_available_minutes?: number | null;
+    rest_days?: unknown;
+    current_level?: string | null;
+  };
   exam_type?: string | null;
   tasks?: LearningTaskPreview[];
+  chapters?: LearningChapterPreview[];
+  daily_plan?: LearningDailyPlanPreview[];
+  review_rounds?: Array<Record<string, unknown>>;
   events?: Array<Record<string, unknown>>;
   review_plan?: Array<Record<string, unknown>>;
   materials?: Array<Record<string, unknown>>;
@@ -288,12 +318,12 @@ function stringList(value: unknown) {
 }
 
 function toUrgency(value: unknown): Urgency {
-  if (value === "urgent" || value === 1 || value === true || value === "1") return "urgent";
+  if (value === "urgent" || value === "high" || value === 1 || value === true || value === "1") return "urgent";
   return "not_urgent";
 }
 
 function toImportance(value: unknown): Importance {
-  if (value === "important" || value === 1 || value === true || value === "1") return "important";
+  if (value === "important" || value === "high" || value === 1 || value === true || value === "1") return "important";
   return "not_important";
 }
 
@@ -301,7 +331,7 @@ function previewTaskDraft(task: LearningTaskPreview) {
   return {
     ...emptyDraft,
     title: typeof task.title === "string" ? task.title : "未命名学习任务",
-    description: typeof task.description === "string" ? task.description : "",
+    description: typeof task.description === "string" ? task.description : typeof task.notes === "string" ? task.notes : "",
     urgency: toUrgency(task.urgency),
     importance: toImportance(task.importance),
     estimated_duration:
@@ -1104,7 +1134,7 @@ function formatMaterialSize(size?: number | null) {
 }
 
 function AiView() {
-  const { createTask, createReminder, reminders, materials, materialsLoading, materialsError, loadMaterials, addMaterialFiles, addMaterialFolder, updateMaterial, removeMaterialRecord } = useAppStore();
+  const { createTask, createReminder, createMaterial, reminders, materials, materialsLoading, materialsError, loadMaterials, addMaterialFiles, addMaterialFolder, updateMaterial, removeMaterialRecord, tasks: allTasks } = useAppStore();
   const [input, setInput] = useState("");
   const [entries, setEntries] = useState<AiWorkspaceEntry[]>([]);
   const [preferredSkill, setPreferredSkill] = useState<PlanningSkillId | null>(null);
@@ -1121,8 +1151,24 @@ function AiView() {
   const [preview, setPreview] = useState<StructuredPreviewState>({ parsed: null, raw: "", error: null });
   const [selectedTaskIndexes, setSelectedTaskIndexes] = useState<number[]>([]);
   const [applyResults, setApplyResults] = useState<Array<{ title: string; status: "success" | "failed"; message: string }>>([]);
+  const [studyDrawerOpen, setStudyDrawerOpen] = useState(false);
+  const [studyDraft, setStudyDraft] = useState({
+    title: "",
+    subject: "",
+    examType: "期末",
+    deadline: "",
+    dailyMinutes: "",
+    restDays: "",
+    currentLevel: "",
+    outline: "",
+    note: "",
+  });
   const listRef = useRef<HTMLDivElement | null>(null);
-  const tasks = Array.isArray(preview.parsed?.tasks) ? preview.parsed.tasks : [];
+  const tasks = Array.isArray(preview.parsed?.daily_plan)
+    ? preview.parsed.daily_plan.flatMap((day) => Array.isArray(day.tasks) ? day.tasks : [])
+    : Array.isArray(preview.parsed?.tasks)
+      ? preview.parsed.tasks
+      : [];
   const selectedTasks = tasks.filter((_, index) => selectedTaskIndexes.includes(index));
   const pendingReminderCount = reminders.filter((item) => item.status === "pending").length;
   const visibleMaterials = materials.filter((material) => {
@@ -1199,7 +1245,7 @@ function AiView() {
       } else {
         const response = await import("./lib/api").then(({ api }) =>
           api<{ reply?: string; summary?: string }>("send_ai_message", {
-            message: `${buildPlanningPrompt(route.skill)}\n\n${buildMaterialMetadataSummary(materials)}\n\n用户输入：${text}`,
+            message: `${buildPlanningPrompt(route.skill)}\n\n${buildMaterialMetadataSummary(materials)}\n\n${buildTaskLoadSummary(allTasks)}\n\n用户输入：${text}`,
           }),
         );
         updatePreviewFromResponse(response);
@@ -1265,6 +1311,50 @@ function AiView() {
     setApplyResults(results);
   };
 
+  const submitStudyDraft = async () => {
+    const compactOutline = studyDraft.outline.trim();
+    const prompt = [
+      `请为我建立学习项目。`,
+      studyDraft.title && `学习目标标题：${studyDraft.title}`,
+      studyDraft.subject && `科目：${studyDraft.subject}`,
+      studyDraft.examType && `考试类型：${studyDraft.examType}`,
+      studyDraft.deadline && `截止日期：${studyDraft.deadline}`,
+      studyDraft.dailyMinutes && `每天可用时间：${studyDraft.dailyMinutes} 分钟`,
+      studyDraft.restDays && `休息日：${studyDraft.restDays}`,
+      studyDraft.currentLevel && `当前基础：${studyDraft.currentLevel}`,
+      compactOutline && `大纲 / 目录 / 考试范围：\n${compactOutline}`,
+      studyDraft.note && `备注：${studyDraft.note}`,
+    ].filter(Boolean).join("\n");
+    await submit(prompt);
+    setStudyDrawerOpen(false);
+  };
+
+  const saveOutlineMaterial = async () => {
+    if (!studyDraft.outline.trim()) {
+      showToast("先贴一段大纲或目录，我再帮你保存。");
+      return;
+    }
+    const note = JSON.stringify({
+      kind: "learning_outline",
+      summary: preview.parsed?.summary ?? null,
+      chapters: preview.parsed?.chapters ?? [],
+      raw_outline_excerpt: studyDraft.outline.trim().slice(0, 1200),
+      memo: studyDraft.note || null,
+    });
+    await createMaterial({
+      name: studyDraft.title || `${studyDraft.subject || "学习项目"}大纲`,
+      path: `inline://learning-outline/${crypto.randomUUID()}`,
+      file_type: "text",
+      size_bytes: new Blob([studyDraft.outline]).size,
+      subject: studyDraft.subject || null,
+      exam_type: studyDraft.examType || null,
+      tags: ["学习", studyDraft.examType, studyDraft.subject].filter(Boolean),
+      note,
+      status: "metadata_only",
+    });
+    showToast("学习项目摘要已保存到资料库。");
+  };
+
   return (
     <section className="glass-card ai-workspace flex h-full min-h-0 flex-col overflow-hidden p-5">
       <Header title="AI 计划编排" subtitle="用自然语言记录任务、安排计划、调整日程" />
@@ -1328,6 +1418,9 @@ function AiView() {
                         {skill.title}
                       </button>
                     ))}
+                    <button className="glass-inset px-3 py-2 text-left" type="button" onClick={() => { setStudyDrawerOpen(true); setActiveAiToolPanel(null); }}>建立学习项目</button>
+                    <button className="glass-inset px-3 py-2 text-left" type="button" onClick={() => { setStudyDrawerOpen(true); setActiveAiToolPanel(null); }}>粘贴大纲生成计划</button>
+                    <button className="glass-inset px-3 py-2 text-left" type="button" onClick={() => { setPreferredSkill("material_planning"); showToast("可以直接说：根据已有资料生成复习计划。"); setActiveAiToolPanel(null); }}>根据资料生成复习计划</button>
                   </div>
                 )}
                 {activeAiToolPanel === "materials" && (
@@ -1339,6 +1432,7 @@ function AiView() {
                     <div className="flex flex-wrap gap-2">
                       <button className="btn-glow rounded-xl px-3 py-1.5 text-xs" type="button" onClick={async () => { const added = await addMaterialFiles(); showToast(added.length ? `已添加 ${added.length} 个资料记录` : "未选择文件"); }}>添加文件</button>
                       <button className="glass-inset px-3 py-1.5 text-xs" type="button" onClick={async () => { const added = await addMaterialFolder(); showToast(added ? "已添加文件夹记录" : "未选择文件夹"); }}>添加文件夹</button>
+                      <button className="glass-inset px-3 py-1.5 text-xs" type="button" onClick={() => { setStudyDrawerOpen(true); setActiveAiToolPanel(null); }}>粘贴大纲 / 目录</button>
                     </div>
                     <div className="grid grid-cols-[minmax(0,1fr)_110px] gap-2">
                       <input className="field min-w-0" value={materialSearch} onChange={(event) => setMaterialSearch(event.target.value)} placeholder="搜索资料" />
@@ -1469,6 +1563,36 @@ function AiView() {
             />
           </aside>
         )}
+        {studyDrawerOpen && (
+          <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/35 p-3 sm:items-center">
+            <div className="glass-card thin-scrollbar max-h-[88vh] w-full max-w-2xl overflow-y-auto p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="section-label">学习项目</p>
+                  <h3 className="mt-2 font-semibold">粘贴大纲生成计划</h3>
+                </div>
+                <button className="glass-inset px-3 py-1.5 text-xs" type="button" onClick={() => setStudyDrawerOpen(false)}>✕</button>
+              </div>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <input className="field" value={studyDraft.title} onChange={(e) => setStudyDraft((d) => ({ ...d, title: e.target.value }))} placeholder="学习目标标题" />
+                <input className="field" value={studyDraft.subject} onChange={(e) => setStudyDraft((d) => ({ ...d, subject: e.target.value }))} placeholder="科目" />
+                <select className="field" value={studyDraft.examType} onChange={(e) => setStudyDraft((d) => ({ ...d, examType: e.target.value }))}>
+                  <option>期末</option><option>考研</option><option>考公</option><option>课程学习</option><option>其他</option>
+                </select>
+                <input className="field" type="date" value={studyDraft.deadline} onChange={(e) => setStudyDraft((d) => ({ ...d, deadline: e.target.value }))} />
+                <input className="field" inputMode="numeric" value={studyDraft.dailyMinutes} onChange={(e) => setStudyDraft((d) => ({ ...d, dailyMinutes: e.target.value }))} placeholder="每天可用时间（分钟，可选）" />
+                <input className="field" value={studyDraft.restDays} onChange={(e) => setStudyDraft((d) => ({ ...d, restDays: e.target.value }))} placeholder="休息日，如 Sunday（可选）" />
+                <input className="field sm:col-span-2" value={studyDraft.currentLevel} onChange={(e) => setStudyDraft((d) => ({ ...d, currentLevel: e.target.value }))} placeholder="当前基础（可选）" />
+                <textarea className="field min-h-36 sm:col-span-2" value={studyDraft.outline} onChange={(e) => setStudyDraft((d) => ({ ...d, outline: e.target.value }))} placeholder="粘贴课程大纲 / 章节目录 / 考试范围 / 老师重点" />
+                <textarea className="field min-h-20 sm:col-span-2" value={studyDraft.note} onChange={(e) => setStudyDraft((d) => ({ ...d, note: e.target.value }))} placeholder="备注（可选）" />
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button className="btn-glow rounded-xl px-4 py-2 text-sm" type="button" onClick={() => void submitStudyDraft()}>生成学习计划草稿</button>
+                <button className="glass-inset px-4 py-2 text-sm" type="button" onClick={() => void saveOutlineMaterial()}>保存为资料摘要</button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
       {preview.parsed && activeAiToolPanel === "plan" && <button className="ai-drawer-backdrop xl:hidden" type="button" aria-label="关闭计划结果" onClick={() => setActiveAiToolPanel(null)} />}
     </section>
@@ -1535,10 +1659,41 @@ function PlanCanvasBody({ preview, tasks, selectedTaskIndexes, setSelectedTaskIn
   applyResults: Array<{ title: string; status: "success" | "failed"; message: string }>;
 }) {
   if (!preview.parsed) return null;
+  const goal = typeof preview.parsed.goal === "object" && preview.parsed.goal ? preview.parsed.goal : null;
   return (
     <div className="mt-4 space-y-3 text-sm">
-      <PreviewBlock title="计划结果"><p>{preview.parsed.summary || "暂无概览"}</p><p className="mt-2 text-[var(--muted-foreground)]">{preview.parsed.goal || "暂无目标"}</p></PreviewBlock>
+      <PreviewBlock title="计划概览">
+        <p>{preview.parsed.summary || "暂无概览"}</p>
+        {goal ? (
+          <div className="mt-2 text-[var(--muted-foreground)]">
+            <p>{goal.title || "未命名学习项目"} · {goal.subject || "未设科目"} · {goal.exam_type || "未设考试类型"}</p>
+            <p>截止 {goal.deadline || "-"} · 每日 {goal.daily_available_minutes ?? "-"} 分钟 · 基础 {goal.current_level || "-"}</p>
+          </div>
+        ) : <p className="mt-2 text-[var(--muted-foreground)]">{typeof preview.parsed.goal === "string" ? preview.parsed.goal : "暂无目标"}</p>}
+      </PreviewBlock>
       {stringList(preview.parsed.clarification_questions).length > 0 && <PreviewBlock title="待追问信息"><ul className="list-disc space-y-1 pl-5">{stringList(preview.parsed.clarification_questions).map((item) => <li key={item}>{item}</li>)}</ul></PreviewBlock>}
+      <PreviewBlock title={`章节和知识点 (${preview.parsed.chapters?.length ?? 0})`}>
+        <div className="space-y-2">
+          {(preview.parsed.chapters ?? []).map((chapter, index) => (
+            <div key={`${chapter.title ?? "chapter"}-${index}`} className="rounded-xl border border-white/10 p-3">
+              <p className="font-semibold">{chapter.title || "未命名章节"}</p>
+              <p className="mt-1 text-xs text-[var(--muted-foreground)]">难度 {chapter.difficulty || "-"} · 优先级 {chapter.priority || "-"} · 预计 {chapter.estimated_minutes ?? "-"} 分钟</p>
+              <p className="mt-1">{stringList(chapter.knowledge_points).join(" / ") || "暂无知识点"}</p>
+              {chapter.reason && <p className="mt-1 text-xs text-[var(--muted-foreground)]">{chapter.reason}</p>}
+            </div>
+          ))}
+        </div>
+      </PreviewBlock>
+      <PreviewBlock title={`每日安排 (${preview.parsed.daily_plan?.length ?? 0})`}>
+        <div className="space-y-2">
+          {(preview.parsed.daily_plan ?? []).map((day, index) => (
+            <div key={`${day.date ?? "day"}-${index}`} className="rounded-xl border border-white/10 p-3">
+              <p className="font-semibold">{day.date || "-"} · {day.title || "未命名安排"}</p>
+              <p className="mt-1 text-xs text-[var(--muted-foreground)]">总计 {day.total_minutes ?? "-"} 分钟 {day.note ? `· ${day.note}` : ""}</p>
+            </div>
+          ))}
+        </div>
+      </PreviewBlock>
       <PreviewBlock title={`任务 (${tasks.length})`}>
         <div className="space-y-3">
           {tasks.map((task, index) => (
@@ -1557,7 +1712,7 @@ function PlanCanvasBody({ preview, tasks, selectedTaskIndexes, setSelectedTaskIn
         </div>
       </PreviewBlock>
       <RecordListBlock title="日程" items={preview.parsed.events} />
-      <RecordListBlock title="复习计划" items={preview.parsed.review_plan} />
+      <RecordListBlock title="复习轮次" items={preview.parsed.review_rounds ?? preview.parsed.review_plan} />
       <RecordListBlock title="资料" items={preview.parsed.materials} />
       <RecordListBlock title="自适应规则" items={preview.parsed.adaptive_rules} />
       <RecordListBlock title="LearnKATA 联动" items={preview.parsed.learnkata_links} />

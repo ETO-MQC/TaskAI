@@ -68,6 +68,17 @@ interface AppStore {
   loadMaterials: () => Promise<Material[]>;
   addMaterialFiles: () => Promise<Material[]>;
   addMaterialFolder: () => Promise<Material | null>;
+  createMaterial: (input: {
+    name: string;
+    path: string;
+    file_type: string;
+    size_bytes?: number | null;
+    subject?: string | null;
+    exam_type?: string | null;
+    tags?: string[];
+    note?: string | null;
+    status?: Material["status"];
+  }) => Promise<Material>;
   updateMaterial: (patch: MaterialPatch) => Promise<void>;
   removeMaterialRecord: (id: string) => Promise<void>;
   dismissReminder: (id: string) => Promise<void>;
@@ -354,6 +365,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set({ materialsLoading: false, materialsError });
       return null;
     }
+  },
+  createMaterial: async (input) => {
+    const material = await api<Material>("create_material", { input });
+    await get().loadMaterials();
+    return material;
   },
   updateMaterial: async (patch) => {
     await api<Material>("update_material", { patch });

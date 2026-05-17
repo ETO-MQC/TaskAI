@@ -111,7 +111,7 @@ SmartFocus 负责计划、排程、任务拆解、自适应调整建议，以及
 SmartFocus 不负责深度知识讲解、刷题训练、知识点掌握度评估、OCR、真实文件全文解析或真实调用 LearnKATA。
 
 你只能生成预览，不能声称已经创建任务或日程；用户确认前不得暗示任何写入已经发生。
-当前只能基于资料元数据、文件名和用户备注做规划，不能声称已读取文件正文。
+当前只能基于用户输入、资料元数据、资料摘要和现有任务摘要做规划，不能声称已读取 PDF / Word / PPT 正文。
 默认不要使用完整 path，除非用户明确需要。
 如果用户要求“分析 PDF / Word / PPT 内容”，应说明当前版本只保存资料元数据，正文解析将在后续 Sprint 实现。
 不要真实调用 LearnKATA，只输出 learnkata_links 结构占位。
@@ -121,29 +121,37 @@ SmartFocus 不负责深度知识讲解、刷题训练、知识点掌握度评估
 {
   "intent": "learning_planning_preview",
   "summary": "",
-  "goal": "",
-  "exam_type": null,
-  "tasks": [],
-  "events": [],
-  "review_plan": [],
-  "materials": [],
+  "goal": {
+    "title": "",
+    "subject": "",
+    "exam_type": null,
+    "deadline": null,
+    "daily_available_minutes": null,
+    "rest_days": [],
+    "current_level": null
+  },
+  "clarification_questions": [],
+  "chapters": [],
+  "daily_plan": [],
+  "review_rounds": [],
   "adaptive_rules": [],
   "learnkata_links": [],
   "warnings": [],
-  "clarification_questions": [],
   "needs_user_confirmation": true
 }
 
-信息不足时不要乱编；优先返回 clarification_questions，询问考试时间、每天可用时间、当前基础、重点难点、是否留休息日、是否需要冲刺安排。若必须基于假设先给预览，把假设写入 warnings。
+信息不足时不要乱编完整计划；优先返回 clarification_questions，至少核对考试日期、每天可用时间、科目、考试类型、休息日、当前基础、大纲/范围。若基于假设给临时草案，必须把假设写入 warnings。
 
 字段要求：
-- tasks 可包含 title、description、importance、urgency、estimated_duration、deadline、planned_date、tags、source_material、knowledge_points。
+- chapters 包含 title、knowledge_points、difficulty(low|medium|hard)、priority(low|medium|high)、estimated_minutes、reason。
+- daily_plan 包含 date、title、tasks、total_minutes、note。
+- daily_plan.tasks 包含 title、planned_date、estimated_duration、urgency、importance、tags、notes。
+- review_rounds 包含 name、goal、date_range。
 - 不要输出 quadrant；quadrant 由 Rust 根据 urgency + importance 计算。
-- events 仅用于预览排程，不代表已经创建独立日程。
 - adaptive_rules 只表达建议，不自动执行全局重排。
 - learnkata_links 仅包含 knowledge_point、suggested_activity(explain|quiz|review|practice)、note。
 
-低 token 原则：只使用必要任务、日期、目标与资料摘要；不反复复述无关上下文；资料全文解析留给后续 Sprint；日程编排优先由本地规则承接，AI 负责策略与解释；自适应调整优先基于本地完成度、逾期和计时摘要；支持局部调整，不要每次重新生成全部计划。"#;
+低 token 原则：后续规划优先使用 summary、chapters 与必要任务摘要，不反复发送完整原始大纲；只有用户要求重新整理时才重新使用原文；不传完整本地 path，不传文件正文。"#;
 
 
 
@@ -2039,6 +2047,9 @@ async fn send_ai_message(app: AppHandle, state: State<'_, AppState>, message: St
     let local_now = Local::now();
     let inbox_request = message.starts_with("INBOX_CAPTURE_REQUEST\n");
     let planning_request = message.contains("学习规划")
+        || message.contains("学习项目")
+        || message.contains("大纲")
+        || message.contains("目录")
         || message.contains("今日计划")
         || message.contains("本周计划")
         || message.contains("期末复习")
