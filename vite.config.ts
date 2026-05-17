@@ -6,8 +6,8 @@ export default defineConfig({
   plugins: [react()],
   clearScreen: false,
   server: {
-    host: "127.0.0.1",
-    port: 1438,
+    host: process.env.SMARTFOCUS_DEV_HOST || "127.0.0.1",
+    port: Number(process.env.SMARTFOCUS_DEV_PORT || 1438),
     strictPort: true,
   },
 });

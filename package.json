@@ -5,11 +5,11 @@
   "private": true,
   "main": "src/main.tsx",
   "scripts": {
-    "dev": "vite",
+    "dev": "node scripts/dev.mjs",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri",
-    "tauri:dev": "tauri dev",
+    "tauri": "node scripts/tauri.mjs",
+    "tauri:dev": "node scripts/tauri.mjs dev",
     "tauri:build": "tauri build",
     "test": "npm run build"
   },
