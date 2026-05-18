@@ -25,6 +25,23 @@ interface AiMessage {
   clarification?: string | null;
 }
 
+export type AiWorkspaceEntry =
+  | { id: string; role: "user" | "assistant"; kind: "message"; content: string }
+  | {
+      id: string;
+      role: "assistant";
+      kind: "inbox";
+      drafts: any[];
+      warnings: string[];
+      results: Array<{ title: string; status: "success" | "failed"; message: string }>;
+    };
+
+type StructuredPreviewSnapshot = {
+  parsed: Record<string, unknown> | null;
+  raw: string;
+  error: string | null;
+};
+
 interface TaskDraft {
   title: string;
   description: string;
@@ -51,6 +68,11 @@ interface AppStore {
   materialsError: string | null;
   stats: DashboardStats | null;
   aiMessages: AiMessage[];
+  aiWorkspaceEntries: AiWorkspaceEntry[];
+  aiWorkspaceInput: string;
+  aiPreferredSkill: string | null;
+  aiStructuredPreview: StructuredPreviewSnapshot;
+  aiPlanCanvasOpen: boolean;
   aiOpen: boolean;
   linkPanelOpen: boolean;
   pendingRecord: TimerRecord | null;
@@ -95,9 +117,50 @@ interface AppStore {
   confirmRecordLink: (taskId?: string | null) => Promise<void>;
   sendAi: (message: string) => Promise<AiResponse>;
   appendAiStream: (delta: string) => void;
+  setAiWorkspaceEntries: (entries: AiWorkspaceEntry[] | ((entries: AiWorkspaceEntry[]) => AiWorkspaceEntry[])) => void;
+  setAiWorkspaceInput: (value: string) => void;
+  setAiPreferredSkill: (value: string | null) => void;
+  setAiStructuredPreview: (value: StructuredPreviewSnapshot) => void;
+  setAiPlanCanvasOpen: (value: boolean) => void;
 }
 
 const emptyTimer: TimerSnapshot = { active: false, elapsed_seconds: 0, paused: false };
+const aiWorkspaceStorageKey = "smartfocus_ai_workspace";
+const aiMessagesStorageKey = "smartfocus_ai_messages";
+
+function readStoredJson<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function persistAiWorkspace(snapshot: {
+  entries: AiWorkspaceEntry[];
+  input: string;
+  preferredSkill: string | null;
+  preview: StructuredPreviewSnapshot;
+  planCanvasOpen: boolean;
+}) {
+  localStorage.setItem(aiWorkspaceStorageKey, JSON.stringify({
+    ...snapshot,
+    entries: snapshot.entries.slice(-50),
+  }));
+}
+
+function persistAiMessages(messages: AiMessage[]) {
+  localStorage.setItem(aiMessagesStorageKey, JSON.stringify(messages.slice(-50)));
+}
+
+const storedAiWorkspace = readStoredJson(aiWorkspaceStorageKey, {
+  entries: [] as AiWorkspaceEntry[],
+  input: "",
+  preferredSkill: null as string | null,
+  preview: { parsed: null, raw: "", error: null } as StructuredPreviewSnapshot,
+  planCanvasOpen: false,
+});
 
 function draftToInput(draft: TaskDraft): TaskInput {
   return {
@@ -277,7 +340,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
   materialsLoading: false,
   materialsError: null,
   stats: null,
-  aiMessages: [],
+  aiMessages: readStoredJson<AiMessage[]>(aiMessagesStorageKey, []).slice(-50),
+  aiWorkspaceEntries: storedAiWorkspace.entries.slice(-50),
+  aiWorkspaceInput: storedAiWorkspace.input,
+  aiPreferredSkill: storedAiWorkspace.preferredSkill,
+  aiStructuredPreview: storedAiWorkspace.preview,
+  aiPlanCanvasOpen: storedAiWorkspace.planCanvasOpen,
   aiOpen: false,
   linkPanelOpen: false,
   pendingRecord: null,
@@ -437,17 +505,16 @@ export const useAppStore = create<AppStore>((set, get) => ({
     await get().load();
   },
   sendAi: async (message) => {
-    set({
-      aiMessages: [
-        ...get().aiMessages,
-        { role: "user", content: message },
-        { role: "assistant", content: "" },
-      ],
-    });
+    const nextMessages = [
+      ...get().aiMessages,
+      { role: "user", content: message } as AiMessage,
+      { role: "assistant", content: "" } as AiMessage,
+    ].slice(-50);
+    set({ aiMessages: nextMessages });
+    persistAiMessages(nextMessages);
     const response = await executeFrontendAiIntent(await api<AiResponse>("send_ai_message", { message }));
     await get().load();
-    set({
-      aiMessages: get().aiMessages.map((item, index, list) =>
+    const updatedMessages = get().aiMessages.map((item, index, list) =>
         index === list.length - 1 && item.role === "assistant"
           ? {
               ...item,
@@ -455,18 +522,71 @@ export const useAppStore = create<AppStore>((set, get) => ({
               clarification: response.needs_clarification ? response.clarification : null,
             }
           : item,
-      ),
-    });
+      );
+    set({ aiMessages: updatedMessages });
+    persistAiMessages(updatedMessages);
     return response;
   },
   appendAiStream: (delta) => {
     if (!delta) return;
-    set({
-      aiMessages: get().aiMessages.map((item, index, list) =>
+    const updatedMessages = get().aiMessages.map((item, index, list) =>
         index === list.length - 1 && item.role === "assistant"
           ? { ...item, content: `${item.content}${delta}` }
           : item,
-      ),
+      );
+    set({ aiMessages: updatedMessages });
+    persistAiMessages(updatedMessages);
+  },
+  setAiWorkspaceEntries: (value) => {
+    const entries = typeof value === "function" ? value(get().aiWorkspaceEntries) : value;
+    const sliced = entries.slice(-50);
+    set({ aiWorkspaceEntries: sliced });
+    persistAiWorkspace({
+      entries: sliced,
+      input: get().aiWorkspaceInput,
+      preferredSkill: get().aiPreferredSkill,
+      preview: get().aiStructuredPreview,
+      planCanvasOpen: get().aiPlanCanvasOpen,
+    });
+  },
+  setAiWorkspaceInput: (aiWorkspaceInput) => {
+    set({ aiWorkspaceInput });
+    persistAiWorkspace({
+      entries: get().aiWorkspaceEntries,
+      input: aiWorkspaceInput,
+      preferredSkill: get().aiPreferredSkill,
+      preview: get().aiStructuredPreview,
+      planCanvasOpen: get().aiPlanCanvasOpen,
+    });
+  },
+  setAiPreferredSkill: (aiPreferredSkill) => {
+    set({ aiPreferredSkill });
+    persistAiWorkspace({
+      entries: get().aiWorkspaceEntries,
+      input: get().aiWorkspaceInput,
+      preferredSkill: aiPreferredSkill,
+      preview: get().aiStructuredPreview,
+      planCanvasOpen: get().aiPlanCanvasOpen,
+    });
+  },
+  setAiStructuredPreview: (aiStructuredPreview) => {
+    set({ aiStructuredPreview });
+    persistAiWorkspace({
+      entries: get().aiWorkspaceEntries,
+      input: get().aiWorkspaceInput,
+      preferredSkill: get().aiPreferredSkill,
+      preview: aiStructuredPreview,
+      planCanvasOpen: get().aiPlanCanvasOpen,
+    });
+  },
+  setAiPlanCanvasOpen: (aiPlanCanvasOpen) => {
+    set({ aiPlanCanvasOpen });
+    persistAiWorkspace({
+      entries: get().aiWorkspaceEntries,
+      input: get().aiWorkspaceInput,
+      preferredSkill: get().aiPreferredSkill,
+      preview: get().aiStructuredPreview,
+      planCanvasOpen: aiPlanCanvasOpen,
     });
   },
 }));

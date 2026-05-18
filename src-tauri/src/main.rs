@@ -133,6 +133,7 @@ SmartFocus 不负责深度知识讲解、刷题训练、知识点掌握度评估
   "clarification_questions": [],
   "chapters": [],
   "daily_plan": [],
+  "plan_scope": "full_plan",
   "review_rounds": [],
   "adaptive_rules": [],
   "learnkata_links": [],
@@ -150,6 +151,10 @@ SmartFocus 不负责深度知识讲解、刷题训练、知识点掌握度评估
 - 不要输出 quadrant；quadrant 由 Rust 根据 urgency + importance 计算。
 - adaptive_rules 只表达建议，不自动执行全局重排。
 - learnkata_links 仅包含 knowledge_point、suggested_activity(explain|quiz|review|practice)、note。
+
+plan_scope values: full_plan | first_week_only | needs_continue.
+If information is sufficient, daily_plan must cover the full revision period before the exam and every chapter must appear in at least one task.
+If only a partial plan is returned, use a non-full plan_scope and add a warning that the plan is partial and does not cover everything.
 
 低 token 原则：后续规划优先使用 summary、chapters 与必要任务摘要，不反复发送完整原始大纲；只有用户要求重新整理时才重新使用原文；不传完整本地 path，不传文件正文。"#;
 

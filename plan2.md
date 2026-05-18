@@ -1098,3 +1098,29 @@ Next sprint suggestion:
 
 下一 Sprint 建议：
 - 按原计划继续当前 Sprint 序列。
+
+### Sprint 20A.1: AI learning-planning usability hotfix
+
+Scope: hotfixes for the flow from learning-project planning to preview, task application, and calendar review. This did not enter Sprint 20B and did not add auto-rescheduling, OCR, Office/PDF body parsing, or real LearnKATA calls.
+
+Implemented:
+- Full-plan coverage detection: added `plan_scope`; Plan Canvas now shows total chapters, arranged chapters, missing chapters, covered date range, and whether coverage is complete, with warnings for partial plans.
+- AI session retention: AI workspace messages, input draft, preferredSkill, structured preview, and plan-drawer state now live in Zustand + localStorage, capped at the latest 50 records.
+- Duplicate-safe task application: duplicates are detected from title + planned_date + incomplete status, with AI-plan source tags preferred when available; suspected duplicates are unchecked by default, labeled as likely existing, require confirmation before forced creation, and report created / skipped_duplicate / failed.
+- Task page manual-create form: collapsed by default while preserving the existing create flow.
+- Batch toolbar clarity: labels now state selected count, target date, postpone, mark-for-review, complete, importance, urgency, and apply-priority; disabled state now explains that tasks must be selected first.
+- API key state: settings now show saved status without exposing the full key and show a save toast.
+- Responsive AI bubbles: Workbench bubbles now size to content, stay capped in width, and continue scrolling internally instead of expanding the whole card.
+
+Acceptance:
+- `npm run build` passed.
+- `cargo test` passed.
+- `git diff --check` passed.
+- `plan.md` was not modified.
+
+Remaining TODO:
+- Re-check `plan_scope` and chapter-coverage matching with real long-horizon plans, especially when task titles do not repeat chapter titles exactly.
+- Later consider a more stable AI-plan source identifier to reduce heuristic duplicate-detection edge cases.
+
+Next sprint suggestion:
+- Sprint 20B is reasonable next, but first do a small manual regression set with real 2-4 week study plans to confirm the hotfix chain is stable.

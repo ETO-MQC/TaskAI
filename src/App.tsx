@@ -39,7 +39,7 @@ import {
 } from "recharts";
 import dayjs from "dayjs";
 import isBetween from "dayjs/plugin/isBetween";
-import { TaskUpdatePatch, useAppStore } from "./lib/store";
+import { TaskUpdatePatch, useAppStore, type AiWorkspaceEntry } from "./lib/store";
 import type { Importance, Material, Priority, Reminder, Task, TimerMode, Urgency } from "./lib/types";
 import {
   formatMinutes,
@@ -143,6 +143,7 @@ type LearningPlanPreview = {
   warnings?: unknown[];
   clarification_questions?: unknown[];
   needs_user_confirmation?: boolean;
+  plan_scope?: "full_plan" | "first_week_only" | "needs_continue" | string;
 };
 
 type StructuredPreviewState = {
@@ -152,11 +153,6 @@ type StructuredPreviewState = {
 };
 
 type InboxDraft = InboxCaptureItem & { edited?: boolean };
-type AiWorkspaceEntry =
-  | { id: string; role: "user" | "assistant"; kind: "message"; content: string }
-  | { id: string; role: "assistant"; kind: "inbox"; drafts: InboxDraft[]; warnings: string[]; results: Array<{ title: string; status: "success" | "failed"; message: string }> };
-
-
 function defaultTaskDate() {
   return dayjs().format("YYYY-MM-DD");
 }
@@ -342,6 +338,30 @@ function previewTaskDraft(task: LearningTaskPreview) {
     planned_date: typeof task.planned_date === "string" ? task.planned_date : "",
     tags: stringList(task.tags).join(", "),
   };
+}
+
+function normalizeText(value?: string | null) {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function parseTaskTags(task: Task) {
+  return parseTags(task).map((tag) => tag.toLowerCase());
+}
+
+function learningPlanSourceTag(preview: LearningPlanPreview | null) {
+  const goal = typeof preview?.goal === "object" && preview.goal ? preview.goal : null;
+  const title = goal?.title || (typeof preview?.goal === "string" ? preview.goal : "") || preview?.summary || "learning-plan";
+  return `ai_learning_plan:${title.trim().toLowerCase().replace(/\s+/g, "_").slice(0, 80)}`;
+}
+
+function taskDuplicateMatch(existing: Task, draft: ReturnType<typeof previewTaskDraft>, sourceTag: string) {
+  if (existing.status === "done" || existing.status === "archived") return false;
+  if (normalizeText(existing.title) !== normalizeText(draft.title)) return false;
+  if ((existing.planned_date ?? "").slice(0, 10) !== (draft.planned_date ?? "").slice(0, 10)) return false;
+  const existingTags = parseTaskTags(existing);
+  const draftTags = draft.tags.split(",").map((tag) => tag.trim().toLowerCase()).filter(Boolean);
+  if (existingTags.includes(sourceTag) || draftTags.some((tag) => existingTags.includes(tag))) return true;
+  return true;
 }
 
 function useToasts() {
@@ -1064,7 +1084,7 @@ function AiPanel({
           </div>
         ) : (
           aiMessages.map((message, index) => (
-            <div key={index} className={`rounded-xl p-4 text-sm leading-6 [transition:var(--transition-smooth)] ${message.role === "user" ? "btn-glow ml-12 text-[var(--primary-foreground)]" : "glass-inset mr-12"}`}>
+            <div key={index} className={`w-fit max-w-[78%] rounded-xl p-4 text-sm leading-6 break-words [transition:var(--transition-smooth)] ${message.role === "user" ? "btn-glow ml-auto text-[var(--primary-foreground)]" : "glass-inset mr-auto"}`}>
               {message.content || (message.role === "assistant" ? "正在思考..." : "")}
               {message.clarification && <div className="glass-inset mt-2 p-2 text-[var(--neon-amber)]">{message.clarification}</div>}
             </div>
@@ -1134,23 +1154,37 @@ function formatMaterialSize(size?: number | null) {
 }
 
 function AiView() {
-  const { createTask, createReminder, createMaterial, reminders, materials, materialsLoading, materialsError, loadMaterials, addMaterialFiles, addMaterialFolder, updateMaterial, removeMaterialRecord, tasks: allTasks } = useAppStore();
-  const [input, setInput] = useState("");
-  const [entries, setEntries] = useState<AiWorkspaceEntry[]>([]);
-  const [preferredSkill, setPreferredSkill] = useState<PlanningSkillId | null>(null);
+  const {
+    createTask, createReminder, createMaterial, reminders, materials, materialsLoading, materialsError, loadMaterials,
+    addMaterialFiles, addMaterialFolder, updateMaterial, removeMaterialRecord, tasks: allTasks,
+    aiWorkspaceInput: input, setAiWorkspaceInput: setInput,
+    aiWorkspaceEntries: entries, setAiWorkspaceEntries: setEntries,
+    aiPreferredSkill, setAiPreferredSkill,
+    aiStructuredPreview, setAiStructuredPreview,
+    aiPlanCanvasOpen, setAiPlanCanvasOpen,
+  } = useAppStore();
+  const preferredSkill = aiPreferredSkill as PlanningSkillId | null;
   const [materialSearch, setMaterialSearch] = useState("");
   const [materialStatusFilter, setMaterialStatusFilter] = useState<"all" | Material["status"]>("all");
   const [editingMaterialId, setEditingMaterialId] = useState<string | null>(null);
   const [materialDraft, setMaterialDraft] = useState({ subject: "", tags: "", note: "" });
   const [lastRoute, setLastRoute] = useState(routePlanningSkill(""));
-  const [activeAiToolPanel, setActiveAiToolPanel] = useState<"materials" | "plan" | "reminders" | "more" | "quick" | null>(null);
+  const [activeAiToolPanel, setActiveAiToolPanelState] = useState<"materials" | "plan" | "reminders" | "more" | "quick" | null>(aiPlanCanvasOpen ? "plan" : null);
+  const setActiveAiToolPanel = (value: "materials" | "plan" | "reminders" | "more" | "quick" | null | ((current: "materials" | "plan" | "reminders" | "more" | "quick" | null) => "materials" | "plan" | "reminders" | "more" | "quick" | null)) => {
+    setActiveAiToolPanelState((current) => {
+      const next = typeof value === "function" ? value(current) : value;
+      setAiPlanCanvasOpen(next === "plan");
+      return next;
+    });
+  };
   const toggleAiToolPanel = (panel: "materials" | "plan" | "reminders" | "more" | "quick") => {
     setActiveAiToolPanel((current) => (current === panel ? null : panel));
   };
   const [loading, setLoading] = useState(false);
-  const [preview, setPreview] = useState<StructuredPreviewState>({ parsed: null, raw: "", error: null });
+  const preview = aiStructuredPreview as StructuredPreviewState;
+  const setPreview = setAiStructuredPreview as (value: StructuredPreviewState) => void;
   const [selectedTaskIndexes, setSelectedTaskIndexes] = useState<number[]>([]);
-  const [applyResults, setApplyResults] = useState<Array<{ title: string; status: "success" | "failed"; message: string }>>([]);
+  const [applyResults, setApplyResults] = useState<Array<{ title: string; status: "success" | "skipped_duplicate" | "failed"; message: string }>>([]);
   const [studyDrawerOpen, setStudyDrawerOpen] = useState(false);
   const [studyDraft, setStudyDraft] = useState({
     title: "",
@@ -1209,7 +1243,17 @@ function AiView() {
       parsed.error = null;
     }
     setPreview(parsed);
-    setSelectedTaskIndexes(Array.isArray(parsed.parsed?.tasks) ? parsed.parsed.tasks.map((_, index) => index) : []);
+    const flattened = Array.isArray(parsed.parsed?.daily_plan)
+      ? parsed.parsed.daily_plan.flatMap((day) => Array.isArray(day.tasks) ? day.tasks : [])
+      : Array.isArray(parsed.parsed?.tasks)
+        ? parsed.parsed.tasks
+        : [];
+    const sourceTag = learningPlanSourceTag(parsed.parsed);
+    setSelectedTaskIndexes(
+      flattened
+        .map((task, index) => allTasks.some((existing) => taskDuplicateMatch(existing, previewTaskDraft(task), sourceTag)) ? -1 : index)
+        .filter((index) => index >= 0),
+    );
     setApplyResults([]);
   };
 
@@ -1257,7 +1301,7 @@ function AiView() {
       addEntry({ id: crypto.randomUUID(), role: "assistant", kind: "message", content: error instanceof Error ? error.message : "这次处理失败了，请再试一次。" });
     } finally {
       setLoading(false);
-      setPreferredSkill(null);
+      setAiPreferredSkill(null);
     }
   };
 
@@ -1298,11 +1342,17 @@ function AiView() {
   const applySelectedTasks = async () => {
     if (selectedTasks.length === 0) return;
     if (!window.confirm(`确认将 ${selectedTasks.length} 个勾选任务应用到任务列表吗？只会写入现有字段，不会直接写入 quadrant。`)) return;
-    const results: Array<{ title: string; status: "success" | "failed"; message: string }> = [];
+    const results: Array<{ title: string; status: "success" | "skipped_duplicate" | "failed"; message: string }> = [];
+    const sourceTag = learningPlanSourceTag(preview.parsed);
     for (const task of selectedTasks) {
       const draft = previewTaskDraft(task);
+      const duplicate = allTasks.find((existing) => taskDuplicateMatch(existing, draft, sourceTag));
       try {
-        await createTask(draft);
+        if (duplicate && !window.confirm(`“${draft.title}” 可能已存在，仍要强制创建吗？`)) {
+          results.push({ title: draft.title, status: "skipped_duplicate", message: "检测到可能重复，已跳过" });
+          continue;
+        }
+        await createTask({ ...draft, tags: [draft.tags, sourceTag].filter(Boolean).join(", ") });
         results.push({ title: draft.title, status: "success", message: "应用成功" });
       } catch (error) {
         results.push({ title: draft.title, status: "failed", message: error instanceof Error ? error.message : "创建失败" });
@@ -1404,14 +1454,14 @@ function AiView() {
               <div className="ai-tool-panel ai-popover glass-card absolute bottom-[84px] left-0 z-[60] w-[min(360px,calc(100vw-48px))] p-3 text-sm">
                 {activeAiToolPanel === "quick" && (
                   <div className="grid gap-2 sm:grid-cols-2">
-                    <button className={`glass-inset px-3 py-2 text-left ${preferredSkill == null ? "btn-glow" : ""}`} type="button" onClick={() => { setPreferredSkill(null); showToast("已切回自动判断。"); setActiveAiToolPanel(null); }}>
+                    <button className={`glass-inset px-3 py-2 text-left ${preferredSkill == null ? "btn-glow" : ""}`} type="button" onClick={() => { setAiPreferredSkill(null); showToast("已切回自动判断。"); setActiveAiToolPanel(null); }}>
                       自动判断
                     </button>
                     {Object.entries(AI_PLANNING_SKILLS).map(([id, skill]) => (
                       <button key={id} className={`glass-inset px-3 py-2 text-left ${preferredSkill === id ? "btn-glow" : ""}`} type="button" onClick={() => {
                         const nextSkill = id as PlanningSkillId;
                         const shouldClear = preferredSkill === nextSkill;
-                        setPreferredSkill(shouldClear ? null : nextSkill);
+                        setAiPreferredSkill(shouldClear ? null : nextSkill);
                         showToast(shouldClear ? "已切回自动判断。" : `已选择：${skill.title}。在下一条消息中生效。`);
                         setActiveAiToolPanel(null);
                       }}>
@@ -1420,7 +1470,7 @@ function AiView() {
                     ))}
                     <button className="glass-inset px-3 py-2 text-left" type="button" onClick={() => { setStudyDrawerOpen(true); setActiveAiToolPanel(null); }}>建立学习项目</button>
                     <button className="glass-inset px-3 py-2 text-left" type="button" onClick={() => { setStudyDrawerOpen(true); setActiveAiToolPanel(null); }}>粘贴大纲生成计划</button>
-                    <button className="glass-inset px-3 py-2 text-left" type="button" onClick={() => { setPreferredSkill("material_planning"); showToast("可以直接说：根据已有资料生成复习计划。"); setActiveAiToolPanel(null); }}>根据资料生成复习计划</button>
+                    <button className="glass-inset px-3 py-2 text-left" type="button" onClick={() => { setAiPreferredSkill("material_planning"); showToast("可以直接说：根据已有资料生成复习计划。"); setActiveAiToolPanel(null); }}>根据资料生成复习计划</button>
                   </div>
                 )}
                 {activeAiToolPanel === "materials" && (
@@ -1656,10 +1706,28 @@ function PlanCanvasBody({ preview, tasks, selectedTaskIndexes, setSelectedTaskIn
   setSelectedTaskIndexes: Dispatch<SetStateAction<number[]>>;
   selectedTasks: LearningTaskPreview[];
   applySelectedTasks: () => Promise<void>;
-  applyResults: Array<{ title: string; status: "success" | "failed"; message: string }>;
+  applyResults: Array<{ title: string; status: "success" | "skipped_duplicate" | "failed"; message: string }>;
 }) {
   if (!preview.parsed) return null;
   const goal = typeof preview.parsed.goal === "object" && preview.parsed.goal ? preview.parsed.goal : null;
+  const chapterTitles = (preview.parsed.chapters ?? []).map((chapter) => chapter.title?.trim()).filter(Boolean) as string[];
+  const arrangedChapterTitles = new Set(
+    (preview.parsed.daily_plan ?? [])
+      .flatMap((day) => day.tasks ?? [])
+      .flatMap((task) => [task.title, ...stringList(task.knowledge_points)])
+      .filter(Boolean)
+      .flatMap((value) => chapterTitles.filter((title) => `${value}`.includes(title))),
+  );
+  const coverageDates = (preview.parsed.daily_plan ?? []).map((day) => day.date).filter(Boolean) as string[];
+  const coverageStart = coverageDates.length ? [...coverageDates].sort()[0] : "-";
+  const sortedCoverageDates = [...coverageDates].sort();
+  const coverageEnd = coverageDates.length ? sortedCoverageDates[sortedCoverageDates.length - 1] ?? "-" : "-";
+  const totalChapters = chapterTitles.length;
+  const arrangedCount = arrangedChapterTitles.size;
+  const missingCount = Math.max(0, totalChapters - arrangedCount);
+  const completeCoverage = totalChapters > 0 && missingCount === 0 && preview.parsed.plan_scope === "full_plan";
+  const sourceTag = learningPlanSourceTag(preview.parsed);
+  const existingTasks = useAppStore.getState().tasks;
   return (
     <div className="mt-4 space-y-3 text-sm">
       <PreviewBlock title="计划概览">
@@ -1670,6 +1738,17 @@ function PlanCanvasBody({ preview, tasks, selectedTaskIndexes, setSelectedTaskIn
             <p>截止 {goal.deadline || "-"} · 每日 {goal.daily_available_minutes ?? "-"} 分钟 · 基础 {goal.current_level || "-"}</p>
           </div>
         ) : <p className="mt-2 text-[var(--muted-foreground)]">{typeof preview.parsed.goal === "string" ? preview.parsed.goal : "暂无目标"}</p>}
+      </PreviewBlock>
+      <PreviewBlock title="覆盖检查">
+        <div className="grid gap-2 sm:grid-cols-2">
+          <p>章节总数：{totalChapters}</p>
+          <p>已安排章节数：{arrangedCount}</p>
+          <p>未安排章节数：{missingCount}</p>
+          <p>覆盖日期范围：{coverageStart} ～ {coverageEnd}</p>
+          <p className="sm:col-span-2">是否完整覆盖：{completeCoverage ? "是" : "否"}</p>
+        </div>
+        {!completeCoverage && <p className="mt-2 text-[var(--neon-amber)]">当前计划未覆盖全部章节，建议继续生成后续计划。</p>}
+        {preview.parsed.plan_scope && preview.parsed.plan_scope !== "full_plan" && <p className="mt-2 text-[var(--neon-amber)]">当前只是部分计划，不要误以为已覆盖全部。</p>}
       </PreviewBlock>
       {stringList(preview.parsed.clarification_questions).length > 0 && <PreviewBlock title="待追问信息"><ul className="list-disc space-y-1 pl-5">{stringList(preview.parsed.clarification_questions).map((item) => <li key={item}>{item}</li>)}</ul></PreviewBlock>}
       <PreviewBlock title={`章节和知识点 (${preview.parsed.chapters?.length ?? 0})`}>
@@ -1705,6 +1784,7 @@ function PlanCanvasBody({ preview, tasks, selectedTaskIndexes, setSelectedTaskIn
                   <p className="mt-1 text-[var(--muted-foreground)]">{task.description || "暂无说明"}</p>
                   <p className="mt-2 text-xs text-[var(--muted-foreground)]">紧急度 {`${task.urgency ?? "-"}`} · 重要性 {`${task.importance ?? "-"}`} · 预计 {`${task.estimated_duration ?? "-"} 分钟`}</p>
                   <p className="mt-1 text-xs text-[var(--muted-foreground)]">计划日期 {task.planned_date || "-"} · 截止时间 {task.deadline || "-"}</p>
+                  {existingTasks.some((existing) => taskDuplicateMatch(existing, previewTaskDraft(task), sourceTag)) && <p className="mt-2 text-xs text-[var(--neon-amber)]">可能已存在</p>}
                 </div>
               </div>
             </label>
@@ -1722,7 +1802,14 @@ function PlanCanvasBody({ preview, tasks, selectedTaskIndexes, setSelectedTaskIn
         <button className="glass-inset px-4 py-2 text-sm" type="button" onClick={() => navigator.clipboard.writeText(preview.raw || JSON.stringify(preview.parsed ?? {}, null, 2))}>复制 JSON</button>
         <button className="glass-inset px-4 py-2 text-sm opacity-60" type="button" disabled>应用为日程</button>
         <p className="text-xs text-[var(--muted-foreground)] sm:col-span-2">当前只预览并可应用为任务；尚无独立事件表，因此“应用为日程”继续禁用。quadrant 仍由 Rust 根据 urgency + importance 计算。</p>
-        {applyResults.length > 0 && <div className="sm:col-span-2 space-y-2">{applyResults.map((result, index) => <p key={`${result.title}-${index}`} className={result.status === "success" ? "text-[var(--neon-blue)]" : "text-[var(--neon-pink)]"}>{result.title}：{result.message}</p>)}</div>}
+        {applyResults.length > 0 && (
+          <div className="sm:col-span-2 space-y-2">
+            <p className="text-xs text-[var(--muted-foreground)]">
+              created {applyResults.filter((item) => item.status === "success").length} · skipped_duplicate {applyResults.filter((item) => item.status === "skipped_duplicate").length} · failed {applyResults.filter((item) => item.status === "failed").length}
+            </p>
+            {applyResults.map((result, index) => <p key={`${result.title}-${index}`} className={result.status === "success" ? "text-[var(--neon-blue)]" : result.status === "skipped_duplicate" ? "text-[var(--neon-amber)]" : "text-[var(--neon-pink)]"}>{result.title}：{result.message}</p>)}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1801,7 +1888,7 @@ function TasksView() {
     <section className="glass-card flex h-full min-h-0 gap-5 overflow-hidden p-5">
       <div className="flex min-w-0 flex-1 flex-col">
         <Header title="任务列表" subtitle="未完成 / 已完成 / 四象限" />
-        <TaskForm />
+        <TaskForm currentDate={dateFilter === "custom" ? customDate : undefined} />
         <div className="glass-inset mt-3 flex flex-wrap items-center gap-2 p-2 text-sm">
           {[
             ["today", "今天"],
@@ -1826,7 +1913,11 @@ function TasksView() {
         </div>
         <div className="glass-inset mt-3 flex flex-wrap items-center gap-2 p-2 text-sm">
           <span className="px-2 text-xs font-medium text-[var(--muted-foreground)]">已选择 {selectedCount} 项</span>
-          <input className="field py-1.5" type="date" value={batchDate} onChange={(event) => setBatchDate(event.target.value)} />
+          {selectedCount === 0 && <span className="text-xs text-[var(--muted-foreground)]">先勾选任务后再批量操作</span>}
+          <label className="flex items-center gap-2 text-xs">
+            <span className="text-[var(--muted-foreground)]">目标日期</span>
+            <input className="field py-1.5" type="date" value={batchDate} onChange={(event) => setBatchDate(event.target.value)} />
+          </label>
           <button
             type="button"
             className="glass-inset px-3 py-1.5 text-xs [transition:var(--transition-smooth)] hover:text-[var(--neon-blue)] disabled:opacity-40"
@@ -1851,14 +1942,20 @@ function TasksView() {
           >
             批量完成
           </button>
-          <select className="field py-1.5" value={batchImportance} onChange={(event) => setBatchImportance(event.target.value as Importance)}>
+          <label className="flex items-center gap-2 text-xs">
+            <span className="text-[var(--muted-foreground)]">调整重要性</span>
+            <select className="field py-1.5" value={batchImportance} onChange={(event) => setBatchImportance(event.target.value as Importance)}>
             <option value="important">重要</option>
             <option value="not_important">不重要</option>
-          </select>
-          <select className="field py-1.5" value={batchUrgency} onChange={(event) => setBatchUrgency(event.target.value as Urgency)}>
+            </select>
+          </label>
+          <label className="flex items-center gap-2 text-xs">
+            <span className="text-[var(--muted-foreground)]">调整紧急性</span>
+            <select className="field py-1.5" value={batchUrgency} onChange={(event) => setBatchUrgency(event.target.value as Urgency)}>
             <option value="urgent">紧急</option>
             <option value="not_urgent">不紧急</option>
-          </select>
+            </select>
+          </label>
           <button
             type="button"
             className="glass-inset px-3 py-1.5 text-xs [transition:var(--transition-smooth)] hover:text-[var(--neon-violet)] disabled:opacity-40"
@@ -1891,16 +1988,28 @@ function TasksView() {
   );
 }
 
-function TaskForm() {
+function TaskForm({ currentDate }: { currentDate?: string }) {
   const createTask = useAppStore((state) => state.createTask);
+  const [expanded, setExpanded] = useState(false);
   const [draft, setDraft] = useState(emptyDraft);
   const [taskDate, setTaskDate] = useState(defaultTaskDate);
   const [taskTime, setTaskTime] = useState(defaultTaskTime);
   const update = (key: keyof typeof draft, value: string) => setDraft((prev) => ({ ...prev, [key]: value }));
 
   return (
+    <div className="glass-inset p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="font-medium">手动创建任务</p>
+          {currentDate && <p className="text-xs text-[var(--muted-foreground)]">当前筛选日期：{currentDate}</p>}
+        </div>
+        <button className="glass-inset px-3 py-1.5 text-sm" type="button" onClick={() => setExpanded((value) => !value)}>
+          {expanded ? "收起" : "展开"}
+        </button>
+      </div>
+      {expanded && (
     <form
-      className="glass-inset grid grid-cols-1 gap-2 p-3 xl:grid-cols-[1.4fr_1fr_1fr_1fr_auto]"
+      className="mt-3 grid grid-cols-1 gap-2 xl:grid-cols-[1.4fr_1fr_1fr_1fr_auto]"
       onSubmit={async (event) => {
         event.preventDefault();
         if (!draft.title.trim()) return;
@@ -1936,6 +2045,8 @@ function TaskForm() {
       <input className="field" type="time" value={taskTime} onChange={(e) => setTaskTime(e.target.value)} />
       <input className="field" value={draft.tags} onChange={(e) => update("tags", e.target.value)} placeholder="标签，逗号分隔" />
     </form>
+      )}
+    </div>
   );
 }
 
@@ -4205,6 +4316,7 @@ function SettingsView() {
   const [apiBaseUrl, setApiBaseUrl] = useState("https://api.deepseek.com/v1");
   const [apiModel, setApiModel] = useState("deepseek-chat");
   const [saved, setSaved] = useState(false);
+  const [hasSavedApiKey, setHasSavedApiKey] = useState(false);
   const [shortcuts, setShortcuts] = useState({
     toggle_ai: "Ctrl+Shift+A",
     toggle_window: "Ctrl+Shift+T",
@@ -4216,14 +4328,16 @@ function SettingsView() {
   useEffect(() => {
     import("./lib/api")
       .then(async ({ api }) => {
-        const [settings, baseUrl, model] = await Promise.all([
+        const [settings, baseUrl, model, existingKey] = await Promise.all([
           api<typeof shortcuts>("get_shortcut_settings"),
           api<string | null>("get_setting", { key: "api_base_url" }),
           api<string | null>("get_setting", { key: "api_model" }),
+          api<string | null>("get_setting", { key: "deepseek_api_key" }),
         ]);
         setShortcuts(settings);
         setApiBaseUrl(baseUrl || "https://api.deepseek.com/v1");
         setApiModel(model || "deepseek-chat");
+        setHasSavedApiKey(!!existingKey);
       })
       .catch(() => undefined);
   }, []);
@@ -4240,7 +4354,8 @@ function SettingsView() {
       <div className="mt-6 max-w-2xl space-y-4">
         <label className="block">
           <span className="mb-1 block text-sm font-medium">DeepSeek API Key</span>
-          <input className="field w-full" value={apiKey} onChange={(e) => setApiKey(e.target.value)} type="password" placeholder="sk-..." />
+          <input className="field w-full" value={apiKey} onChange={(e) => setApiKey(e.target.value)} type="password" placeholder={hasSavedApiKey ? "已保存，重新输入可覆盖" : "sk-..."} />
+          {hasSavedApiKey && <span className="mt-1 block text-xs text-emerald-400">已保存</span>}
         </label>
         <label className="block">
           <span className="mb-1 block text-sm font-medium">API Base URL</span>
@@ -4255,12 +4370,17 @@ function SettingsView() {
           onClick={async () => {
             await import("./lib/api").then(async ({ api }) => {
               await Promise.all([
-                api("save_setting", { key: "deepseek_api_key", value: apiKey }),
+                ...(apiKey ? [api("save_setting", { key: "deepseek_api_key", value: apiKey })] : []),
                 api("save_setting", { key: "api_base_url", value: apiBaseUrl }),
                 api("save_setting", { key: "api_model", value: apiModel }),
               ]);
             });
             setSaved(true);
+            if (apiKey) {
+              setHasSavedApiKey(true);
+              setApiKey("");
+            }
+            showToast("API Key 已保存");
           }}
         >
           保存 API 设置
