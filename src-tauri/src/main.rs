@@ -248,6 +248,40 @@ struct Task {
     updated_at: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, FromRow)]
+struct AiConversation {
+    id: String,
+    title: String,
+    summary: Option<String>,
+    active_skill: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, FromRow)]
+struct AiMessage {
+    id: String,
+    conversation_id: String,
+    role: String,
+    content: String,
+    created_at: String,
+}
+
+#[derive(Debug, Serialize)]
+struct AiConversationDetail {
+    conversation: AiConversation,
+    messages: Vec<AiMessage>,
+}
+
+#[derive(Debug, Serialize, Deserialize, FromRow)]
+struct AiPlanSnapshot {
+    id: String,
+    conversation_id: String,
+    plan_json: String,
+    created_at: String,
+    updated_at: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct TaskInput {
     title: String,
@@ -1963,6 +1997,195 @@ async fn remove_material(state: State<'_, AppState>, id: String) -> Result<(), S
 }
 
 #[tauri::command]
+async fn create_ai_conversation(
+    state: State<'_, AppState>,
+    title: Option<String>,
+    summary: Option<String>,
+    active_skill: Option<String>,
+) -> Result<AiConversation, String> {
+    let now = now_iso();
+    let id = Uuid::new_v4().to_string();
+    let normalized_title = title
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| format!("未命名计划 {}", Local::now().format("%Y-%m-%d %H:%M")));
+    sqlx::query(
+        "INSERT INTO ai_conversations (id, title, summary, active_skill, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(normalized_title.trim())
+    .bind(summary)
+    .bind(active_skill)
+    .bind(&now)
+    .bind(&now)
+    .execute(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+    sqlx::query_as::<_, AiConversation>("SELECT * FROM ai_conversations WHERE id = ?")
+        .bind(id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn list_ai_conversations(state: State<'_, AppState>) -> Result<Vec<AiConversation>, String> {
+    sqlx::query_as::<_, AiConversation>("SELECT * FROM ai_conversations ORDER BY updated_at DESC, created_at DESC")
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_ai_conversation(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<AiConversationDetail, String> {
+    let conversation = sqlx::query_as::<_, AiConversation>("SELECT * FROM ai_conversations WHERE id = ?")
+        .bind(&id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    let messages = sqlx::query_as::<_, AiMessage>(
+        "SELECT * FROM ai_messages WHERE conversation_id = ? ORDER BY created_at ASC",
+    )
+    .bind(&id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(AiConversationDetail { conversation, messages })
+}
+
+#[tauri::command]
+async fn update_ai_conversation_title(
+    state: State<'_, AppState>,
+    id: String,
+    title: String,
+) -> Result<AiConversation, String> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err("title must not be empty".to_string());
+    }
+    sqlx::query("UPDATE ai_conversations SET title = ?, updated_at = ? WHERE id = ?")
+        .bind(title)
+        .bind(now_iso())
+        .bind(&id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    sqlx::query_as::<_, AiConversation>("SELECT * FROM ai_conversations WHERE id = ?")
+        .bind(id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn delete_ai_conversation(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    sqlx::query("DELETE FROM ai_conversations WHERE id = ?")
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn append_ai_message(
+    state: State<'_, AppState>,
+    conversation_id: String,
+    role: String,
+    content: String,
+) -> Result<AiMessage, String> {
+    if !matches!(role.as_str(), "system" | "user" | "assistant") {
+        return Err("invalid ai message role".to_string());
+    }
+    let id = Uuid::new_v4().to_string();
+    let now = now_iso();
+    sqlx::query(
+        "INSERT INTO ai_messages (id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(&conversation_id)
+    .bind(&role)
+    .bind(&content)
+    .bind(&now)
+    .execute(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+    sqlx::query("UPDATE ai_conversations SET updated_at = ? WHERE id = ?")
+        .bind(&now)
+        .bind(&conversation_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    sqlx::query_as::<_, AiMessage>("SELECT * FROM ai_messages WHERE id = ?")
+        .bind(id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn save_ai_plan_snapshot(
+    state: State<'_, AppState>,
+    conversation_id: String,
+    plan_json: String,
+) -> Result<AiPlanSnapshot, String> {
+    let now = now_iso();
+    let existing = sqlx::query_as::<_, AiPlanSnapshot>(
+        "SELECT * FROM ai_plan_snapshots WHERE conversation_id = ?",
+    )
+    .bind(&conversation_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+    if let Some(snapshot) = existing {
+        sqlx::query("UPDATE ai_plan_snapshots SET plan_json = ?, updated_at = ? WHERE id = ?")
+            .bind(plan_json)
+            .bind(&now)
+            .bind(&snapshot.id)
+            .execute(&state.db)
+            .await
+            .map_err(|e| e.to_string())?;
+    } else {
+        sqlx::query(
+            "INSERT INTO ai_plan_snapshots (id, conversation_id, plan_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(&conversation_id)
+        .bind(plan_json)
+        .bind(&now)
+        .bind(&now)
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+    sqlx::query("UPDATE ai_conversations SET updated_at = ? WHERE id = ?")
+        .bind(&now)
+        .bind(&conversation_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    sqlx::query_as::<_, AiPlanSnapshot>("SELECT * FROM ai_plan_snapshots WHERE conversation_id = ?")
+        .bind(conversation_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_ai_plan_snapshot(
+    state: State<'_, AppState>,
+    conversation_id: String,
+) -> Result<Option<AiPlanSnapshot>, String> {
+    sqlx::query_as::<_, AiPlanSnapshot>("SELECT * FROM ai_plan_snapshots WHERE conversation_id = ?")
+        .bind(conversation_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn check_material_exists(state: State<'_, AppState>, id: String) -> Result<Material, String> {
     let material = sqlx::query_as::<_, Material>("SELECT * FROM materials WHERE id = ?")
         .bind(&id)
@@ -2013,25 +2236,10 @@ async fn send_ai_message(app: AppHandle, state: State<'_, AppState>, message: St
         base_url.trim().trim_end_matches('/')
     );
     println!("AI request endpoint: {endpoint}, model: {}", model.trim());
-    sqlx::query("INSERT INTO ai_conversations (id, role, content, created_at) VALUES (?, 'user', ?, ?)")
-        .bind(Uuid::new_v4().to_string())
-        .bind(&message)
-        .bind(now_iso())
-        .execute(&state.db)
-        .await
-        .map_err(|e| e.to_string())?;
-
     if is_tomorrow_schedule_question(&message) {
         let response = build_tomorrow_schedule_advice(&state.db).await?;
         let _ = app.emit("ai_stream", json!({"delta": response["reply"], "done": false}));
         let _ = app.emit("ai_stream", json!({"delta": "", "done": true}));
-        sqlx::query("INSERT INTO ai_conversations (id, role, content, created_at) VALUES (?, 'assistant', ?, ?)")
-            .bind(Uuid::new_v4().to_string())
-            .bind(response["reply"].as_str().unwrap_or_default())
-            .bind(now_iso())
-            .execute(&state.db)
-            .await
-            .map_err(|e| e.to_string())?;
         return Ok(response);
     }
 
@@ -2106,14 +2314,6 @@ async fn send_ai_message(app: AppHandle, state: State<'_, AppState>, message: St
     }
     let _ = app.emit("ai_stream", json!({"delta": "", "done": true}));
     let assistant_content = sse_content_from_raw(&full);
-
-    sqlx::query("INSERT INTO ai_conversations (id, role, content, created_at) VALUES (?, 'assistant', ?, ?)")
-        .bind(Uuid::new_v4().to_string())
-        .bind(&assistant_content)
-        .bind(now_iso())
-        .execute(&state.db)
-        .await
-        .map_err(|e| e.to_string())?;
 
     let mut parsed = parse_ai_json_content(&assistant_content).unwrap_or_else(|error| {
         println!("AI intent parse failed: {error}");
@@ -2300,6 +2500,14 @@ fn main() {
             update_material,
             remove_material,
             check_material_exists,
+            create_ai_conversation,
+            list_ai_conversations,
+            get_ai_conversation,
+            update_ai_conversation_title,
+            delete_ai_conversation,
+            append_ai_message,
+            save_ai_plan_snapshot,
+            get_ai_plan_snapshot,
             list_tasks,
             start_timer,
             stop_timer,

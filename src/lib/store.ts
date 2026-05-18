@@ -11,6 +11,9 @@ import type {
   ReminderInput,
   Material,
   MaterialPatch,
+  AiConversation,
+  AiConversationDetail,
+  AiPlanSnapshot,
   TimerMode,
   TimerRecord,
   TimerSnapshot,
@@ -68,6 +71,8 @@ interface AppStore {
   materialsError: string | null;
   stats: DashboardStats | null;
   aiMessages: AiMessage[];
+  conversations: AiConversation[];
+  activeConversationId: string | null;
   aiWorkspaceEntries: AiWorkspaceEntry[];
   aiWorkspaceInput: string;
   aiPreferredSkill: string | null;
@@ -122,6 +127,13 @@ interface AppStore {
   setAiPreferredSkill: (value: string | null) => void;
   setAiStructuredPreview: (value: StructuredPreviewSnapshot) => void;
   setAiPlanCanvasOpen: (value: boolean) => void;
+  loadConversations: () => Promise<AiConversation[]>;
+  createConversation: (title?: string | null) => Promise<AiConversation>;
+  openConversation: (id: string) => Promise<void>;
+  renameConversation: (id: string, title: string) => Promise<void>;
+  deleteConversation: (id: string) => Promise<void>;
+  appendAiMessage: (role: "user" | "assistant", content: string) => Promise<void>;
+  saveCurrentPlanSnapshot: () => Promise<void>;
 }
 
 const emptyTimer: TimerSnapshot = { active: false, elapsed_seconds: 0, paused: false };
@@ -341,6 +353,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
   materialsError: null,
   stats: null,
   aiMessages: readStoredJson<AiMessage[]>(aiMessagesStorageKey, []).slice(-50),
+  conversations: [],
+  activeConversationId: null,
   aiWorkspaceEntries: storedAiWorkspace.entries.slice(-50),
   aiWorkspaceInput: storedAiWorkspace.input,
   aiPreferredSkill: storedAiWorkspace.preferredSkill,
@@ -373,6 +387,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const normalizedTheme = theme === "dark" ? "dark" : "light";
     document.documentElement.classList.toggle("dark", normalizedTheme === "dark");
     set({ tasks, timer, records, reminders, materials, stats, theme: normalizedTheme });
+    await get().loadConversations();
   },
   createTask: async (draft) => {
     const task = await api<Task>("create_task", { input: draftToInput(draft) });
@@ -588,5 +603,101 @@ export const useAppStore = create<AppStore>((set, get) => ({
       preview: get().aiStructuredPreview,
       planCanvasOpen: aiPlanCanvasOpen,
     });
+  },
+  loadConversations: async () => {
+    const conversations = await api<AiConversation[]>("list_ai_conversations").catch(() => []);
+    set({ conversations });
+    if (!get().activeConversationId && conversations[0]) {
+      await get().openConversation(conversations[0].id);
+    }
+    return conversations;
+  },
+  createConversation: async (title) => {
+    const conversation = await api<AiConversation>("create_ai_conversation", {
+      title: title ?? null,
+      summary: null,
+      active_skill: get().aiPreferredSkill,
+    });
+    set((state) => ({
+      conversations: [conversation, ...state.conversations.filter((item) => item.id !== conversation.id)],
+      activeConversationId: conversation.id,
+      aiWorkspaceEntries: [],
+      aiWorkspaceInput: "",
+      aiStructuredPreview: { parsed: null, raw: "", error: null },
+    }));
+    return conversation;
+  },
+  openConversation: async (id) => {
+    const detail = await api<AiConversationDetail>("get_ai_conversation", { id });
+    const snapshot = await api<AiPlanSnapshot | null>("get_ai_plan_snapshot", { conversation_id: id }).catch(() => null);
+    let preview: StructuredPreviewSnapshot = { parsed: null, raw: "", error: null };
+    if (snapshot?.plan_json) {
+      try {
+        const parsed = JSON.parse(snapshot.plan_json) as Record<string, unknown>;
+        preview = { parsed, raw: snapshot.plan_json, error: null };
+      } catch {
+        preview = { parsed: null, raw: snapshot.plan_json, error: "计划快照解析失败" };
+      }
+    }
+    const entries = detail.messages
+      .filter((message) => message.role !== "system")
+      .map((message) => ({
+        id: message.id,
+        role: message.role as "user" | "assistant",
+        kind: "message" as const,
+        content: message.content,
+      }))
+      .slice(-50);
+    set({
+      activeConversationId: id,
+      aiWorkspaceEntries: entries,
+      aiPreferredSkill: detail.conversation.active_skill ?? null,
+      aiStructuredPreview: preview,
+      aiPlanCanvasOpen: false,
+    });
+  },
+  renameConversation: async (id, title) => {
+    const updated = await api<AiConversation>("update_ai_conversation_title", { id, title });
+    set((state) => ({ conversations: state.conversations.map((item) => item.id === id ? updated : item) }));
+  },
+  deleteConversation: async (id) => {
+    await api<void>("delete_ai_conversation", { id });
+    const conversations = get().conversations.filter((item) => item.id !== id);
+    set({ conversations });
+    if (get().activeConversationId === id) {
+      if (conversations[0]) await get().openConversation(conversations[0].id);
+      else set({
+        activeConversationId: null,
+        aiWorkspaceEntries: [],
+        aiWorkspaceInput: "",
+        aiStructuredPreview: { parsed: null, raw: "", error: null },
+      });
+    }
+  },
+  appendAiMessage: async (role, content) => {
+    let conversationId = get().activeConversationId;
+    if (!conversationId) {
+      const firstUserTitle = role === "user" ? content.trim().slice(0, 20) : null;
+      conversationId = (await get().createConversation(firstUserTitle)).id;
+    }
+    const message = await api<{ id: string }>("append_ai_message", {
+      conversation_id: conversationId,
+      role,
+      content,
+    });
+    set((state) => ({
+      aiWorkspaceEntries: [...state.aiWorkspaceEntries, { id: message.id, role, kind: "message" as const, content }].slice(-50),
+    }));
+    await get().loadConversations();
+  },
+  saveCurrentPlanSnapshot: async () => {
+    const conversationId = get().activeConversationId;
+    const parsed = get().aiStructuredPreview.parsed;
+    if (!conversationId || !parsed) return;
+    await api<AiPlanSnapshot>("save_ai_plan_snapshot", {
+      conversation_id: conversationId,
+      plan_json: JSON.stringify(parsed),
+    });
+    await get().loadConversations();
   },
 }));

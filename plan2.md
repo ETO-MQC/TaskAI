@@ -1124,3 +1124,57 @@ Remaining TODO:
 
 Next sprint suggestion:
 - Sprint 20B is reasonable next, but first do a small manual regression set with real 2-4 week study plans to confirm the hotfix chain is stable.
+
+### Sprint 20A.2：AI 对话历史与流畅度稳定
+
+产品定位：
+- 在 20A / 20A.1 的学习规划闭环上补齐长期可回看的 AI 工作区，让 SmartFocus 从“保留当前会话”前进到“可持续积累学习计划历史”。
+
+历史对话存储方式：
+- 采用 SQLite，而非 localStorage，作为桌面端长期数据源。
+- 旧版逐条消息表保留为 `ai_legacy_messages`，新增真正的会话层、消息层与计划快照层。
+
+新增数据表：
+- `ai_conversations`
+- `ai_messages`
+- `ai_plan_snapshots`
+
+Rust / Tauri 命令：
+- `create_ai_conversation`
+- `list_ai_conversations`
+- `get_ai_conversation`
+- `update_ai_conversation_title`
+- `delete_ai_conversation`
+- `append_ai_message`
+- `save_ai_plan_snapshot`
+- `get_ai_plan_snapshot`
+
+前端 store / API：
+- 新增 `conversations`、`activeConversationId`、`loadConversations`、`createConversation`、`openConversation`、`renameConversation`、`deleteConversation`、`appendAiMessage`、`saveCurrentPlanSnapshot`。
+- AI 工作区消息已迁移到 conversation 体系；浏览器 fallback 同步补齐最小 localStorage 实现，便于非 Tauri 开发预览。
+
+AI 工作区历史入口：
+- 底部工具栏新增“历史”入口。
+- 历史面板支持新建、搜索、打开、重命名、删除，继续保持轻量 popover 形态，不扩成独立大页。
+
+Plan Canvas 与会话绑定：
+- 每个 conversation 仅保存最新 `plan snapshot`。
+- 切换历史对话时，消息流、当前 skill 与 Plan Canvas 会随会话恢复。
+
+性能优化范围：
+- AI 消息流仅渲染最近 40 条，长消息启用安全换行，继续保持内部滚动。
+- 左侧菜单 hover 改为更偏 `transform / color / background` 的轻量过渡，减少无意义阴影动画负担。
+- Sidebar 改用更细粒度 Zustand selector，避免整店订阅造成额外刷新。
+
+验收结果：
+- `npm run build`：通过。
+- `cargo test`：通过。
+- `git diff --check`：通过。
+- `plan.md` 未修改。
+
+剩余 TODO：
+- 做一次真实 Tauri 重启后的人工回归，确认历史恢复与 legacy import 行为。
+- 若后续需要更强检索，可补摘要自动生成，而不是只沿用标题与现有 summary 字段。
+
+下一 Sprint 建议：
+- 完成 20A.2 的手工回归后，可以进入 Sprint 20B；20B 仍应保持与本轮边界分离，不把 OCR、自动重排或 LearnKATA 提前混进来。

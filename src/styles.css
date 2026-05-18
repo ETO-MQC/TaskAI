@@ -514,6 +514,20 @@
     border-color: var(--glass-card-border-hover);
     box-shadow: var(--shadow-elevated);
   }
+  .sidebar-nav-button {
+    transition:
+      transform var(--duration-fast) var(--ease-out-soft),
+      color var(--duration-fast) var(--ease-out-soft),
+      background-color var(--duration-fast) var(--ease-out-soft);
+    will-change: transform;
+  }
+  .sidebar-nav-button:hover {
+    transform: translateY(-1px);
+  }
+  .ai-workspace .thin-scrollbar > div {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
   .smooth-surface {
     transition:
       transform var(--duration-normal) var(--ease-out-soft),

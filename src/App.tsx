@@ -494,7 +494,8 @@ function App() {
 }
 
 function Sidebar() {
-  const { view, setView } = useAppStore();
+  const view = useAppStore((state) => state.view);
+  const setView = useAppStore((state) => state.setView);
   return (
     <aside className="glass-card flex w-16 min-w-16 max-w-[220px] shrink-0 flex-col items-center gap-3 py-4 [transition:var(--transition-smooth)] md:hover:w-[180px] md:hover:min-w-[180px]">
       <div className="sf-logo btn-glow mb-2 grid h-10 w-10 place-items-center rounded-xl bg-[var(--gradient-violet)] text-sm font-bold text-[var(--primary-foreground)] shadow-[var(--shadow-glow-violet)] [transition:var(--transition-smooth)]">
@@ -508,7 +509,7 @@ function Sidebar() {
             key={item.id}
             onClick={() => setView(item.id)}
             title={item.label}
-            className={`group flex h-11 w-[calc(100%-16px)] items-center justify-center gap-3 rounded-xl text-[var(--muted-foreground)] [transition:var(--transition-smooth)] hover:bg-white/10 hover:text-[var(--foreground)] ${
+            className={`sidebar-nav-button group flex h-11 w-[calc(100%-16px)] items-center justify-center gap-3 rounded-xl text-[var(--muted-foreground)] hover:bg-white/10 hover:text-[var(--foreground)] ${
               active ? "bg-[var(--sidebar-accent)] text-[var(--neon-violet)] shadow-[var(--shadow-glow-violet)]" : ""
             }`}
           >
@@ -1162,6 +1163,8 @@ function AiView() {
     aiPreferredSkill, setAiPreferredSkill,
     aiStructuredPreview, setAiStructuredPreview,
     aiPlanCanvasOpen, setAiPlanCanvasOpen,
+    conversations, activeConversationId, loadConversations, createConversation, openConversation,
+    renameConversation, deleteConversation, appendAiMessage, saveCurrentPlanSnapshot,
   } = useAppStore();
   const preferredSkill = aiPreferredSkill as PlanningSkillId | null;
   const [materialSearch, setMaterialSearch] = useState("");
@@ -1169,18 +1172,19 @@ function AiView() {
   const [editingMaterialId, setEditingMaterialId] = useState<string | null>(null);
   const [materialDraft, setMaterialDraft] = useState({ subject: "", tags: "", note: "" });
   const [lastRoute, setLastRoute] = useState(routePlanningSkill(""));
-  const [activeAiToolPanel, setActiveAiToolPanelState] = useState<"materials" | "plan" | "reminders" | "more" | "quick" | null>(aiPlanCanvasOpen ? "plan" : null);
-  const setActiveAiToolPanel = (value: "materials" | "plan" | "reminders" | "more" | "quick" | null | ((current: "materials" | "plan" | "reminders" | "more" | "quick" | null) => "materials" | "plan" | "reminders" | "more" | "quick" | null)) => {
+  const [activeAiToolPanel, setActiveAiToolPanelState] = useState<"materials" | "plan" | "reminders" | "more" | "quick" | "history" | null>(aiPlanCanvasOpen ? "plan" : null);
+  const setActiveAiToolPanel = (value: "materials" | "plan" | "reminders" | "more" | "quick" | "history" | null | ((current: "materials" | "plan" | "reminders" | "more" | "quick" | "history" | null) => "materials" | "plan" | "reminders" | "more" | "quick" | "history" | null)) => {
     setActiveAiToolPanelState((current) => {
       const next = typeof value === "function" ? value(current) : value;
       setAiPlanCanvasOpen(next === "plan");
       return next;
     });
   };
-  const toggleAiToolPanel = (panel: "materials" | "plan" | "reminders" | "more" | "quick") => {
+  const toggleAiToolPanel = (panel: "materials" | "plan" | "reminders" | "more" | "quick" | "history") => {
     setActiveAiToolPanel((current) => (current === panel ? null : panel));
   };
   const [loading, setLoading] = useState(false);
+  const [historySearch, setHistorySearch] = useState("");
   const preview = aiStructuredPreview as StructuredPreviewState;
   const setPreview = setAiStructuredPreview as (value: StructuredPreviewState) => void;
   const [selectedTaskIndexes, setSelectedTaskIndexes] = useState<number[]>([]);
@@ -1211,6 +1215,7 @@ function AiView() {
   });
 
   useEffect(() => { void loadMaterials(); }, [loadMaterials]);
+  useEffect(() => { void loadConversations(); }, [loadConversations]);
 
   useEffect(() => {
     if (!listRef.current) return;
@@ -1243,6 +1248,12 @@ function AiView() {
       parsed.error = null;
     }
     setPreview(parsed);
+    void saveCurrentPlanSnapshot();
+    const goalTitle = typeof parsed.parsed?.goal === "object" && parsed.parsed.goal ? parsed.parsed.goal.title : null;
+    if (goalTitle && activeConversationId) {
+      const active = conversations.find((item) => item.id === activeConversationId);
+      if (active && active.title.startsWith("未命名计划")) void renameConversation(activeConversationId, goalTitle);
+    }
     const flattened = Array.isArray(parsed.parsed?.daily_plan)
       ? parsed.parsed.daily_plan.flatMap((day) => Array.isArray(day.tasks) ? day.tasks : [])
       : Array.isArray(parsed.parsed?.tasks)
@@ -1263,7 +1274,7 @@ function AiView() {
     const route = routePlanningSkill(text, preferredSkill);
     setLastRoute(route);
     setLoading(true);
-    setEntries((current) => [...current, { id: crypto.randomUUID(), role: "user", kind: "message", content: text }]);
+    await appendAiMessage("user", text);
     setInput("");
     try {
       if (route.skill === "inbox_capture") {
@@ -1275,7 +1286,7 @@ function AiView() {
         );
         const parsed = parseInboxCaptureText(response.reply);
         if (!parsed) {
-          addEntry({ id: crypto.randomUUID(), role: "assistant", kind: "message", content: "这次没有拿到可确认的任务草稿。你可以再补一句更明确的截止时间或提醒时间。" });
+          await appendAiMessage("assistant", "这次没有拿到可确认的任务草稿。你可以再补一句更明确的截止时间或提醒时间。");
         } else {
           addEntry({
             id: crypto.randomUUID(),
@@ -1295,10 +1306,10 @@ function AiView() {
         updatePreviewFromResponse(response);
         const parsed = parseLearningPlanText(response.reply ?? JSON.stringify(response));
         const summary = parsed.parsed?.summary || response.summary || "我整理出了一版结构化计划，计划结果已就绪。";
-        addEntry({ id: crypto.randomUUID(), role: "assistant", kind: "message", content: summary });
+        await appendAiMessage("assistant", summary);
       }
     } catch (error) {
-      addEntry({ id: crypto.randomUUID(), role: "assistant", kind: "message", content: error instanceof Error ? error.message : "这次处理失败了，请再试一次。" });
+      await appendAiMessage("assistant", error instanceof Error ? error.message : "这次处理失败了，请再试一次。");
     } finally {
       setLoading(false);
       setAiPreferredSkill(null);
@@ -1422,7 +1433,7 @@ function AiView() {
                 告诉我你想记录、规划或调整什么。例如：“下周三之前交发展经济学作业，周二晚上提醒我写提纲”，或者“我两周后期末考试，每天学两小时，帮我安排复习”。
               </div>
             )}
-            {entries.map((entry) => entry.kind === "message" ? (
+            {entries.slice(-40).map((entry) => entry.kind === "message" ? (
               <div key={entry.id} className={`max-w-[82%] rounded-xl p-4 text-sm leading-6 ${entry.role === "user" ? "btn-glow ml-auto text-[var(--primary-foreground)]" : "glass-inset"}`}>
                 {entry.content}
               </div>
@@ -1447,6 +1458,7 @@ function AiView() {
               <button className={`glass-inset px-3 py-1.5 ${activeAiToolPanel === "materials" ? "btn-glow" : ""}`} type="button" onClick={() => toggleAiToolPanel("materials")}>添加资料</button>
               <button className={`glass-inset px-3 py-1.5 ${activeAiToolPanel === "plan" ? "btn-glow" : ""}`} type="button" onClick={() => toggleAiToolPanel("plan")} disabled={!preview.parsed}>计划结果</button>
               <button className={`glass-inset px-3 py-1.5 ${activeAiToolPanel === "reminders" ? "btn-glow" : ""}`} type="button" onClick={() => toggleAiToolPanel("reminders")}>提醒</button>
+              <button className={`glass-inset px-3 py-1.5 ${activeAiToolPanel === "history" ? "btn-glow" : ""}`} type="button" onClick={() => toggleAiToolPanel("history")}>历史</button>
               <button className={`glass-inset px-3 py-1.5 ${activeAiToolPanel === "more" ? "btn-glow" : ""}`} type="button" onClick={() => toggleAiToolPanel("more")}>更多</button>
               <button className={`glass-inset px-3 py-1.5 ${activeAiToolPanel === "quick" ? "btn-glow" : ""}`} type="button" onClick={() => toggleAiToolPanel("quick")}>/ 快捷</button>
             </div>
@@ -1471,6 +1483,39 @@ function AiView() {
                     <button className="glass-inset px-3 py-2 text-left" type="button" onClick={() => { setStudyDrawerOpen(true); setActiveAiToolPanel(null); }}>建立学习项目</button>
                     <button className="glass-inset px-3 py-2 text-left" type="button" onClick={() => { setStudyDrawerOpen(true); setActiveAiToolPanel(null); }}>粘贴大纲生成计划</button>
                     <button className="glass-inset px-3 py-2 text-left" type="button" onClick={() => { setAiPreferredSkill("material_planning"); showToast("可以直接说：根据已有资料生成复习计划。"); setActiveAiToolPanel(null); }}>根据资料生成复习计划</button>
+                  </div>
+                )}
+                {activeAiToolPanel === "history" && (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <h4 className="font-semibold">历史对话</h4>
+                      <button className="glass-inset px-2 py-1 text-xs" type="button" onClick={() => void createConversation()}>
+                        新建对话
+                      </button>
+                    </div>
+                    <input className="field w-full" value={historySearch} onChange={(event) => setHistorySearch(event.target.value)} placeholder="按标题或摘要搜索" />
+                    <div className="thin-scrollbar max-h-72 space-y-2 overflow-y-auto pr-1">
+                      {conversations
+                        .filter((item) => `${item.title} ${item.summary ?? ""}`.toLowerCase().includes(historySearch.toLowerCase()))
+                        .map((item) => (
+                          <div key={item.id} className={`rounded-xl border p-2 ${item.id === activeConversationId ? "border-[var(--ring)]" : "border-white/10"}`}>
+                            <button className="block w-full text-left" type="button" onClick={() => { void openConversation(item.id); setActiveAiToolPanel(null); }}>
+                              <p className="truncate font-medium">{item.title}</p>
+                              <p className="truncate text-xs text-[var(--muted-foreground)]">{item.summary || "暂无摘要"}</p>
+                              <p className="mt-1 text-[11px] text-[var(--muted-foreground)]">{dayjs(item.updated_at).format("YYYY-MM-DD HH:mm")}</p>
+                            </button>
+                            <div className="mt-2 flex gap-2">
+                              <button className="glass-inset px-2 py-1 text-xs" type="button" onClick={() => {
+                                const next = window.prompt("重命名对话", item.title);
+                                if (next?.trim()) void renameConversation(item.id, next.trim());
+                              }}>重命名</button>
+                              <button className="glass-inset px-2 py-1 text-xs" type="button" onClick={() => {
+                                if (window.confirm("只删除这段 AI 对话历史，不会删除任务、资料或提醒。继续吗？")) void deleteConversation(item.id);
+                              }}>删除</button>
+                            </div>
+                          </div>
+                        ))}
+                    </div>
                   </div>
                 )}
                 {activeAiToolPanel === "materials" && (

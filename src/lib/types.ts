@@ -121,6 +121,36 @@ export interface MaterialPatch {
   status?: MaterialStatus;
 }
 
+export interface AiConversation {
+  id: string;
+  title: string;
+  summary?: string | null;
+  active_skill?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AiConversationMessage {
+  id: string;
+  conversation_id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  created_at: string;
+}
+
+export interface AiConversationDetail {
+  conversation: AiConversation;
+  messages: AiConversationMessage[];
+}
+
+export interface AiPlanSnapshot {
+  id: string;
+  conversation_id: string;
+  plan_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface AiResponse {
   intent: string;
   action: string;

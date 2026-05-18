@@ -12,6 +12,10 @@ import type {
   MaterialInput,
   MaterialPatch,
   PickedMaterial,
+  AiConversation,
+  AiConversationDetail,
+  AiConversationMessage,
+  AiPlanSnapshot,
 } from "./types";
 import { calculateQuadrant } from "./domain";
 
@@ -36,6 +40,9 @@ const recordKey = "smartfocus.timer_records";
 const settingsKey = "smartfocus.settings";
 const reminderKey = "smartfocus.reminders";
 const materialKey = "smartfocus.materials";
+const aiConversationKey = "smartfocus.ai_conversations";
+const aiMessageKey = "smartfocus.ai_messages_v2";
+const aiPlanSnapshotKey = "smartfocus.ai_plan_snapshots";
 
 const defaultShortcutSettings = {
   toggle_ai: "Ctrl+Shift+A",
@@ -671,6 +678,79 @@ class FallbackApi {
     };
   }
 
+  async create_ai_conversation(input?: { title?: string | null; summary?: string | null; active_skill?: string | null }): Promise<AiConversation> {
+    const conversations = readJson<AiConversation[]>(aiConversationKey, []);
+    const created_at = now();
+    const conversation: AiConversation = {
+      id: crypto.randomUUID(),
+      title: input?.title?.trim() || `未命名计划 ${new Date().toLocaleString("zh-CN", { hour12: false })}`,
+      summary: input?.summary ?? null,
+      active_skill: input?.active_skill ?? null,
+      created_at,
+      updated_at: created_at,
+    };
+    writeJson(aiConversationKey, [conversation, ...conversations]);
+    return conversation;
+  }
+
+  async list_ai_conversations(): Promise<AiConversation[]> {
+    return readJson<AiConversation[]>(aiConversationKey, []).sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+  }
+
+  async get_ai_conversation(id: string): Promise<AiConversationDetail> {
+    const conversation = (await this.list_ai_conversations()).find((item) => item.id === id);
+    if (!conversation) throw new Error("Conversation not found");
+    const messages = readJson<AiConversationMessage[]>(aiMessageKey, [])
+      .filter((item) => item.conversation_id === id)
+      .sort((a, b) => a.created_at.localeCompare(b.created_at));
+    return { conversation, messages };
+  }
+
+  async update_ai_conversation_title(input: { id: string; title: string }): Promise<AiConversation> {
+    const conversations = await this.list_ai_conversations();
+    const updated = conversations.map((item) => item.id === input.id ? { ...item, title: input.title.trim(), updated_at: now() } : item);
+    const conversation = updated.find((item) => item.id === input.id);
+    if (!conversation) throw new Error("Conversation not found");
+    writeJson(aiConversationKey, updated);
+    return conversation;
+  }
+
+  async delete_ai_conversation(id: string): Promise<void> {
+    writeJson(aiConversationKey, readJson<AiConversation[]>(aiConversationKey, []).filter((item) => item.id !== id));
+    writeJson(aiMessageKey, readJson<AiConversationMessage[]>(aiMessageKey, []).filter((item) => item.conversation_id !== id));
+    writeJson(aiPlanSnapshotKey, readJson<AiPlanSnapshot[]>(aiPlanSnapshotKey, []).filter((item) => item.conversation_id !== id));
+  }
+
+  async append_ai_message(input: { conversation_id: string; role: AiConversationMessage["role"]; content: string }): Promise<AiConversationMessage> {
+    const message: AiConversationMessage = {
+      id: crypto.randomUUID(),
+      conversation_id: input.conversation_id,
+      role: input.role,
+      content: input.content,
+      created_at: now(),
+    };
+    writeJson(aiMessageKey, [...readJson<AiConversationMessage[]>(aiMessageKey, []), message]);
+    const conversations = readJson<AiConversation[]>(aiConversationKey, []).map((item) =>
+      item.id === input.conversation_id ? { ...item, updated_at: message.created_at } : item,
+    );
+    writeJson(aiConversationKey, conversations);
+    return message;
+  }
+
+  async save_ai_plan_snapshot(input: { conversation_id: string; plan_json: string }): Promise<AiPlanSnapshot> {
+    const snapshots = readJson<AiPlanSnapshot[]>(aiPlanSnapshotKey, []);
+    const existing = snapshots.find((item) => item.conversation_id === input.conversation_id);
+    const snapshot: AiPlanSnapshot = existing
+      ? { ...existing, plan_json: input.plan_json, updated_at: now() }
+      : { id: crypto.randomUUID(), conversation_id: input.conversation_id, plan_json: input.plan_json, created_at: now(), updated_at: now() };
+    writeJson(aiPlanSnapshotKey, existing ? snapshots.map((item) => item.id === snapshot.id ? snapshot : item) : [...snapshots, snapshot]);
+    return snapshot;
+  }
+
+  async get_ai_plan_snapshot(conversation_id: string): Promise<AiPlanSnapshot | null> {
+    return readJson<AiPlanSnapshot[]>(aiPlanSnapshotKey, []).find((item) => item.conversation_id === conversation_id) ?? null;
+  }
+
   async send_ai_message(message: string): Promise<AiResponse> {
     if (message.startsWith("INBOX_CAPTURE_REQUEST\n")) return fallbackInboxCapture(message);
     if (
@@ -738,6 +818,10 @@ export async function api<T>(cmd: string, args?: Record<string, unknown>): Promi
   if (!args) return fn.call(fallback);
   if (cmd === "save_setting") return fn.call(fallback, args.key, args.value);
   if (cmd === "list_timer_records") return fn.call(fallback, args.task_id);
+  if (cmd === "create_ai_conversation") return fn.call(fallback, args);
+  if (cmd === "update_ai_conversation_title") return fn.call(fallback, args);
+  if (cmd === "append_ai_message") return fn.call(fallback, args);
+  if (cmd === "save_ai_plan_snapshot") return fn.call(fallback, args);
   const firstArg = Object.values(args)[0];
   return fn.call(fallback, firstArg);
 }
