@@ -39,8 +39,9 @@ import {
 } from "recharts";
 import dayjs from "dayjs";
 import isBetween from "dayjs/plugin/isBetween";
+import { api } from "./lib/api";
 import { TaskUpdatePatch, useAppStore, type AiWorkspaceEntry } from "./lib/store";
-import type { Importance, Material, Priority, Reminder, Task, TimerMode, Urgency } from "./lib/types";
+import type { AiConversationMessage, Importance, Material, Priority, Reminder, Task, TimerMode, Urgency } from "./lib/types";
 import {
   formatMinutes,
   formatSeconds,
@@ -53,6 +54,8 @@ import {
 } from "./lib/domain";
 import {
   AI_PLANNING_SKILLS,
+  buildAdaptiveRescheduleContext,
+  buildAdaptiveReschedulePrompt,
   buildInboxCaptureMessage,
   buildMaterialMetadataSummary,
   buildPlanningPrompt,
@@ -60,8 +63,10 @@ import {
   routePlanningSkill,
   type InboxCaptureItem,
   type InboxCapturePreview,
+  type AdaptiveReschedulePreview,
   type PlanningSkillId,
 } from "./lib/aiPlanning";
+import { safeConversationSummary, safeConversationTitle } from "./lib/aiHistory";
 
 dayjs.extend(isBetween);
 
@@ -146,8 +151,10 @@ type LearningPlanPreview = {
   plan_scope?: "full_plan" | "first_week_only" | "needs_continue" | string;
 };
 
+type PlanningPreview = LearningPlanPreview | AdaptiveReschedulePreview;
+
 type StructuredPreviewState = {
-  parsed: LearningPlanPreview | null;
+  parsed: PlanningPreview | null;
   raw: string;
   error: string | null;
 };
@@ -295,7 +302,7 @@ function parseLearningPlanText(text: string): StructuredPreviewState {
 
   for (const candidate of candidates) {
     try {
-      const parsed = JSON.parse(candidate) as LearningPlanPreview;
+      const parsed = JSON.parse(candidate) as PlanningPreview;
       return { parsed, raw: text, error: null };
     } catch {
       // Try the next candidate.
@@ -338,6 +345,10 @@ function previewTaskDraft(task: LearningTaskPreview) {
     planned_date: typeof task.planned_date === "string" ? task.planned_date : "",
     tags: stringList(task.tags).join(", "),
   };
+}
+
+function isAdaptiveReschedulePreview(preview: PlanningPreview | null): preview is AdaptiveReschedulePreview {
+  return preview?.intent === "adaptive_reschedule";
 }
 
 function normalizeText(value?: string | null) {
@@ -411,9 +422,12 @@ function App() {
 
   useEffect(() => {
     store.load();
+    let disposed = false;
     let unlistenTimer: (() => void) | undefined;
     let unlistenAi: (() => void) | undefined;
+    let unlistenAiStream: (() => void) | undefined;
     let unlistenTaskCreated: (() => void) | undefined;
+    let aiStreamBuffer = "";
     import("@tauri-apps/api/event")
       .then(async ({ listen }) => {
         unlistenTimer = await listen("timer_tick", (event) => {
@@ -422,14 +436,33 @@ function App() {
         unlistenAi = await listen("shortcut_toggle_ai", () => {
           requestAiInputFocus();
         });
+        unlistenAiStream = await listen("ai_stream", (event) => {
+          const payload = event.payload as { delta?: unknown; done?: boolean };
+          if (payload.done) {
+            aiStreamBuffer = "";
+            return;
+          }
+          if (typeof payload.delta !== "string") return;
+          const parsed = parseAiStreamDelta(`${aiStreamBuffer}${payload.delta}`);
+          aiStreamBuffer = parsed.rest;
+          useAppStore.getState().appendAiStream(parsed.delta);
+        });
         unlistenTaskCreated = await listen("task_created", () => {
           useAppStore.getState().load();
         });
+        if (disposed) {
+          unlistenTimer?.();
+          unlistenAi?.();
+          unlistenAiStream?.();
+          unlistenTaskCreated?.();
+        }
       })
       .catch(() => undefined);
     return () => {
+      disposed = true;
       unlistenTimer?.();
       unlistenAi?.();
+      unlistenAiStream?.();
       unlistenTaskCreated?.();
     };
   }, []);
@@ -1007,31 +1040,7 @@ function AiPanel({
   const { aiMessages, setAiOpen, sendAi } = useAppStore();
   const [input, setInput] = useState("");
   const [listening, setListening] = useState(false);
-  const streamBuffer = useRef("");
   const listRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    import("@tauri-apps/api/event")
-      .then(({ listen }) =>
-        listen("ai_stream", (event) => {
-          const payload = event.payload as { delta?: unknown; done?: boolean };
-          if (payload.done) {
-            streamBuffer.current = "";
-            return;
-          }
-          if (typeof payload.delta !== "string") return;
-          const parsed = parseAiStreamDelta(`${streamBuffer.current}${payload.delta}`);
-          streamBuffer.current = parsed.rest;
-          useAppStore.getState().appendAiStream(parsed.delta);
-        }),
-      )
-      .then((fn) => {
-        unlisten = fn;
-      })
-      .catch(() => undefined);
-    return () => unlisten?.();
-  }, []);
 
   useEffect(() => {
     if (!listRef.current) return;
@@ -1157,7 +1166,7 @@ function formatMaterialSize(size?: number | null) {
 function AiView() {
   const {
     createTask, createReminder, createMaterial, reminders, materials, materialsLoading, materialsError, loadMaterials,
-    addMaterialFiles, addMaterialFolder, updateMaterial, removeMaterialRecord, tasks: allTasks,
+    addMaterialFiles, addMaterialFolder, updateMaterial, removeMaterialRecord, tasks: allTasks, records,
     aiWorkspaceInput: input, setAiWorkspaceInput: setInput,
     aiWorkspaceEntries: entries, setAiWorkspaceEntries: setEntries,
     aiPreferredSkill, setAiPreferredSkill,
@@ -1172,23 +1181,33 @@ function AiView() {
   const [editingMaterialId, setEditingMaterialId] = useState<string | null>(null);
   const [materialDraft, setMaterialDraft] = useState({ subject: "", tags: "", note: "" });
   const [lastRoute, setLastRoute] = useState(routePlanningSkill(""));
-  const [activeAiToolPanel, setActiveAiToolPanelState] = useState<"materials" | "plan" | "reminders" | "more" | "quick" | "history" | null>(aiPlanCanvasOpen ? "plan" : null);
-  const setActiveAiToolPanel = (value: "materials" | "plan" | "reminders" | "more" | "quick" | "history" | null | ((current: "materials" | "plan" | "reminders" | "more" | "quick" | "history" | null) => "materials" | "plan" | "reminders" | "more" | "quick" | "history" | null)) => {
+  const [activeAiToolPanel, setActiveAiToolPanelState] = useState<"materials" | "plan" | "reminders" | "more" | "quick" | null>(aiPlanCanvasOpen ? "plan" : null);
+  const setActiveAiToolPanel = (value: "materials" | "plan" | "reminders" | "more" | "quick" | null | ((current: "materials" | "plan" | "reminders" | "more" | "quick" | null) => "materials" | "plan" | "reminders" | "more" | "quick" | null)) => {
     setActiveAiToolPanelState((current) => {
       const next = typeof value === "function" ? value(current) : value;
       setAiPlanCanvasOpen(next === "plan");
       return next;
     });
   };
-  const toggleAiToolPanel = (panel: "materials" | "plan" | "reminders" | "more" | "quick" | "history") => {
+  const toggleAiToolPanel = (panel: "materials" | "plan" | "reminders" | "more" | "quick") => {
     setActiveAiToolPanel((current) => (current === panel ? null : panel));
   };
   const [loading, setLoading] = useState(false);
+  const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
   const [historySearch, setHistorySearch] = useState("");
+  const [historyDetails, setHistoryDetails] = useState<Record<string, {
+    messages: AiConversationMessage[];
+    title: string;
+    summary: string;
+    messageCount: number;
+    hasPlan: boolean;
+  }>>({});
   const preview = aiStructuredPreview as StructuredPreviewState;
   const setPreview = setAiStructuredPreview as (value: StructuredPreviewState) => void;
   const [selectedTaskIndexes, setSelectedTaskIndexes] = useState<number[]>([]);
   const [applyResults, setApplyResults] = useState<Array<{ title: string; status: "success" | "skipped_duplicate" | "failed"; message: string }>>([]);
+  const [selectedRescheduleIndexes, setSelectedRescheduleIndexes] = useState<number[]>([]);
+  const [rescheduleApplyResults, setRescheduleApplyResults] = useState<Array<{ title: string; status: "applied" | "skipped" | "failed"; message: string }>>([]);
   const [studyDrawerOpen, setStudyDrawerOpen] = useState(false);
   const [studyDraft, setStudyDraft] = useState({
     title: "",
@@ -1202,12 +1221,15 @@ function AiView() {
     note: "",
   });
   const listRef = useRef<HTMLDivElement | null>(null);
-  const tasks = Array.isArray(preview.parsed?.daily_plan)
+  const tasks = !isAdaptiveReschedulePreview(preview.parsed) && Array.isArray(preview.parsed?.daily_plan)
     ? preview.parsed.daily_plan.flatMap((day) => Array.isArray(day.tasks) ? day.tasks : [])
-    : Array.isArray(preview.parsed?.tasks)
+    : !isAdaptiveReschedulePreview(preview.parsed) && Array.isArray(preview.parsed?.tasks)
       ? preview.parsed.tasks
       : [];
   const selectedTasks = tasks.filter((_, index) => selectedTaskIndexes.includes(index));
+  const selectedRescheduleSuggestions = isAdaptiveReschedulePreview(preview.parsed)
+    ? preview.parsed.suggestions.filter((_, index) => selectedRescheduleIndexes.includes(index))
+    : [];
   const pendingReminderCount = reminders.filter((item) => item.status === "pending").length;
   const visibleMaterials = materials.filter((material) => {
     const haystack = `${material.name} ${material.subject ?? ""} ${material.tags} ${material.note ?? ""}`.toLowerCase();
@@ -1235,6 +1257,44 @@ function AiView() {
     return () => { window.removeEventListener("keydown", onKey); window.removeEventListener("click", onClick); };
   }, [activeAiToolPanel]);
 
+  useEffect(() => {
+    if (!historyDialogOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setHistoryDialogOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [historyDialogOpen]);
+
+  useEffect(() => {
+    if (!historyDialogOpen) return;
+    let cancelled = false;
+    void Promise.all(conversations.map(async (conversation) => {
+      const [detail, snapshot] = await Promise.all([
+        api<{ messages: AiConversationMessage[] }>("get_ai_conversation", { id: conversation.id }).catch(() => ({ messages: [] })),
+        api<{ plan_json: string } | null>("get_ai_plan_snapshot", { conversation_id: conversation.id }).catch(() => null),
+      ]);
+      let goalTitle: string | null = null;
+      if (snapshot?.plan_json) {
+        try {
+          goalTitle = (JSON.parse(snapshot.plan_json) as { goal?: { title?: string | null } }).goal?.title ?? null;
+        } catch {
+          goalTitle = null;
+        }
+      }
+      return [conversation.id, {
+        messages: detail.messages,
+        title: safeConversationTitle(conversation.title, detail.messages, goalTitle),
+        summary: safeConversationSummary(detail.messages),
+        messageCount: detail.messages.length,
+        hasPlan: Boolean(snapshot?.plan_json),
+      }] as const;
+    })).then((items) => {
+      if (!cancelled) setHistoryDetails(Object.fromEntries(items));
+    });
+    return () => { cancelled = true; };
+  }, [conversations, historyDialogOpen]);
+
   const addEntry = (entry: AiWorkspaceEntry) => setEntries((current) => [...current, entry]);
   const updateInboxEntry = (id: string, updater: (entry: Extract<AiWorkspaceEntry, { kind: "inbox" }>) => Extract<AiWorkspaceEntry, { kind: "inbox" }>) =>
     setEntries((current) => current.map((entry) => entry.id === id && entry.kind === "inbox" ? updater(entry) : entry));
@@ -1249,10 +1309,21 @@ function AiView() {
     }
     setPreview(parsed);
     void saveCurrentPlanSnapshot();
-    const goalTitle = typeof parsed.parsed?.goal === "object" && parsed.parsed.goal ? parsed.parsed.goal.title : null;
+    const goalTitle = !isAdaptiveReschedulePreview(parsed.parsed) && typeof parsed.parsed?.goal === "object" && parsed.parsed.goal ? parsed.parsed.goal.title : null;
     if (goalTitle && activeConversationId) {
       const active = conversations.find((item) => item.id === activeConversationId);
       if (active && active.title.startsWith("未命名计划")) void renameConversation(activeConversationId, goalTitle);
+    }
+    if (isAdaptiveReschedulePreview(parsed.parsed)) {
+      setSelectedRescheduleIndexes(
+        parsed.parsed.suggestions
+          .map((suggestion, index) => suggestion.risk === "low" && suggestion.type !== "split_task" && suggestion.type !== "keep" ? index : -1)
+          .filter((index) => index >= 0),
+      );
+      setRescheduleApplyResults([]);
+      setSelectedTaskIndexes([]);
+      setApplyResults([]);
+      return;
     }
     const flattened = Array.isArray(parsed.parsed?.daily_plan)
       ? parsed.parsed.daily_plan.flatMap((day) => Array.isArray(day.tasks) ? day.tasks : [])
@@ -1305,7 +1376,9 @@ function AiView() {
         );
         updatePreviewFromResponse(response);
         const parsed = parseLearningPlanText(response.reply ?? JSON.stringify(response));
-        const summary = parsed.parsed?.summary || response.summary || "我整理出了一版结构化计划，计划结果已就绪。";
+        const summary = parsed.parsed?.summary
+          || response.summary
+          || (parsed.error ? "计划结果解析失败，可查看原文。" : "我整理出了一版结构化计划，计划结果已就绪。");
         await appendAiMessage("assistant", summary);
       }
     } catch (error) {
@@ -1372,6 +1445,47 @@ function AiView() {
     setApplyResults(results);
   };
 
+  const applySelectedRescheduleSuggestions = async () => {
+    if (!isAdaptiveReschedulePreview(preview.parsed) || selectedRescheduleSuggestions.length === 0) return;
+    if (!window.confirm(`???? ${selectedRescheduleSuggestions.length} ????????????? planned_date?estimated_duration ??? tags?`)) return;
+    const results: Array<{ title: string; status: "applied" | "skipped" | "failed"; message: string }> = [];
+    for (const suggestion of selectedRescheduleSuggestions) {
+      const task = allTasks.find((item) => item.id === suggestion.task_id);
+      if (!task) {
+        results.push({ title: suggestion.task_title, status: "failed", message: "???????" });
+        continue;
+      }
+      try {
+        if (suggestion.type === "keep") {
+          results.push({ title: suggestion.task_title, status: "skipped", message: "?????" });
+          continue;
+        }
+        if (suggestion.type === "split_task") {
+          results.push({ title: suggestion.task_title, status: "skipped", message: "??????????????" });
+          continue;
+        }
+        const patch: TaskUpdatePatch = { id: task.id };
+        if (suggestion.type === "move_task" && suggestion.suggested_planned_date) patch.planned_date = suggestion.suggested_planned_date;
+        if (suggestion.type === "estimate_duration" && suggestion.suggested_estimated_duration != null) patch.estimated_duration = suggestion.suggested_estimated_duration;
+        if (suggestion.type === "mark_needs_review") patch.tags = [...new Set([...parseTags(task), ...suggestion.add_tags])];
+        if (Object.keys(patch).length === 1) {
+          results.push({ title: suggestion.task_title, status: "skipped", message: "??????????" });
+          continue;
+        }
+        await useAppStore.getState().updateTask(patch);
+        results.push({ title: suggestion.task_title, status: "applied", message: "???" });
+      } catch (error) {
+        results.push({ title: suggestion.task_title, status: "failed", message: error instanceof Error ? error.message : "????" });
+      }
+    }
+    await useAppStore.getState().load();
+    setRescheduleApplyResults(results);
+    await appendAiMessage(
+      "assistant",
+      `????????applied ${results.filter((item) => item.status === "applied").length}?skipped ${results.filter((item) => item.status === "skipped").length}?failed ${results.filter((item) => item.status === "failed").length}?`,
+    );
+  };
+
   const submitStudyDraft = async () => {
     const compactOutline = studyDraft.outline.trim();
     const prompt = [
@@ -1398,7 +1512,7 @@ function AiView() {
     const note = JSON.stringify({
       kind: "learning_outline",
       summary: preview.parsed?.summary ?? null,
-      chapters: preview.parsed?.chapters ?? [],
+      chapters: !isAdaptiveReschedulePreview(preview.parsed) ? preview.parsed?.chapters ?? [] : [],
       raw_outline_excerpt: studyDraft.outline.trim().slice(0, 1200),
       memo: studyDraft.note || null,
     });
@@ -1418,7 +1532,12 @@ function AiView() {
 
   return (
     <section className="glass-card ai-workspace flex h-full min-h-0 flex-col overflow-hidden p-5">
-      <Header title="AI 计划编排" subtitle="用自然语言记录任务、安排计划、调整日程" />
+      <div className="flex items-start justify-between gap-3">
+        <Header title="AI 计划编排" subtitle="用自然语言记录任务、安排计划、调整日程" />
+        <button className="glass-inset shrink-0 px-3 py-2 text-sm" type="button" onClick={() => setHistoryDialogOpen(true)}>
+          历史记录
+        </button>
+      </div>
       <div className="ai-dialogue-shell mt-4 grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_auto]">
         <div className="glass-inset flex min-h-[520px] min-w-0 flex-col overflow-hidden p-4">
           <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-[var(--muted-foreground)]">
@@ -1447,10 +1566,12 @@ function AiView() {
               />
             ))}
           </div>
-          {preview.parsed && (
+          {(preview.parsed || preview.error) && (
             <button className="glass-inset mt-3 flex flex-wrap items-center justify-between gap-2 p-3 text-left text-sm" type="button" onClick={() => toggleAiToolPanel("plan")}>
               <span className="font-medium">计划结果</span>
-              <span className="text-[var(--muted-foreground)]">{tasks.length} 个任务 · {stringList(preview.parsed.warnings).length} 条风险提醒 · 点击展开计划结果</span>
+              <span className="text-[var(--muted-foreground)]">
+                {preview.parsed ? `${tasks.length} 个任务 · ${stringList(preview.parsed.warnings).length} 条风险提醒` : "解析失败，可查看原文"} · 点击展开计划结果
+              </span>
             </button>
           )}
           <div className="relative mt-3 border-t border-white/10 pt-3">
@@ -1458,7 +1579,10 @@ function AiView() {
               <button className={`glass-inset px-3 py-1.5 ${activeAiToolPanel === "materials" ? "btn-glow" : ""}`} type="button" onClick={() => toggleAiToolPanel("materials")}>添加资料</button>
               <button className={`glass-inset px-3 py-1.5 ${activeAiToolPanel === "plan" ? "btn-glow" : ""}`} type="button" onClick={() => toggleAiToolPanel("plan")} disabled={!preview.parsed}>计划结果</button>
               <button className={`glass-inset px-3 py-1.5 ${activeAiToolPanel === "reminders" ? "btn-glow" : ""}`} type="button" onClick={() => toggleAiToolPanel("reminders")}>提醒</button>
-              <button className={`glass-inset px-3 py-1.5 ${activeAiToolPanel === "history" ? "btn-glow" : ""}`} type="button" onClick={() => toggleAiToolPanel("history")}>历史</button>
+              <button className={`glass-inset px-3 py-1.5 ${preferredSkill === "adaptive_reschedule" ? "btn-glow" : ""}`} type="button" onClick={() => {
+                setAiPreferredSkill("adaptive_reschedule");
+                showToast("已切到局部重排；直接描述哪里没完成或哪里太满。");
+              }}>局部重排</button>
               <button className={`glass-inset px-3 py-1.5 ${activeAiToolPanel === "more" ? "btn-glow" : ""}`} type="button" onClick={() => toggleAiToolPanel("more")}>更多</button>
               <button className={`glass-inset px-3 py-1.5 ${activeAiToolPanel === "quick" ? "btn-glow" : ""}`} type="button" onClick={() => toggleAiToolPanel("quick")}>/ 快捷</button>
             </div>
@@ -1483,39 +1607,6 @@ function AiView() {
                     <button className="glass-inset px-3 py-2 text-left" type="button" onClick={() => { setStudyDrawerOpen(true); setActiveAiToolPanel(null); }}>建立学习项目</button>
                     <button className="glass-inset px-3 py-2 text-left" type="button" onClick={() => { setStudyDrawerOpen(true); setActiveAiToolPanel(null); }}>粘贴大纲生成计划</button>
                     <button className="glass-inset px-3 py-2 text-left" type="button" onClick={() => { setAiPreferredSkill("material_planning"); showToast("可以直接说：根据已有资料生成复习计划。"); setActiveAiToolPanel(null); }}>根据资料生成复习计划</button>
-                  </div>
-                )}
-                {activeAiToolPanel === "history" && (
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <h4 className="font-semibold">历史对话</h4>
-                      <button className="glass-inset px-2 py-1 text-xs" type="button" onClick={() => void createConversation()}>
-                        新建对话
-                      </button>
-                    </div>
-                    <input className="field w-full" value={historySearch} onChange={(event) => setHistorySearch(event.target.value)} placeholder="按标题或摘要搜索" />
-                    <div className="thin-scrollbar max-h-72 space-y-2 overflow-y-auto pr-1">
-                      {conversations
-                        .filter((item) => `${item.title} ${item.summary ?? ""}`.toLowerCase().includes(historySearch.toLowerCase()))
-                        .map((item) => (
-                          <div key={item.id} className={`rounded-xl border p-2 ${item.id === activeConversationId ? "border-[var(--ring)]" : "border-white/10"}`}>
-                            <button className="block w-full text-left" type="button" onClick={() => { void openConversation(item.id); setActiveAiToolPanel(null); }}>
-                              <p className="truncate font-medium">{item.title}</p>
-                              <p className="truncate text-xs text-[var(--muted-foreground)]">{item.summary || "暂无摘要"}</p>
-                              <p className="mt-1 text-[11px] text-[var(--muted-foreground)]">{dayjs(item.updated_at).format("YYYY-MM-DD HH:mm")}</p>
-                            </button>
-                            <div className="mt-2 flex gap-2">
-                              <button className="glass-inset px-2 py-1 text-xs" type="button" onClick={() => {
-                                const next = window.prompt("重命名对话", item.title);
-                                if (next?.trim()) void renameConversation(item.id, next.trim());
-                              }}>重命名</button>
-                              <button className="glass-inset px-2 py-1 text-xs" type="button" onClick={() => {
-                                if (window.confirm("只删除这段 AI 对话历史，不会删除任务、资料或提醒。继续吗？")) void deleteConversation(item.id);
-                              }}>删除</button>
-                            </div>
-                          </div>
-                        ))}
-                    </div>
                   </div>
                 )}
                 {activeAiToolPanel === "materials" && (
@@ -1638,7 +1729,7 @@ function AiView() {
             </form>
           </div>
         </div>
-        {preview.parsed && (
+        {(preview.parsed || preview.error) && (
           <aside className={`ai-plan-drawer glass-inset thin-scrollbar min-h-0 overflow-y-auto p-4 ${activeAiToolPanel === "plan" ? "is-open" : ""}`}>
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -1647,15 +1738,34 @@ function AiView() {
               </div>
               <button className="glass-inset px-3 py-1.5 text-xs xl:hidden" type="button" onClick={() => setActiveAiToolPanel(null)}>✕</button>
             </div>
-            <PlanCanvasBody
-              preview={preview}
-              tasks={tasks}
-              selectedTaskIndexes={selectedTaskIndexes}
-              setSelectedTaskIndexes={setSelectedTaskIndexes}
-              selectedTasks={selectedTasks}
-              applySelectedTasks={applySelectedTasks}
-              applyResults={applyResults}
-            />
+            {preview.parsed ? (
+              <PlanCanvasBody
+                preview={preview}
+                tasks={tasks}
+                selectedTaskIndexes={selectedTaskIndexes}
+                setSelectedTaskIndexes={setSelectedTaskIndexes}
+                selectedTasks={selectedTasks}
+                applySelectedTasks={applySelectedTasks}
+                applyResults={applyResults}
+                selectedRescheduleIndexes={selectedRescheduleIndexes}
+                setSelectedRescheduleIndexes={setSelectedRescheduleIndexes}
+                selectedRescheduleSuggestions={selectedRescheduleSuggestions}
+                applySelectedRescheduleSuggestions={applySelectedRescheduleSuggestions}
+                rescheduleApplyResults={rescheduleApplyResults}
+              />
+            ) : (
+              <div className="mt-4 space-y-3 text-sm">
+                <PreviewBlock title="解析失败">
+                  <p>计划结果解析失败，可查看原文。</p>
+                </PreviewBlock>
+                {preview.raw && (
+                  <details className="glass-inset p-3">
+                    <summary className="cursor-pointer font-medium">原文 / Debug</summary>
+                    <pre className="thin-scrollbar mt-3 max-h-72 overflow-auto whitespace-pre-wrap text-xs text-[var(--muted-foreground)]">{preview.raw}</pre>
+                  </details>
+                )}
+              </div>
+            )}
           </aside>
         )}
         {studyDrawerOpen && (
@@ -1689,7 +1799,53 @@ function AiView() {
           </div>
         )}
       </div>
-      {preview.parsed && activeAiToolPanel === "plan" && <button className="ai-drawer-backdrop xl:hidden" type="button" aria-label="关闭计划结果" onClick={() => setActiveAiToolPanel(null)} />}
+      {historyDialogOpen && createPortal(
+        <div className="ai-history-backdrop" role="presentation" onMouseDown={() => setHistoryDialogOpen(false)}>
+          <section className="ai-history-dialog glass-card" role="dialog" aria-modal="true" aria-label="历史记录" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-4">
+              <div>
+                <h3 className="text-lg font-semibold">历史记录</h3>
+                <p className="mt-1 text-sm text-[var(--muted-foreground)]">这里只保留用户可见消息；内部规划上下文不会进入列表。</p>
+              </div>
+              <div className="flex gap-2">
+                <button className="glass-inset px-3 py-2 text-sm" type="button" onClick={() => void createConversation()}>新建对话</button>
+                <button className="glass-inset px-3 py-2 text-sm" type="button" onClick={() => setHistoryDialogOpen(false)}>关闭</button>
+              </div>
+            </div>
+            <input className="field mt-4 w-full" value={historySearch} onChange={(event) => setHistorySearch(event.target.value)} placeholder="搜索标题或摘要" />
+            <div className="thin-scrollbar mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+              {conversations
+                .map((item) => ({ item, meta: historyDetails[item.id] }))
+                .filter(({ item, meta }) => `${meta?.title ?? item.title} ${meta?.summary ?? ""}`.toLowerCase().includes(historySearch.toLowerCase()))
+                .map(({ item, meta }) => (
+                  <div key={item.id} className={`rounded-2xl border p-4 ${item.id === activeConversationId ? "border-[var(--ring)] bg-white/[0.04]" : "border-white/10"}`}>
+                    <button className="block w-full text-left" type="button" onClick={() => { void openConversation(item.id); setHistoryDialogOpen(false); }}>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="font-medium">{meta?.title ?? item.title}</p>
+                        <span className="text-xs text-[var(--muted-foreground)]">{dayjs(item.updated_at).format("YYYY-MM-DD HH:mm")}</span>
+                      </div>
+                      <p className="mt-2 line-clamp-2 text-sm text-[var(--muted-foreground)]">{meta?.summary ?? "正在读取摘要..."}</p>
+                      <p className="mt-2 text-xs text-[var(--muted-foreground)]">
+                        {meta?.messageCount ?? 0} 条消息 · {meta?.hasPlan ? "有关联 Plan Canvas" : "无关联 Plan Canvas"}
+                      </p>
+                    </button>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button className="glass-inset px-3 py-1.5 text-xs" type="button" onClick={() => {
+                        const next = window.prompt("重命名对话", meta?.title ?? item.title);
+                        if (next?.trim()) void renameConversation(item.id, next.trim());
+                      }}>重命名</button>
+                      <button className="glass-inset px-3 py-1.5 text-xs" type="button" onClick={() => {
+                        if (window.confirm("只删除 AI 对话历史，不删除任务、资料、提醒。继续吗？")) void deleteConversation(item.id);
+                      }}>删除</button>
+                    </div>
+                  </div>
+                ))}
+            </div>
+          </section>
+        </div>,
+        document.body,
+      )}
+      {(preview.parsed || preview.error) && activeAiToolPanel === "plan" && <button className="ai-drawer-backdrop xl:hidden" type="button" aria-label="关闭计划结果" onClick={() => setActiveAiToolPanel(null)} />}
     </section>
   );
 }
@@ -1744,7 +1900,7 @@ function InboxDraftCard({ entry, onPatch, onConfirm, onCancel }: {
   );
 }
 
-function PlanCanvasBody({ preview, tasks, selectedTaskIndexes, setSelectedTaskIndexes, selectedTasks, applySelectedTasks, applyResults }: {
+function PlanCanvasBody({ preview, tasks, selectedTaskIndexes, setSelectedTaskIndexes, selectedTasks, applySelectedTasks, applyResults, selectedRescheduleIndexes, setSelectedRescheduleIndexes, selectedRescheduleSuggestions, applySelectedRescheduleSuggestions, rescheduleApplyResults }: {
   preview: StructuredPreviewState;
   tasks: LearningTaskPreview[];
   selectedTaskIndexes: number[];
@@ -1752,8 +1908,95 @@ function PlanCanvasBody({ preview, tasks, selectedTaskIndexes, setSelectedTaskIn
   selectedTasks: LearningTaskPreview[];
   applySelectedTasks: () => Promise<void>;
   applyResults: Array<{ title: string; status: "success" | "skipped_duplicate" | "failed"; message: string }>;
+  selectedRescheduleIndexes: number[];
+  setSelectedRescheduleIndexes: Dispatch<SetStateAction<number[]>>;
+  selectedRescheduleSuggestions: AdaptiveReschedulePreview["suggestions"];
+  applySelectedRescheduleSuggestions: () => Promise<void>;
+  rescheduleApplyResults: Array<{ title: string; status: "applied" | "skipped" | "failed"; message: string }>;
 }) {
   if (!preview.parsed) return null;
+  if (isAdaptiveReschedulePreview(preview.parsed)) {
+    const reschedule = preview.parsed;
+    return (
+      <div className="mt-4 space-y-3 text-sm">
+        <PreviewBlock title="局部重排概览">
+          <p>{reschedule.summary || "暂无概览"}</p>
+          <p className="mt-2 text-[var(--muted-foreground)]">{reschedule.reason || "暂无原因说明"}</p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            <p>策略：{reschedule.reschedule_scope.strategy}</p>
+            <p>影响任务：{reschedule.reschedule_scope.affected_task_count}</p>
+            <p className="sm:col-span-2">覆盖日期：{reschedule.reschedule_scope.date_range.join(" ~ ")}</p>
+          </div>
+        </PreviewBlock>
+        {stringList(reschedule.clarification_questions).length > 0 && (
+          <PreviewBlock title="待补充信息">
+            <ul className="list-disc space-y-1 pl-5">{stringList(reschedule.clarification_questions).map((item) => <li key={item}>{item}</li>)}</ul>
+          </PreviewBlock>
+        )}
+        <PreviewBlock title={`调整建议 (${reschedule.suggestions.length})`}>
+          <div className="space-y-3">
+            {reschedule.suggestions.map((suggestion, index) => {
+              const disabled = suggestion.type === "split_task" || suggestion.type === "keep";
+              return (
+                <label key={`${suggestion.task_id}-${index}`} className="block rounded-xl border border-white/10 p-3">
+                  <div className="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      checked={selectedRescheduleIndexes.includes(index)}
+                      disabled={disabled}
+                      onChange={() => setSelectedRescheduleIndexes((current) => current.includes(index) ? current.filter((item) => item !== index) : [...current, index])}
+                    />
+                    <div className="min-w-0">
+                      <p className="font-semibold">{suggestion.task_title}</p>
+                      <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+                        {suggestion.type} · 风险 {suggestion.risk}
+                        {suggestion.type === "split_task" ? " · 后续支持" : ""}
+                      </p>
+                      <p className="mt-2">日期：{suggestion.current_planned_date || "-"} → {suggestion.suggested_planned_date || "-"}</p>
+                      <p>时长：{suggestion.current_estimated_duration ?? "-"} → {suggestion.suggested_estimated_duration ?? "-"} 分钟</p>
+                      {suggestion.add_tags.length > 0 && <p>追加标签：{suggestion.add_tags.join(" / ")}</p>}
+                      <p className="mt-2 text-[var(--muted-foreground)]">{suggestion.reason}</p>
+                    </div>
+                  </div>
+                </label>
+              );
+            })}
+          </div>
+        </PreviewBlock>
+        <PreviewBlock title="调整后每日负荷">
+          <div className="grid gap-2 sm:grid-cols-2">
+            {reschedule.daily_load_after.map((day) => (
+              <div key={day.date} className="rounded-xl border border-white/10 p-3">
+                <p className="font-medium">{day.date}</p>
+                <p className="mt-1 text-xs text-[var(--muted-foreground)]">{day.estimated_minutes} 分钟 · {day.task_count} 项任务</p>
+                <p className={day.overload ? "mt-1 text-[var(--neon-amber)]" : "mt-1 text-[var(--neon-blue)]"}>{day.overload ? "过载" : "负荷可接受"}</p>
+              </div>
+            ))}
+          </div>
+        </PreviewBlock>
+        <PreviewBlock title="风险提醒">
+          {reschedule.warnings.length > 0 ? <ul className="list-disc space-y-1 pl-5">{reschedule.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : <p>暂无风险提醒</p>}
+        </PreviewBlock>
+        <div className="glass-inset grid gap-3 p-3 sm:grid-cols-2">
+          <button className="btn-glow rounded-xl px-4 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50" type="button" disabled={selectedRescheduleSuggestions.length === 0} onClick={applySelectedRescheduleSuggestions}>应用所选调整</button>
+          <button className="glass-inset px-4 py-2 text-sm" type="button" onClick={() => navigator.clipboard.writeText(preview.raw || JSON.stringify(reschedule, null, 2))}>复制 JSON</button>
+          <p className="text-xs text-[var(--muted-foreground)] sm:col-span-2">默认只勾选 low risk；medium / high risk 默认不勾选。只会修改 planned_date、estimated_duration 或追加 tags，不会写 quadrant。</p>
+          {rescheduleApplyResults.length > 0 && (
+            <div className="sm:col-span-2 space-y-2">
+              <p className="text-xs text-[var(--muted-foreground)]">
+                applied {rescheduleApplyResults.filter((item) => item.status === "applied").length} · skipped {rescheduleApplyResults.filter((item) => item.status === "skipped").length} · failed {rescheduleApplyResults.filter((item) => item.status === "failed").length}
+              </p>
+              {rescheduleApplyResults.map((result, index) => (
+                <p key={`${result.title}-${index}`} className={result.status === "applied" ? "text-[var(--neon-blue)]" : result.status === "skipped" ? "text-[var(--neon-amber)]" : "text-[var(--neon-pink)]"}>
+                  {result.title}：{result.message}
+                </p>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
   const goal = typeof preview.parsed.goal === "object" && preview.parsed.goal ? preview.parsed.goal : null;
   const chapterTitles = (preview.parsed.chapters ?? []).map((chapter) => chapter.title?.trim()).filter(Boolean) as string[];
   const arrangedChapterTitles = new Set(

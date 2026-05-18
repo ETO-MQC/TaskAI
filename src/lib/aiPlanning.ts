@@ -33,6 +33,46 @@ export type InboxCapturePreview = {
   needs_user_confirmation: true;
 };
 
+export type AdaptiveRescheduleSuggestionType =
+  | "move_task"
+  | "estimate_duration"
+  | "mark_needs_review"
+  | "split_task"
+  | "keep";
+
+export type AdaptiveReschedulePreview = {
+  intent: "adaptive_reschedule";
+  summary: string;
+  reason: string;
+  clarification_questions?: string[];
+  reschedule_scope: {
+    mode: "partial";
+    date_range: [string, string];
+    affected_task_count: number;
+    strategy: "delay" | "compress" | "redistribute" | "reduce_low_priority" | "review_first";
+  };
+  suggestions: Array<{
+    type: AdaptiveRescheduleSuggestionType;
+    task_id: string;
+    task_title: string;
+    current_planned_date: string | null;
+    suggested_planned_date: string | null;
+    current_estimated_duration: number | null;
+    suggested_estimated_duration: number | null;
+    add_tags: string[];
+    reason: string;
+    risk: "low" | "medium" | "high";
+  }>;
+  daily_load_after: Array<{
+    date: string;
+    estimated_minutes: number;
+    task_count: number;
+    overload: boolean;
+  }>;
+  warnings: string[];
+  needs_user_confirmation: true;
+};
+
 export const AI_PLANNING_SYSTEM_PROMPT = `你是 SmartFocus 的 AI 计划编排助手。
 
 SmartFocus 负责：计划、排程、任务拆解、自适应调整建议，以及 LearnKATA 联动结构输出。
@@ -118,6 +158,59 @@ export function buildPlanningPrompt(skillId: PlanningSkillId) {
 
 当前 skill：${skillId}
 ${AI_PLANNING_SKILLS[skillId].prompt}`;
+}
+
+
+export function buildAdaptiveReschedulePrompt() {
+  return `${AI_PLANNING_SYSTEM_PROMPT}
+
+?? skill?adaptive_reschedule
+??????????????????????????????
+??? JSON?
+{
+  "intent": "adaptive_reschedule",
+  "summary": "",
+  "reason": "",
+  "clarification_questions": [],
+  "reschedule_scope": { "mode": "partial", "date_range": ["YYYY-MM-DD", "YYYY-MM-DD"], "affected_task_count": 0, "strategy": "delay | compress | redistribute | reduce_low_priority | review_first" },
+  "suggestions": [{ "type": "move_task | estimate_duration | mark_needs_review | split_task | keep", "task_id": "", "task_title": "", "current_planned_date": "YYYY-MM-DD", "suggested_planned_date": "YYYY-MM-DD", "current_estimated_duration": 60, "suggested_estimated_duration": 45, "add_tags": ["???"], "reason": "", "risk": "low | medium | high" }],
+  "daily_load_after": [{ "date": "YYYY-MM-DD", "estimated_minutes": 120, "task_count": 3, "overload": false }],
+  "warnings": [],
+  "needs_user_confirmation": true
+}
+???
+- ??????????????????????
+- ???????????? quadrant??? deadline / urgency / importance?
+- ???????? clarification_questions??????
+- split_task ??????????????keep ?????????
+- ?????????? token context??????????`;
+}
+
+export function buildAdaptiveRescheduleContext(
+  tasks: Array<{ id: string; title: string; planned_date?: string | null; deadline?: string | null; estimated_duration?: number | null; urgency: string; importance: string; tags: string; status: string; updated_at: string; actual_total_duration?: number | null }>,
+  records: Array<{ task_id?: string | null; mode: string; duration: number; started_at: string; ended_at: string }>,
+  userInput: string,
+  nowIso = new Date().toISOString(),
+) {
+  const now = new Date(nowIso);
+  const recent7 = new Date(now); recent7.setDate(now.getDate() - 7);
+  const recent14 = new Date(now); recent14.setDate(now.getDate() - 14);
+  const unfinished = tasks.filter((task) => task.status !== "done" && task.status !== "archived").map((task) => ({ id: task.id, title: task.title, planned_date: task.planned_date ?? null, deadline: task.deadline ?? null, estimated_duration: task.estimated_duration ?? null, urgency: task.urgency, importance: task.importance, tags: safeParseTags(task.tags), completed: false }));
+  const recentlyCompleted = tasks.filter((task) => task.status === "done" && new Date(task.updated_at) >= recent7).map((task) => ({ title: task.title, completed_at: task.updated_at, actual_total_duration: task.actual_total_duration ?? null }));
+  const recentRecords = records.filter((record) => new Date(record.started_at) >= recent14).map((record) => ({ task_id: record.task_id ?? null, mode: record.mode, duration_seconds: Math.round(record.duration * 60), started_at: record.started_at, ended_at: record.ended_at }));
+  const byDate = new Map<string, { planned_task_count: number; estimated_minutes: number; unfinished_count: number; overdue_count: number }>();
+  for (const task of unfinished) {
+    const date = task.planned_date?.slice(0, 10); if (!date) continue;
+    const row = byDate.get(date) ?? { planned_task_count: 0, estimated_minutes: 0, unfinished_count: 0, overdue_count: 0 };
+    row.planned_task_count += 1; row.estimated_minutes += task.estimated_duration ?? 0; row.unfinished_count += 1; if (date < nowIso.slice(0, 10)) row.overdue_count += 1; byDate.set(date, row);
+  }
+  return `RESCHEDULE_CONTEXT
+${JSON.stringify({ current_unfinished_tasks: unfinished, recent_completed_tasks: recentlyCompleted, recent_timer_records: recentRecords, daily_load_summary: [...byDate.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, load]) => ({ date, ...load })), user_input: userInput })}`;
+}
+
+function safeParseTags(value: string) {
+  try { const parsed = JSON.parse(value); return Array.isArray(parsed) ? parsed.map((item) => `${item}`) : []; }
+  catch { return []; }
 }
 
 export function buildMaterialMetadataSummary(materials: Array<{ name: string; file_type: string; subject?: string | null; exam_type?: string | null; tags: string; note?: string | null; status: string }>) {

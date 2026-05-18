@@ -19,6 +19,7 @@ import type {
   TimerSnapshot,
   Urgency,
 } from "./types";
+import { filterVisibleConversationMessages, isInternalPlanningPrompt } from "./aiHistory";
 
 type View = "workbench" | "tasks" | "timer" | "calendar" | "stats" | "settings" | "ai";
 
@@ -173,6 +174,9 @@ const storedAiWorkspace = readStoredJson(aiWorkspaceStorageKey, {
   preview: { parsed: null, raw: "", error: null } as StructuredPreviewSnapshot,
   planCanvasOpen: false,
 });
+storedAiWorkspace.entries = storedAiWorkspace.entries.filter((entry) =>
+  entry.kind !== "message" || !isInternalPlanningPrompt(entry.content),
+);
 
 function draftToInput(draft: TaskDraft): TaskInput {
   return {
@@ -352,7 +356,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
   materialsLoading: false,
   materialsError: null,
   stats: null,
-  aiMessages: readStoredJson<AiMessage[]>(aiMessagesStorageKey, []).slice(-50),
+  aiMessages: readStoredJson<AiMessage[]>(aiMessagesStorageKey, [])
+    .filter((message) => !isInternalPlanningPrompt(message.content))
+    .slice(-50),
   conversations: [],
   activeConversationId: null,
   aiWorkspaceEntries: storedAiWorkspace.entries.slice(-50),
@@ -639,8 +645,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         preview = { parsed: null, raw: snapshot.plan_json, error: "计划快照解析失败" };
       }
     }
-    const entries = detail.messages
-      .filter((message) => message.role !== "system")
+    const entries = filterVisibleConversationMessages(detail.messages)
       .map((message) => ({
         id: message.id,
         role: message.role as "user" | "assistant",
@@ -675,6 +680,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
   appendAiMessage: async (role, content) => {
+    if (isInternalPlanningPrompt(content)) return;
     let conversationId = get().activeConversationId;
     if (!conversationId) {
       const firstUserTitle = role === "user" ? content.trim().slice(0, 20) : null;

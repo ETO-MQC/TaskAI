@@ -17,6 +17,7 @@ import type {
   AiConversationMessage,
   AiPlanSnapshot,
 } from "./types";
+import { filterVisibleConversationMessages, isInternalPlanningPrompt } from "./aiHistory";
 import { calculateQuadrant } from "./domain";
 
 type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
@@ -700,9 +701,9 @@ class FallbackApi {
   async get_ai_conversation(id: string): Promise<AiConversationDetail> {
     const conversation = (await this.list_ai_conversations()).find((item) => item.id === id);
     if (!conversation) throw new Error("Conversation not found");
-    const messages = readJson<AiConversationMessage[]>(aiMessageKey, [])
+    const messages = filterVisibleConversationMessages(readJson<AiConversationMessage[]>(aiMessageKey, [])
       .filter((item) => item.conversation_id === id)
-      .sort((a, b) => a.created_at.localeCompare(b.created_at));
+      .sort((a, b) => a.created_at.localeCompare(b.created_at)));
     return { conversation, messages };
   }
 
@@ -722,6 +723,9 @@ class FallbackApi {
   }
 
   async append_ai_message(input: { conversation_id: string; role: AiConversationMessage["role"]; content: string }): Promise<AiConversationMessage> {
+    if (isInternalPlanningPrompt(input.content)) {
+      throw new Error("internal planning prompt must not be saved as visible ai history");
+    }
     const message: AiConversationMessage = {
       id: crypto.randomUUID(),
       conversation_id: input.conversation_id,
@@ -753,6 +757,55 @@ class FallbackApi {
 
   async send_ai_message(message: string): Promise<AiResponse> {
     if (message.startsWith("INBOX_CAPTURE_REQUEST\n")) return fallbackInboxCapture(message);
+    if (message.includes("RESCHEDULE_CONTEXT")) {
+      let parsedContext: {
+        current_unfinished_tasks?: Array<{ id: string; title: string; planned_date?: string | null; estimated_duration?: number | null }>;
+      } = {};
+      try {
+        parsedContext = JSON.parse(message.split("RESCHEDULE_CONTEXT\n").pop() ?? "{}");
+      } catch {
+        parsedContext = {};
+      }
+      const first = parsedContext.current_unfinished_tasks?.[0];
+      return {
+        intent: "adaptive_reschedule",
+        action: "preview",
+        data: {},
+        needs_clarification: false,
+        clarification: null,
+        reply: JSON.stringify({
+          intent: "adaptive_reschedule",
+          summary: "我先给出一版局部调整建议，等待你确认后再应用。",
+          reason: "近期执行与原计划出现偏差，优先只调整受影响任务。",
+          reschedule_scope: {
+            mode: "partial",
+            date_range: [localDateKey(), localDateKey()],
+            affected_task_count: first ? 1 : 0,
+            strategy: "redistribute",
+          },
+          suggestions: first ? [{
+            type: "move_task",
+            task_id: first.id,
+            task_title: first.title,
+            current_planned_date: first.planned_date ?? null,
+            suggested_planned_date: localDateKey(),
+            current_estimated_duration: first.estimated_duration ?? null,
+            suggested_estimated_duration: first.estimated_duration ?? null,
+            add_tags: [],
+            reason: "本地演示模式下，先把最先受影响的任务纳入可确认调整。",
+            risk: "low",
+          }] : [],
+          daily_load_after: [{
+            date: localDateKey(),
+            estimated_minutes: first?.estimated_duration ?? 0,
+            task_count: first ? 1 : 0,
+            overload: false,
+          }],
+          warnings: first ? [] : ["当前没有可供调整的未完成任务。"],
+          needs_user_confirmation: true,
+        }),
+      };
+    }
     if (
       /学习规划|今日计划|本周计划|期末复习|考研复习|考公备考|课程学习|资料整理|LearnKATA/.test(message)
     ) {
