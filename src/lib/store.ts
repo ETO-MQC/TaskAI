@@ -123,6 +123,7 @@ interface AppStore {
   confirmRecordLink: (taskId?: string | null) => Promise<void>;
   sendAi: (message: string) => Promise<AiResponse>;
   appendAiStream: (delta: string) => void;
+  setAiMessages: (messages: AiMessage[] | ((messages: AiMessage[]) => AiMessage[])) => void;
   setAiWorkspaceEntries: (entries: AiWorkspaceEntry[] | ((entries: AiWorkspaceEntry[]) => AiWorkspaceEntry[])) => void;
   setAiWorkspaceInput: (value: string) => void;
   setAiPreferredSkill: (value: string | null) => void;
@@ -165,6 +166,17 @@ function persistAiWorkspace(snapshot: {
 
 function persistAiMessages(messages: AiMessage[]) {
   localStorage.setItem(aiMessagesStorageKey, JSON.stringify(messages.slice(-50)));
+}
+
+function persistCurrentAiWorkspace(get: () => AppStore) {
+  const state = get();
+  persistAiWorkspace({
+    entries: state.aiWorkspaceEntries,
+    input: state.aiWorkspaceInput,
+    preferredSkill: state.aiPreferredSkill,
+    preview: state.aiStructuredPreview,
+    planCanvasOpen: state.aiPlanCanvasOpen,
+  });
 }
 
 const storedAiWorkspace = readStoredJson(aiWorkspaceStorageKey, {
@@ -558,6 +570,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ aiMessages: updatedMessages });
     persistAiMessages(updatedMessages);
   },
+  setAiMessages: (value) => {
+    const messages = typeof value === "function" ? value(get().aiMessages) : value;
+    const sliced = messages.slice(-50);
+    set({ aiMessages: sliced });
+    persistAiMessages(sliced);
+  },
   setAiWorkspaceEntries: (value) => {
     const entries = typeof value === "function" ? value(get().aiWorkspaceEntries) : value;
     const sliced = entries.slice(-50);
@@ -631,6 +649,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       aiWorkspaceInput: "",
       aiStructuredPreview: { parsed: null, raw: "", error: null },
     }));
+    persistCurrentAiWorkspace(get);
     return conversation;
   },
   openConversation: async (id) => {
@@ -660,6 +679,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       aiStructuredPreview: preview,
       aiPlanCanvasOpen: false,
     });
+    persistCurrentAiWorkspace(get);
   },
   renameConversation: async (id, title) => {
     const updated = await api<AiConversation>("update_ai_conversation_title", { id, title });
@@ -677,6 +697,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         aiWorkspaceInput: "",
         aiStructuredPreview: { parsed: null, raw: "", error: null },
       });
+      persistCurrentAiWorkspace(get);
     }
   },
   appendAiMessage: async (role, content) => {
@@ -686,15 +707,29 @@ export const useAppStore = create<AppStore>((set, get) => ({
       const firstUserTitle = role === "user" ? content.trim().slice(0, 20) : null;
       conversationId = (await get().createConversation(firstUserTitle)).id;
     }
-    const message = await api<{ id: string }>("append_ai_message", {
-      conversation_id: conversationId,
-      role,
-      content,
-    });
+    const optimisticId = `local-${crypto.randomUUID()}`;
     set((state) => ({
-      aiWorkspaceEntries: [...state.aiWorkspaceEntries, { id: message.id, role, kind: "message" as const, content }].slice(-50),
+      aiWorkspaceEntries: [...state.aiWorkspaceEntries, { id: optimisticId, role, kind: "message" as const, content }].slice(-50),
     }));
-    await get().loadConversations();
+    try {
+      const message = await api<{ id: string }>("append_ai_message", {
+        conversation_id: conversationId,
+        role,
+        content,
+      });
+      set((state) => ({
+        aiWorkspaceEntries: state.aiWorkspaceEntries.map((entry) =>
+          entry.id === optimisticId ? { ...entry, id: message.id } : entry,
+        ),
+      }));
+      persistCurrentAiWorkspace(get);
+      await get().loadConversations();
+    } catch (error) {
+      set((state) => ({
+        aiWorkspaceEntries: state.aiWorkspaceEntries.filter((entry) => entry.id !== optimisticId),
+      }));
+      throw error;
+    }
   },
   saveCurrentPlanSnapshot: async () => {
     const conversationId = get().activeConversationId;
@@ -704,6 +739,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       conversation_id: conversationId,
       plan_json: JSON.stringify(parsed),
     });
+    persistCurrentAiWorkspace(get);
     await get().loadConversations();
   },
 }));

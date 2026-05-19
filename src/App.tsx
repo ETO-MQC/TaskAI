@@ -41,7 +41,7 @@ import dayjs from "dayjs";
 import isBetween from "dayjs/plugin/isBetween";
 import { api } from "./lib/api";
 import { TaskUpdatePatch, useAppStore, type AiWorkspaceEntry } from "./lib/store";
-import type { AiConversationMessage, Importance, Material, Priority, Reminder, Task, TimerMode, Urgency } from "./lib/types";
+import type { AiConversationMessage, Importance, Material, Priority, Reminder, Task, TimerMode, TimerSnapshot, Urgency } from "./lib/types";
 import {
   formatMinutes,
   formatSeconds,
@@ -316,6 +316,51 @@ function parseLearningPlanText(text: string): StructuredPreviewState {
   };
 }
 
+function isGeneralChatInput(text: string) {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) return false;
+  if (/^(hi|hello|hey|你好|您好|嗨|哈喽|在吗|早上好|下午好|晚上好)[\s!！。,.，？?]*$/.test(normalized)) return true;
+  if (/^(谢谢|多谢|辛苦了|好的|好|ok|嗯|收到|明白)[\s!！。,.，？?]*$/.test(normalized)) return true;
+  if (/^(你是谁|你能做什么|怎么用|介绍一下|帮助|help)[\s!！。,.，？?]*$/.test(normalized)) return true;
+  const planningIntent = /计划|安排|任务|提醒|截止|考试|复习|学习|大纲|目录|资料|没完成|调整|顺延|重新安排|番茄|计时|创建|记录/.test(normalized);
+  return normalized.length <= 24 && !planningIntent;
+}
+
+function fallbackGeneralChatReply(text: string) {
+  if (/你好|您好|hi|hello|hey|嗨|哈喽/.test(text.trim().toLowerCase())) {
+    return "你好，我可以帮你记录任务、安排计划、调整日程，也可以协助启动和管理专注计时。";
+  }
+  return "我在。你可以直接告诉我要记录的任务、需要安排的计划，或哪里没完成需要调整。";
+}
+
+type MiniAiMessage = { role: "user" | "assistant"; content: string; clarification?: string | null };
+type MiniAiHistoryItem = { id: string; title: string; messages: MiniAiMessage[]; updatedAt: string };
+const miniAiHistoryKey = "smartfocus.workbench_ai_history";
+
+function readMiniAiHistory(): MiniAiHistoryItem[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(miniAiHistoryKey) || "[]") as MiniAiHistoryItem[];
+    return Array.isArray(parsed) ? parsed.filter((item) => item.id && Array.isArray(item.messages)).slice(0, 8) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveMiniAiHistoryItem(messages: MiniAiMessage[]) {
+  const visible = messages.filter((message) => message.content.trim());
+  if (visible.length === 0) return readMiniAiHistory();
+  const firstUser = visible.find((message) => message.role === "user")?.content.trim();
+  const item: MiniAiHistoryItem = {
+    id: crypto.randomUUID(),
+    title: (firstUser || visible[0]?.content || "AI 对话").slice(0, 24),
+    messages: visible.slice(-20),
+    updatedAt: new Date().toISOString(),
+  };
+  const next = [item, ...readMiniAiHistory()].slice(0, 8);
+  localStorage.setItem(miniAiHistoryKey, JSON.stringify(next));
+  return next;
+}
+
 function stringList(value: unknown) {
   return Array.isArray(value) ? value.map((item) => `${item}`.trim()).filter(Boolean) : [];
 }
@@ -431,7 +476,7 @@ function App() {
     import("@tauri-apps/api/event")
       .then(async ({ listen }) => {
         unlistenTimer = await listen("timer_tick", (event) => {
-          useAppStore.setState({ timer: event.payload as typeof store.timer });
+          useAppStore.setState({ timer: event.payload as TimerSnapshot });
         });
         unlistenAi = await listen("shortcut_toggle_ai", () => {
           requestAiInputFocus();
@@ -468,19 +513,12 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if ("__TAURI_INTERNALS__" in window) return;
     const intervalId = window.setInterval(() => {
       const current = useAppStore.getState().timer;
       if (!current.active || current.paused) return;
-      const elapsed_seconds = current.elapsed_seconds + 1;
-      useAppStore.setState({
-        timer: {
-          ...current,
-          elapsed_seconds,
-          remaining_seconds:
-            current.target_seconds == null ? null : Math.max(0, current.target_seconds - elapsed_seconds),
-        },
-      });
+      void api<TimerSnapshot>("get_timer_snapshot")
+        .then((timer) => useAppStore.setState({ timer }))
+        .catch((error) => console.warn("Timer snapshot polling failed", error));
     }, 1000);
     return () => window.clearInterval(intervalId);
   }, []);
@@ -1037,9 +1075,11 @@ function AiPanel({
   draftPrompt?: string;
   onResponse?: (response: unknown) => void;
 }) {
-  const { aiMessages, setAiOpen, sendAi } = useAppStore();
+  const { aiMessages, setAiOpen, sendAi, setAiMessages } = useAppStore();
   const [input, setInput] = useState("");
   const [listening, setListening] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [miniHistory, setMiniHistory] = useState<MiniAiHistoryItem[]>(() => readMiniAiHistory());
   const listRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -1082,6 +1122,66 @@ function AiPanel({
           <button className="grid h-8 w-8 place-items-center rounded-full border border-white/10 text-[var(--muted-foreground)] [transition:var(--transition-smooth)] hover:text-[var(--neon-pink)]" onClick={() => setAiOpen(false)}>
             x
           </button>
+        </div>
+      )}
+      {embedded && (
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <span className="text-xs font-semibold uppercase tracking-normal text-[var(--muted-foreground)]">AI</span>
+          <div className="relative flex gap-2">
+            <button
+              className="glass-inset px-2.5 py-1 text-xs"
+              type="button"
+              onClick={() => {
+                setMiniHistory(saveMiniAiHistoryItem(aiMessages));
+                setAiMessages([]);
+                setHistoryOpen(false);
+              }}
+            >
+              新对话
+            </button>
+            <button
+              className="glass-inset px-2.5 py-1 text-xs"
+              type="button"
+              onClick={() => {
+                setMiniHistory(readMiniAiHistory());
+                setHistoryOpen((value) => !value);
+              }}
+            >
+              历史
+            </button>
+            {historyOpen && (
+              <div className="absolute right-0 top-8 z-20 w-64 rounded-xl border border-white/10 bg-[var(--background)]/95 p-2 shadow-[0_16px_42px_rgba(0,0,0,0.35)] backdrop-blur-xl">
+                <button
+                  className="glass-inset mb-2 w-full px-3 py-2 text-left text-xs"
+                  type="button"
+                  onClick={() => {
+                    setMiniHistory(saveMiniAiHistoryItem(aiMessages));
+                    setAiMessages([]);
+                    setHistoryOpen(false);
+                  }}
+                >
+                  清空当前显示
+                </button>
+                {miniHistory.length === 0 ? (
+                  <p className="px-2 py-3 text-xs text-[var(--muted-foreground)]">暂无最近历史</p>
+                ) : miniHistory.slice(0, 5).map((item) => (
+                  <button
+                    key={item.id}
+                    className="block w-full rounded-lg px-3 py-2 text-left text-xs hover:bg-white/10"
+                    type="button"
+                    onClick={() => {
+                      setMiniHistory(saveMiniAiHistoryItem(aiMessages));
+                      setAiMessages(item.messages);
+                      setHistoryOpen(false);
+                    }}
+                  >
+                    <span className="block truncate font-medium">{item.title}</span>
+                    <span className="text-[var(--muted-foreground)]">{dayjs(item.updatedAt).format("MM-DD HH:mm")}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
       <div ref={listRef} className="thin-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto overflow-x-hidden pr-1">
@@ -1209,6 +1309,7 @@ function AiView() {
   const [selectedRescheduleIndexes, setSelectedRescheduleIndexes] = useState<number[]>([]);
   const [rescheduleApplyResults, setRescheduleApplyResults] = useState<Array<{ title: string; status: "applied" | "skipped" | "failed"; message: string }>>([]);
   const [studyDrawerOpen, setStudyDrawerOpen] = useState(false);
+  const [isComposing, setIsComposing] = useState(false);
   const [studyDraft, setStudyDraft] = useState({
     title: "",
     subject: "",
@@ -1296,6 +1397,16 @@ function AiView() {
   }, [conversations, historyDialogOpen]);
 
   const addEntry = (entry: AiWorkspaceEntry) => setEntries((current) => [...current, entry]);
+  const appendVisibleAiMessage = async (role: "user" | "assistant", content: string) => {
+    try {
+      await appendAiMessage(role, content);
+      return true;
+    } catch (error) {
+      console.warn("AI workspace history append failed; keeping message visible locally.", error);
+      addEntry({ id: `local-${crypto.randomUUID()}`, role, kind: "message", content });
+      return false;
+    }
+  };
   const updateInboxEntry = (id: string, updater: (entry: Extract<AiWorkspaceEntry, { kind: "inbox" }>) => Extract<AiWorkspaceEntry, { kind: "inbox" }>) =>
     setEntries((current) => current.map((entry) => entry.id === id && entry.kind === "inbox" ? updater(entry) : entry));
 
@@ -1342,13 +1453,20 @@ function AiView() {
   const submit = async (message = input) => {
     const text = message.trim();
     if (!text || loading) return;
-    const route = routePlanningSkill(text, preferredSkill);
+    let route = routePlanningSkill(text, preferredSkill);
+    if (!preferredSkill && /没完成|未完成|调整|顺延|重新安排|局部|太多|太满|延期/.test(text)) {
+      route = { skill: "adaptive_reschedule", label: "调整计划" };
+    } else if (!preferredSkill && /考试|复习|学习|备考|两周|每天|一小时|小时|课程|章节/.test(text)) {
+      route = { skill: "exam_review_plan", label: "复习计划" };
+    }
     setLastRoute(route);
     setLoading(true);
-    await appendAiMessage("user", text);
     setInput("");
     try {
-      if (route.skill === "inbox_capture") {
+      await appendVisibleAiMessage("user", text);
+      if (isGeneralChatInput(text)) {
+        await appendVisibleAiMessage("assistant", fallbackGeneralChatReply(text));
+      } else if (route.skill === "inbox_capture") {
         const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Shanghai";
         const response = await import("./lib/api").then(({ api }) =>
           api<{ reply: string }>("send_ai_message", {
@@ -1357,7 +1475,7 @@ function AiView() {
         );
         const parsed = parseInboxCaptureText(response.reply);
         if (!parsed) {
-          await appendAiMessage("assistant", "这次没有拿到可确认的任务草稿。你可以再补一句更明确的截止时间或提醒时间。");
+          await appendVisibleAiMessage("assistant", "这次没有拿到可确认的任务草稿。你可以再补一句更明确的截止时间或提醒时间。");
         } else {
           addEntry({
             id: crypto.randomUUID(),
@@ -1369,9 +1487,12 @@ function AiView() {
           });
         }
       } else {
+        const planningMessage = route.skill === "adaptive_reschedule"
+          ? `${buildAdaptiveReschedulePrompt()}\n\n${buildAdaptiveRescheduleContext(allTasks, records, text)}`
+          : `${buildPlanningPrompt(route.skill)}\n\n${buildMaterialMetadataSummary(materials)}\n\n${buildTaskLoadSummary(allTasks)}\n\n用户输入：${text}`;
         const response = await import("./lib/api").then(({ api }) =>
           api<{ reply?: string; summary?: string }>("send_ai_message", {
-            message: `${buildPlanningPrompt(route.skill)}\n\n${buildMaterialMetadataSummary(materials)}\n\n${buildTaskLoadSummary(allTasks)}\n\n用户输入：${text}`,
+            message: planningMessage,
           }),
         );
         updatePreviewFromResponse(response);
@@ -1379,10 +1500,12 @@ function AiView() {
         const summary = parsed.parsed?.summary
           || response.summary
           || (parsed.error ? "计划结果解析失败，可查看原文。" : "我整理出了一版结构化计划，计划结果已就绪。");
-        await appendAiMessage("assistant", summary);
+        await appendVisibleAiMessage("assistant", summary);
       }
     } catch (error) {
-      await appendAiMessage("assistant", error instanceof Error ? error.message : "这次处理失败了，请再试一次。");
+      const message = error instanceof Error ? error.message : "这次处理失败了，请再试一次。";
+      await appendVisibleAiMessage("assistant", message);
+      showToast(message);
     } finally {
       setLoading(false);
       setAiPreferredSkill(null);
@@ -1443,6 +1566,11 @@ function AiView() {
       }
     }
     setApplyResults(results);
+    await appendVisibleAiMessage(
+      "assistant",
+      `应用结果：成功 ${results.filter((item) => item.status === "success").length} 项，跳过 ${results.filter((item) => item.status === "skipped_duplicate").length} 项，失败 ${results.filter((item) => item.status === "failed").length} 项。`,
+    );
+    await saveCurrentPlanSnapshot();
   };
 
   const applySelectedRescheduleSuggestions = async () => {
@@ -1461,7 +1589,7 @@ function AiView() {
           continue;
         }
         if (suggestion.type === "split_task") {
-          results.push({ title: suggestion.task_title, status: "skipped", message: "??????????????" });
+          results.push({ title: suggestion.task_title, status: "skipped", message: "这次处理失败了，请再试一次。" });
           continue;
         }
         const patch: TaskUpdatePatch = { id: task.id };
@@ -1480,10 +1608,11 @@ function AiView() {
     }
     await useAppStore.getState().load();
     setRescheduleApplyResults(results);
-    await appendAiMessage(
+    await appendVisibleAiMessage(
       "assistant",
       `????????applied ${results.filter((item) => item.status === "applied").length}?skipped ${results.filter((item) => item.status === "skipped").length}?failed ${results.filter((item) => item.status === "failed").length}?`,
     );
+    await saveCurrentPlanSnapshot();
   };
 
   const submitStudyDraft = async () => {
@@ -1722,7 +1851,20 @@ function AiView() {
               </div>
             )}
             <form className="grid grid-cols-[minmax(0,1fr)_auto] gap-3" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
-              <input className="glass-inset min-w-0 px-4 py-3 text-sm outline-none [transition:var(--transition-smooth)] focus:border-[var(--ring)]" value={input} onChange={(event) => setInput(event.target.value)} placeholder="说出你想记录、规划或调整的事情..." />
+              <textarea
+                className="glass-inset min-h-12 min-w-0 resize-none px-4 py-3 text-sm outline-none [transition:var(--transition-smooth)] focus:border-[var(--ring)]"
+                rows={1}
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                onCompositionStart={() => setIsComposing(true)}
+                onCompositionEnd={() => setIsComposing(false)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" || event.shiftKey || isComposing || event.nativeEvent.isComposing) return;
+                  event.preventDefault();
+                  void submit();
+                }}
+                placeholder="说出你想记录、规划或调整的事情..."
+              />
               <button className="btn-glow grid h-12 w-14 place-items-center rounded-xl text-sm font-semibold" type="submit" disabled={loading} title="发送" aria-label="发送">
                 <Send size={18} />
               </button>
@@ -2156,8 +2298,7 @@ function TasksView() {
   const [customDate, setCustomDate] = useState(defaultTaskDate);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [batchDate, setBatchDate] = useState(defaultTaskDate);
-  const [batchUrgency, setBatchUrgency] = useState<Urgency>("not_urgent");
-  const [batchImportance, setBatchImportance] = useState<Importance>("not_important");
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const selected = tasks.find((task) => task.id === selectedTaskId) ?? tasks[0] ?? null;
   const visibleTasks = tasks.filter((task) => isTaskVisibleForDateFilter(task, dateFilter, customDate));
   const selectedTasks = tasks.filter((task) => selectedIds.includes(task.id));
@@ -2176,7 +2317,6 @@ function TasksView() {
     <section className="glass-card flex h-full min-h-0 gap-5 overflow-hidden p-5">
       <div className="flex min-w-0 flex-1 flex-col">
         <Header title="任务列表" subtitle="未完成 / 已完成 / 四象限" />
-        <TaskForm currentDate={dateFilter === "custom" ? customDate : undefined} />
         <div className="glass-inset mt-3 flex flex-wrap items-center gap-2 p-2 text-sm">
           {[
             ["today", "今天"],
@@ -2197,68 +2337,31 @@ function TasksView() {
           {dateFilter === "custom" && (
             <input className="field py-1.5" type="date" value={customDate} onChange={(event) => setCustomDate(event.target.value)} />
           )}
-          <span className="ml-auto text-xs text-[var(--muted-foreground)]">今日视图顺延重要或紧急的逾期未完成任务</span>
+          <button type="button" className="btn-glow ml-auto rounded-xl px-3 py-1.5 text-xs font-semibold" onClick={() => setCreateDialogOpen(true)}>
+            新建任务
+          </button>
         </div>
-        <div className="glass-inset mt-3 flex flex-wrap items-center gap-2 p-2 text-sm">
-          <span className="px-2 text-xs font-medium text-[var(--muted-foreground)]">已选择 {selectedCount} 项</span>
-          {selectedCount === 0 && <span className="text-xs text-[var(--muted-foreground)]">先勾选任务后再批量操作</span>}
-          <label className="flex items-center gap-2 text-xs">
+        {createDialogOpen && (
+          <TaskCreateDialog
+            currentDate={dateFilter === "custom" ? customDate : undefined}
+            onClose={() => setCreateDialogOpen(false)}
+          />
+        )}
+        <div className="glass-inset batch-toolbar thin-scrollbar mt-3 flex items-center gap-2 overflow-x-auto p-2 text-sm">
+          <span className="shrink-0 px-2 text-xs font-medium text-[var(--muted-foreground)]">已选择 {selectedCount} 项</span>
+          <label className="flex shrink-0 items-center gap-2 text-xs">
             <span className="text-[var(--muted-foreground)]">目标日期</span>
             <input className="field py-1.5" type="date" value={batchDate} onChange={(event) => setBatchDate(event.target.value)} />
           </label>
-          <button
-            type="button"
-            className="glass-inset px-3 py-1.5 text-xs [transition:var(--transition-smooth)] hover:text-[var(--neon-blue)] disabled:opacity-40"
-            disabled={selectedCount === 0}
-            onClick={() => confirmBatch("延期到指定日期", (task) => updateTask({ id: task.id, planned_date: batchDate }))}
-          >
-            批量延期
-          </button>
-          <button
-            type="button"
-            className="glass-inset px-3 py-1.5 text-xs [transition:var(--transition-smooth)] hover:text-[var(--neon-amber)] disabled:opacity-40"
-            disabled={selectedCount === 0}
-            onClick={() => confirmBatch("标记为待整理", (task) => updateTask({ id: task.id, tags: tagsWithNeedsReview(task) }))}
-          >
-            标记待整理
-          </button>
-          <button
-            type="button"
-            className="glass-inset px-3 py-1.5 text-xs [transition:var(--transition-smooth)] hover:text-emerald-400 disabled:opacity-40"
-            disabled={selectedCount === 0}
-            onClick={() => confirmBatch("批量完成", (task) => updateTask({ id: task.id, status: "done" }))}
-          >
-            批量完成
-          </button>
-          <label className="flex items-center gap-2 text-xs">
-            <span className="text-[var(--muted-foreground)]">调整重要性</span>
-            <select className="field py-1.5" value={batchImportance} onChange={(event) => setBatchImportance(event.target.value as Importance)}>
-            <option value="important">重要</option>
-            <option value="not_important">不重要</option>
-            </select>
-          </label>
-          <label className="flex items-center gap-2 text-xs">
-            <span className="text-[var(--muted-foreground)]">调整紧急性</span>
-            <select className="field py-1.5" value={batchUrgency} onChange={(event) => setBatchUrgency(event.target.value as Urgency)}>
-            <option value="urgent">紧急</option>
-            <option value="not_urgent">不紧急</option>
-            </select>
-          </label>
-          <button
-            type="button"
-            className="glass-inset px-3 py-1.5 text-xs [transition:var(--transition-smooth)] hover:text-[var(--neon-violet)] disabled:opacity-40"
-            disabled={selectedCount === 0}
-            onClick={() => confirmBatch("调整重要/紧急", (task) => updateTask({ id: task.id, urgency: batchUrgency, importance: batchImportance }))}
-          >
-            应用优先级
-          </button>
-          {selectedCount > 0 && (
-            <button type="button" className="ml-auto text-xs text-[var(--muted-foreground)] hover:text-[var(--foreground)]" onClick={() => setSelectedIds([])}>
-              取消选择
-            </button>
+          <button type="button" title={selectedCount === 0 ? "先选择任务" : "批量延期"} className="glass-inset shrink-0 px-3 py-1.5 text-xs [transition:var(--transition-smooth)] hover:text-[var(--neon-blue)] disabled:opacity-40" disabled={selectedCount === 0} onClick={() => confirmBatch("延期到指定日期", (task) => updateTask({ id: task.id, planned_date: batchDate }))}>批量延期</button>
+          <button type="button" title={selectedCount === 0 ? "先选择任务" : "标记待整理"} className="glass-inset shrink-0 px-3 py-1.5 text-xs [transition:var(--transition-smooth)] hover:text-[var(--neon-amber)] disabled:opacity-40" disabled={selectedCount === 0} onClick={() => confirmBatch("标记为待整理", (task) => updateTask({ id: task.id, tags: tagsWithNeedsReview(task) }))}>标记待整理</button>
+          <button type="button" title={selectedCount === 0 ? "先选择任务" : "批量完成"} className="glass-inset shrink-0 px-3 py-1.5 text-xs [transition:var(--transition-smooth)] hover:text-emerald-400 disabled:opacity-40" disabled={selectedCount === 0} onClick={() => confirmBatch("批量完成", (task) => updateTask({ id: task.id, status: "done" }))}>批量完成</button>
+          <button type="button" title={selectedCount === 0 ? "先选择任务" : "应用"} className="glass-inset shrink-0 px-3 py-1.5 text-xs [transition:var(--transition-smooth)] hover:text-[var(--neon-violet)] disabled:opacity-40" disabled={selectedCount === 0} onClick={() => confirmBatch("应用", async () => undefined)}>应用</button>
+          {selectedCount === 0 ? <span className="shrink-0 text-xs text-[var(--muted-foreground)]">先选择任务</span> : (
+            <button type="button" className="ml-auto shrink-0 text-xs text-[var(--muted-foreground)] hover:text-[var(--foreground)]" onClick={() => setSelectedIds([])}>取消选择</button>
           )}
         </div>
-        <div className="mt-4 grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-auto pr-1 lg:grid-cols-2">
+        <div className="quadrant-grid mt-4 grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-hidden pr-1 lg:grid-cols-2">
           {[1, 2, 3, 4].map((quadrant) => (
             <QuadrantColumn
               key={quadrant}
@@ -2276,42 +2379,47 @@ function TasksView() {
   );
 }
 
-function TaskForm({ currentDate }: { currentDate?: string }) {
+function TaskCreateDialog({ currentDate, onClose }: { currentDate?: string; onClose: () => void }) {
   const createTask = useAppStore((state) => state.createTask);
-  const [expanded, setExpanded] = useState(false);
   const [draft, setDraft] = useState(emptyDraft);
-  const [taskDate, setTaskDate] = useState(defaultTaskDate);
+  const [deadlineDate, setDeadlineDate] = useState(currentDate || defaultTaskDate);
+  const [plannedDate, setPlannedDate] = useState(currentDate || defaultTaskDate);
   const [taskTime, setTaskTime] = useState(defaultTaskTime);
   const update = (key: keyof typeof draft, value: string) => setDraft((prev) => ({ ...prev, [key]: value }));
 
-  return (
-    <div className="glass-inset p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <p className="font-medium">手动创建任务</p>
-          {currentDate && <p className="text-xs text-[var(--muted-foreground)]">当前筛选日期：{currentDate}</p>}
-        </div>
-        <button className="glass-inset px-3 py-1.5 text-sm" type="button" onClick={() => setExpanded((value) => !value)}>
-          {expanded ? "收起" : "展开"}
-        </button>
-      </div>
-      {expanded && (
+  return createPortal(
+    <div className="fixed inset-0 z-[80] grid place-items-center bg-black/40 p-4 backdrop-blur-sm" role="presentation" onMouseDown={onClose}>
     <form
-      className="mt-3 grid grid-cols-1 gap-2 xl:grid-cols-[1.4fr_1fr_1fr_1fr_auto]"
+      className="glass-card grid max-h-[88vh] w-full max-w-2xl grid-cols-1 gap-3 overflow-y-auto p-5 sm:grid-cols-2"
+      role="dialog"
+      aria-modal="true"
+      aria-label="新建任务"
+      onMouseDown={(event) => event.stopPropagation()}
       onSubmit={async (event) => {
         event.preventDefault();
         if (!draft.title.trim()) return;
         await createTask({
           ...draft,
-          deadline: combineLocalDateTime(taskDate, taskTime),
-          planned_date: taskDate,
+          deadline: deadlineDate ? combineLocalDateTime(deadlineDate, taskTime) : "",
+          planned_date: plannedDate,
         });
         setDraft(emptyDraft);
-        setTaskDate(defaultTaskDate());
+        setDeadlineDate(defaultTaskDate());
+        setPlannedDate(defaultTaskDate());
         setTaskTime(defaultTaskTime());
+        onClose();
       }}
     >
-      <input className="field" value={draft.title} onChange={(e) => update("title", e.target.value)} placeholder="输入任务标题" />
+      <div className="flex items-start justify-between gap-3 sm:col-span-2">
+        <div>
+          <p className="section-label">Task</p>
+          <h3 className="mt-1 text-lg font-semibold">新建任务</h3>
+          {currentDate && <p className="mt-1 text-xs text-[var(--muted-foreground)]">当前筛选日期：{currentDate}</p>}
+        </div>
+        <button className="glass-inset px-3 py-1.5 text-xs" type="button" onClick={onClose}>关闭</button>
+      </div>
+      <input className="field sm:col-span-2" value={draft.title} onChange={(e) => update("title", e.target.value)} placeholder="任务标题" autoFocus />
+      <textarea className="field min-h-24 sm:col-span-2" value={draft.description} onChange={(e) => update("description", e.target.value)} placeholder="备注" />
       <select className="field" value={draft.priority} onChange={(e) => update("priority", e.target.value)}>
         <option value="high">高优先级</option>
         <option value="medium">中优先级</option>
@@ -2325,16 +2433,28 @@ function TaskForm({ currentDate }: { currentDate?: string }) {
         <option value="urgent">紧急</option>
         <option value="not_urgent">不紧急</option>
       </select>
-      <button className="btn-glow rounded-xl px-4 py-2 text-sm font-semibold" type="submit">
-        创建
-      </button>
-      <textarea className="field min-h-16 xl:col-span-2" value={draft.description} onChange={(e) => update("description", e.target.value)} placeholder="备注支持 Markdown：列表、加粗、链接" />
-      <input className="field" type="date" value={taskDate} onChange={(e) => setTaskDate(e.target.value)} />
-      <input className="field" type="time" value={taskTime} onChange={(e) => setTaskTime(e.target.value)} />
-      <input className="field" value={draft.tags} onChange={(e) => update("tags", e.target.value)} placeholder="标签，逗号分隔" />
+      <label className="grid gap-1 text-xs text-[var(--muted-foreground)]">
+        deadline 日期
+        <input className="field" type="date" value={deadlineDate} onChange={(e) => setDeadlineDate(e.target.value)} />
+      </label>
+      <label className="grid gap-1 text-xs text-[var(--muted-foreground)]">
+        deadline 时间
+        <input className="field" type="time" value={taskTime} onChange={(e) => setTaskTime(e.target.value)} />
+      </label>
+      <label className="grid gap-1 text-xs text-[var(--muted-foreground)]">
+        planned_date
+        <input className="field" type="date" value={plannedDate} onChange={(e) => setPlannedDate(e.target.value)} />
+      </label>
+      <input className="field" value={draft.tags} onChange={(e) => update("tags", e.target.value)} placeholder="tags，逗号分隔" />
+      <div className="flex justify-end gap-2 sm:col-span-2">
+        <button className="glass-inset px-4 py-2 text-sm" type="button" onClick={onClose}>取消</button>
+        <button className="btn-glow rounded-xl px-4 py-2 text-sm font-semibold" type="submit">
+          创建
+        </button>
+      </div>
     </form>
-      )}
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -2353,14 +2473,30 @@ function QuadrantColumn({
 }) {
   const updateTask = useAppStore((state) => state.updateTask);
   const meta = quadrantMeta[quadrant];
+  const allowQuadrantDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "move";
+  };
   const dropToQuadrant = async (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
-    const id = event.dataTransfer.getData("task-id");
-    if (!id) return;
-    await updateTask({ id, urgency: meta.urgency, importance: meta.importance });
+    event.stopPropagation();
+    const id = event.dataTransfer.getData("application/x-smartfocus-task-id") || event.dataTransfer.getData("task-id") || event.dataTransfer.getData("text/plain");
+    if (!id) {
+      console.warn("Quadrant drop ignored: missing task id");
+      showToast("拖拽失败：没有读取到任务 ID。");
+      return;
+    }
+    try {
+      await updateTask({ id, urgency: meta.urgency, importance: meta.importance });
+      showToast(`已移动到 Q${quadrant}`);
+    } catch (error) {
+      console.warn("Quadrant drop failed", error);
+      showToast("拖拽更新失败，请再试一次。");
+    }
   };
   return (
-    <div className="glass-card p-3 [transition:var(--transition-smooth)]" onDragOver={(event) => event.preventDefault()} onDrop={dropToQuadrant}>
+    <div className="quadrant-card glass-card flex min-h-0 flex-col p-3 [transition:var(--transition-smooth)]" onDragEnter={allowQuadrantDrop} onDragOver={allowQuadrantDrop} onDrop={dropToQuadrant}>
       <div className="mb-3 flex items-start justify-between gap-3">
         <div>
           <p className="text-xs font-semibold uppercase tracking-normal text-[var(--muted-foreground)]">Eisenhower Matrix</p>
@@ -2371,7 +2507,7 @@ function QuadrantColumn({
         </div>
         <span className="glass-inset shrink-0 px-2 py-0.5 text-xs opacity-80">{tasks.length} 项</span>
       </div>
-      <div className="space-y-2">
+      <div className="quadrant-task-list thin-scrollbar min-h-0 flex-1 space-y-2 overflow-y-auto pr-1" onDragEnter={allowQuadrantDrop} onDragOver={allowQuadrantDrop} onDrop={dropToQuadrant}>
         {tasks.map((task) => (
           <TaskRow
             key={task.id}
@@ -2397,9 +2533,14 @@ function TaskRow({ task, selected, onToggleSelected, onSelect }: { task: Task; s
       className="glass-inset group p-3 text-sm [transition:var(--transition-smooth)] hover:-translate-y-0.5 hover:border-[var(--ring)]"
       draggable
       onDragStart={(event) => {
+        event.currentTarget.classList.add("opacity-60");
         event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("application/x-smartfocus-task-id", task.id);
         event.dataTransfer.setData("task-id", task.id);
         event.dataTransfer.setData("text/plain", task.id);
+      }}
+      onDragEnd={(event) => {
+        event.currentTarget.classList.remove("opacity-60");
       }}
       onClick={onSelect}
     >

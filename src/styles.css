@@ -706,12 +706,39 @@
   .thin-scrollbar::-webkit-scrollbar-thumb:hover {
     background: oklch(0.7 0.18 285 / 0.55);
   }
-  .thin-scrollbar > .btn-glow {
+  .batch-toolbar {
+    min-height: 3rem;
+    white-space: nowrap;
+  }
+  .quadrant-grid {
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+  }
+  .quadrant-card {
+    overflow: hidden;
+  }
+  .quadrant-task-list {
+    scrollbar-color: oklch(0.7 0.18 285 / 0.45) transparent;
+  }
+  .quadrant-task-list::-webkit-scrollbar {
+    width: 6px;
+  }
+  .quadrant-task-list::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .quadrant-task-list::-webkit-scrollbar-thumb {
+    background: oklch(0.7 0.18 285 / 0.36);
+    border-radius: 999px;
+  }
+  .ai-panel-floating .thin-scrollbar > .btn-glow,
+  .ai-panel-embedded .thin-scrollbar > .btn-glow,
+  .ai-dialogue-shell .thin-scrollbar > .btn-glow {
     display: block;
     max-width: 82%;
     margin-left: auto;
   }
-  .thin-scrollbar > .glass-inset {
+  .ai-panel-floating .thin-scrollbar > .glass-inset,
+  .ai-panel-embedded .thin-scrollbar > .glass-inset,
+  .ai-dialogue-shell .thin-scrollbar > .glass-inset {
     display: block;
     max-width: 82%;
     margin-right: auto;
