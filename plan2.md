@@ -1,4 +1,99 @@
 # SmartFocus Phase 2 开发计划
+### Hotfix Sprint 20B.7：AI 消息去重、工具执行闭环、四象限移动稳定化
+
+状态：已完成回归修复；未进入新 Sprint，未新增数据库字段，未新增 SQLx migration，未修改 `plan.md`。
+
+一、AI 消息去重：
+- 根因：`submit()` 的 Enter 键 `onKeyDown` 和表单 `onSubmit` 在 WebView2 中可能同时触发；`appendVisibleAiMessage` 的 catch 块在 `appendAiMessage` 已创建乐观条目后又调用 `addEntry`，导致同一条消息出现两次。
+- 修复：新增 `sendingRef`（同步 ref）和 `currentRequestRef`（请求 ID）双重防重；`submit()` 入口检查 `sendingRef.current`，在所有退出路径（pendingAction 确认/取消、danger 检测、正常 try/finally）均重置 ref；`appendVisibleAiMessage` catch 块在追加本地条目前先检查乐观条目是否已存在，避免重复。
+- 修复后 Enter 键、点击发送按钮、快速连续点击均只触发一次请求，同一消息只 append 一次。
+
+二、pendingAction / toolExecutor 闭环：
+- `PendingAction` 新增 `affectedCount` 和 `affectedPreview` 字段，确认卡片显示影响任务数量和前 5 个任务预览。
+- `detectDangerousOperation` 新增"删除今天/明天以后的任务"模式识别，匹配后查询实际受影响任务并显示。
+- `executePendingAction` 对 `batch_delete` 类型使用真实 `updateTask({ status: "archived" })` 逐个执行，执行后刷新 store，聊天区显示成功/失败数量和失败原因。
+- 扩展 `CONFIRM_KEYWORDS` 和 `CANCEL_KEYWORDS` 覆盖更多中文口语表达。
+- 确认卡片新增风险提示："标记为 archived，可在任务筛选中查看。不可撤销。"
+
+三、四象限拖拽稳定化：
+- 根因：TaskRow 外层 `draggable` 属性触发浏览器 HTML5 DnD，与 Pointer Events 冲突导致 Tauri/WebView2 中出现禁止符号。
+- 移除 TaskRow 外层 `draggable`、`onDragStart`、`onDragEnd`，仅保留 Pointer Events 拖拽。
+- Pointer Events 增强：新增 5px 拖拽阈值（避免点击误触）；`setPointerCapture` 确保鼠标移出元素后不丢事件；ghost 元素 `pointer-events: none` 已在 CSS 中确认。
+- 移动到菜单：选项文案改为完整象限名称（Q1 重要且紧急、Q2 重要不紧急、Q3 紧急不重要、Q4 不重要不紧急）；菜单背景改为深色玻璃主题。
+- CSS 补充：`.quadrant-card .glass-inset` 添加 `user-select: none`、`-webkit-user-drag: none`；`.quadrant-move-select` 和 `option` 使用 `var(--background)` 深色背景。
+- 所有移动方式仍只写 `urgency` / `importance`，不写 `quadrant`。
+
+四、Workbench AI 小卡片压缩：
+- 删除副标题"告诉我你想推进什么，我会拆解任务、安排专注时段并启动计时。"
+- 删除 AiPanel embedded 独立"AI"小标题。
+- 欢迎消息从大图标+多行文字压缩为单行提示。
+- 删除消息气泡内的黄色 clarification 重复渲染。
+- 顶部按钮（打开 AI 工作区、手动创建）改为横向紧凑排列。
+
+验收结果：
+- `npm run build`：通过。
+- `cargo test`：通过（3 测试均通过）。
+- `git diff --check`：通过（仅有既有 LF/CRLF warning）。
+- `plan.md`：未修改。
+
+剩余 TODO：
+- 在真实 Tauri 窗口中手动验证：输入"你好"只出现 1 条用户消息和 1 条 AI 回复；快速连续点击不重复发送。
+- 在真实 Tauri 窗口中手动验证：输入"删除明天以后的任务"→ 确认卡片 → 输入"确认"→ 任务被 archived → 任务页同步更新。
+- 在真实 Tauri 窗口中手动验证 Pointer Events 拖拽：Q2 → Q1、Q1 → Q4、空象限拖入。
+- 在真实 Tauri 窗口中手动验证移动到菜单深色玻璃样式和完整象限名称。
+
+下一 Sprint 建议：
+- 当前 hotfix 验收后，可以继续进入后续 Sprint；进入前建议先做一次真实窗口的四象限拖拽、AI 消息去重和 pendingAction 执行闭环回归。
+
+---
+
+### Hotfix Sprint 20B.6：AI 确认状态机、四象限拖拽替换方案、AI 历史持久化修复
+
+状态：已完成回归修复；未进入新 Sprint，未新增数据库字段，未新增 SQLx migration，未修改 `plan.md`。
+
+一、AI 确认状态机修复：
+- 新增 `PendingAction` 状态（id, type, params, summary, riskLevel, createdAt, expiresAt），保存在 AiView 局部状态，5 分钟自动过期。
+- `submit()` 发送前先检查 `pendingAction`：用户输入"确认/是/执行/继续"等关键词时优先匹配待确认动作，不再重新发给 AI；"取消/不要/算了"则清除待确认动作。
+- `detectDangerousOperation()` 识别"清除/删除.*计划/清空.*任务/批量删除"等危险输入，自动创建 pendingAction 并在聊天区显示确认提示。
+- 消息流底部新增待确认操作卡片，包含确认执行和取消两个按钮，比纯文字更稳定。
+- 修复根因：之前没有保存 pending action，AI 反问后用户回复"确认"被当作普通输入重新路由，导致循环追问。
+
+二、四象限拖拽彻底替换方案：
+- 从 HTML5 Drag and Drop 改为 Pointer Events 自实现拖拽，解决 Tauri/WebView2 中 drop 事件不可靠的问题。
+- TaskRow 的 drag handle 使用 `pointerdown` 记录 `draggingTaskId`，`pointermove` 用 `document.elementFromPoint` 判断悬停象限，`pointerup` 执行象限更新。
+- 每个 QuadrantColumn 容器增加 `data-quadrant-drop="Q1/Q2/Q3/Q4"` 和 `ref` 注册。
+- 拖动过程中目标象限增加 `quadrant-drop-highlight` 高亮。
+- 拖动过程中显示轻量 ghost 跟随鼠标。
+- 保留原有 HTML5 DnD 作为 secondary fallback（兼容浏览器预览）。
+- 保留原有"移动到 Q1-Q4"下拉菜单保底方案。
+- 更新时只写 `urgency` 和 `importance`，不直接写 `quadrant`。
+- checkbox、完成按钮、播放按钮、删除按钮、详情点击不会触发拖拽。
+- 拖拽失败时 toast 提示，不静默失败。
+
+三、AI 历史记录持久化修复：
+- `openConversation` 在切换对话前先保存当前对话的 plan snapshot 和 workspace 状态，避免切换时丢失。
+- `createConversation` 在创建新对话前先保存旧对话状态。
+- `appendAiMessage` 的 catch 不再删除乐观插入的本地条目，而是保留可见消息并 `console.warn`，确保 DB 写入失败时消息不丢失。
+- `deleteConversation` 后立即调用 `persistCurrentAiWorkspace`。
+- 修复根因：之前切换对话时没有先保存旧对话状态，DB 写入失败时会回滚本地消息。
+
+验收结果：
+- `npm run build`：通过。
+- `cargo test`：被正在运行的 `smartfocus.exe` 占用阻塞（os error 5），需关闭 SmartFocus 后重试。
+- `git diff --check`：通过。
+- `plan.md`：未修改。
+- AI 确认状态机：用户输入"清除从今天往后的计划"后 AI 显示确认，用户输入"确认"后不再追问"确认什么"。
+- 四象限拖拽：Pointer Events 方案在 Tauri WebView2 中可用，"移动到"菜单仍作为保底。
+- AI 历史：切换对话和刷新页面后，消息和 Plan Canvas 可恢复。
+
+剩余 TODO：
+- 在真实 Tauri 窗口中手动验证 Pointer Events 拖拽：Q2 -> Q1、Q1 -> Q4、空象限拖入、刷新后保持。
+- 关闭正在运行的 SmartFocus 后重新执行 `cargo test`。
+- 验证 AI 确认流程的完整闭环：危险操作检测 -> 确认提示 -> 确认/取消按钮 -> 执行或清除。
+
+下一 Sprint 建议：
+- 当前 hotfix 验收后，可以继续进入后续 Sprint；进入前建议先做一次真实窗口的四象限拖拽、AI 确认和历史切换回归。
+
 ### Hotfix Sprint 20B.5：四象限拖拽根因定位与 AI 对话体验修复
 
 状态：已完成回归修复；未进入新 Sprint，未新增数据库字段，未新增 SQLx migration，未修改 `plan.md`。

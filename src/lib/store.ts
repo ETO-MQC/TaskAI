@@ -637,6 +637,18 @@ export const useAppStore = create<AppStore>((set, get) => ({
     return conversations;
   },
   createConversation: async (title) => {
+    // Save current conversation state before creating new
+    const prevId = get().activeConversationId;
+    if (prevId) {
+      const parsed = get().aiStructuredPreview.parsed;
+      if (parsed) {
+        await api<AiPlanSnapshot>("save_ai_plan_snapshot", {
+          conversation_id: prevId,
+          plan_json: JSON.stringify(parsed),
+        }).catch(() => undefined);
+      }
+      persistCurrentAiWorkspace(get);
+    }
     const conversation = await api<AiConversation>("create_ai_conversation", {
       title: title ?? null,
       summary: null,
@@ -653,6 +665,18 @@ export const useAppStore = create<AppStore>((set, get) => ({
     return conversation;
   },
   openConversation: async (id) => {
+    // Save current conversation state before switching
+    const prevId = get().activeConversationId;
+    if (prevId) {
+      const parsed = get().aiStructuredPreview.parsed;
+      if (parsed) {
+        await api<AiPlanSnapshot>("save_ai_plan_snapshot", {
+          conversation_id: prevId,
+          plan_json: JSON.stringify(parsed),
+        }).catch(() => undefined);
+      }
+      persistCurrentAiWorkspace(get);
+    }
     const detail = await api<AiConversationDetail>("get_ai_conversation", { id });
     const snapshot = await api<AiPlanSnapshot | null>("get_ai_plan_snapshot", { conversation_id: id }).catch(() => null);
     let preview: StructuredPreviewSnapshot = { parsed: null, raw: "", error: null };
@@ -689,6 +713,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     await api<void>("delete_ai_conversation", { id });
     const conversations = get().conversations.filter((item) => item.id !== id);
     set({ conversations });
+    persistCurrentAiWorkspace(get);
     if (get().activeConversationId === id) {
       if (conversations[0]) await get().openConversation(conversations[0].id);
       else set({
@@ -725,9 +750,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
       persistCurrentAiWorkspace(get);
       await get().loadConversations();
     } catch (error) {
-      set((state) => ({
-        aiWorkspaceEntries: state.aiWorkspaceEntries.filter((entry) => entry.id !== optimisticId),
-      }));
+      // Keep the optimistic entry visible locally even if DB write failed
+      console.warn("AI message DB persistence failed; keeping local entry.", error);
+      persistCurrentAiWorkspace(get);
       throw error;
     }
   },

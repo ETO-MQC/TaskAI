@@ -723,9 +723,52 @@
   .drag-handle {
     touch-action: none;
   }
-  .quadrant-move-select {
+  .pointer-drag-handle {
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .quadrant-card .glass-inset {
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-user-drag: none;
+  }
+  .quadrant-drop-highlight {
+    outline: 2px solid var(--neon-violet);
+    outline-offset: -2px;
+    background: color-mix(in oklch, var(--neon-violet) 8%, transparent);
+  }
+  .drag-ghost {
+    position: fixed;
+    z-index: 99999;
+    pointer-events: none;
     background: var(--glass-inset-bg);
+    border: 1px solid var(--ring);
+    border-radius: var(--radius-xl);
+    padding: 0.5rem 0.75rem;
+    font-size: 0.8125rem;
+    font-weight: 600;
     color: var(--foreground);
+    box-shadow: var(--shadow-glow-violet);
+    max-width: 240px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    opacity: 0.9;
+    transform: translate(-50%, -50%);
+  }
+  .quadrant-move-select {
+    background: var(--background);
+    color: var(--foreground);
+    border: 1px solid var(--glass-inset-border);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    user-select: none;
+  }
+  .quadrant-move-select option {
+    background: var(--background);
+    color: var(--foreground);
+    padding: 0.5rem;
   }
   .quadrant-task-list {
     scrollbar-color: oklch(0.7 0.18 285 / 0.45) transparent;

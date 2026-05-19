@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { CSSProperties, Dispatch, DragEvent, ReactNode, SetStateAction } from "react";
 import ReactMarkdown from "react-markdown";
@@ -349,6 +349,37 @@ function getTaskDragData(event: DragEvent<HTMLElement>) {
   ).trim();
 }
 
+// Pointer Events drag state for quadrant moves (shared across QuadrantColumn/TaskRow)
+let _ptrDragTaskId: string | null = null;
+let _ptrGhost: HTMLDivElement | null = null;
+const _ptrQuadrantRefs = new Map<number, HTMLElement>();
+let _ptrHighlightedQuadrant: number | null = null;
+
+function registerQuadrantRef(quadrant: number, el: HTMLElement | null) {
+  if (el) _ptrQuadrantRefs.set(quadrant, el);
+  else _ptrQuadrantRefs.delete(quadrant);
+}
+
+function findQuadrantAtPoint(x: number, y: number): number | null {
+  for (const [q, el] of _ptrQuadrantRefs) {
+    const rect = el.getBoundingClientRect();
+    if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) return q;
+  }
+  return null;
+}
+
+function clearPtrHighlight() {
+  if (_ptrHighlightedQuadrant !== null) {
+    const el = _ptrQuadrantRefs.get(_ptrHighlightedQuadrant);
+    el?.classList.remove("quadrant-drop-highlight");
+    _ptrHighlightedQuadrant = null;
+  }
+}
+
+function removePtrGhost() {
+  if (_ptrGhost) { _ptrGhost.remove(); _ptrGhost = null; }
+}
+
 function planningChatSummary(parsed: StructuredPreviewState, response: { summary?: string }, skill: PlanningSkillId) {
   const preview = parsed.parsed;
   const questions = stringList(
@@ -364,6 +395,74 @@ function planningChatSummary(parsed: StructuredPreviewState, response: { summary
     return "我已经生成了一个复习计划草案，右侧计划结果中可以查看章节覆盖、每日安排和风险提醒。";
   }
   return parsed.error ? "计划结果解析失败，已保留原文在计划结果中查看。" : "我已经整理出一版结构化计划，右侧计划结果已更新。";
+}
+
+type PendingAction = {
+  id: string;
+  type: "batch_delete" | "batch_update" | "dangerous_operation";
+  params: Record<string, unknown>;
+  summary: string;
+  affectedCount: number;
+  affectedPreview: string[];
+  riskLevel: "low" | "medium" | "high";
+  createdAt: number;
+  expiresAt: number;
+};
+
+const PENDING_ACTION_TTL_MS = 5 * 60 * 1000;
+
+const CONFIRM_KEYWORDS = /^(确认|是|执行|确认删除|继续|好|yes|ok|确定|执行吧|删吧|干吧|走|do)$/;
+const CANCEL_KEYWORDS = /^(取消|不要|算了|不了|不执行|取消操作|cancel|no|不)$/;
+
+function detectDangerousOperation(
+  text: string,
+  tasks: Task[],
+): Omit<PendingAction, "id" | "createdAt" | "expiresAt"> | null {
+  const normalized = text.trim();
+  const today = new Date().toISOString().slice(0, 10);
+  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+
+  // Delete future tasks: "删除明天以后的任务", "删除从今天往后的计划", "清空未来任务" etc.
+  const futureDeleteMatch = normalized.match(/删除(?:从|了)?\s*(今天|明天|后天|今日|明日)(?:以|之|往|开始|之后|以后|起)(?:的|所有|全部)?\s*(?:任务|计划|待办|事项|东西)/);
+  if (futureDeleteMatch || /清空.*(?:未来|以后|之后|往后|往后).*(?:任务|计划|待办)|(?:删除|清除|清空)(?:所有|全部|所有)\s*(?:未完成|未来|之后)/.test(normalized)) {
+    const afterDate = /今天|今日/.test(futureDeleteMatch?.[1] ?? "") ? today : tomorrow;
+    const affected = tasks.filter((t) => t.status === "todo" && t.planned_date && t.planned_date >= afterDate);
+    const raw = futureDeleteMatch?.[0] ?? normalized;
+    return {
+      type: "batch_delete",
+      params: { raw, afterDate },
+      summary: `将删除 ${afterDate} 之后的 ${affected.length} 个任务。此操作标记为 archived，可在任务筛选中查看。确认执行吗？`,
+      affectedCount: affected.length,
+      affectedPreview: affected.slice(0, 5).map((t) => t.title),
+      riskLevel: "high",
+    };
+  }
+
+  // Generic delete/clear patterns
+  if (/清除|删除.*计划|清空.*任务|批量删除|全部删除|清除所有|删除所有/.test(normalized)) {
+    return {
+      type: "batch_delete",
+      params: { raw: normalized },
+      summary: `你要求执行危险操作：「${normalized.slice(0, 40)}」。确认执行吗？`,
+      affectedCount: 0,
+      affectedPreview: [],
+      riskLevel: "high",
+    };
+  }
+
+  // Batch update
+  if (/批量.*修改|全部.*改成|所有.*设为|把.*全改/.test(normalized)) {
+    return {
+      type: "batch_update",
+      params: { raw: normalized },
+      summary: `你要求批量修改：「${normalized.slice(0, 40)}」。确认执行吗？`,
+      affectedCount: 0,
+      affectedPreview: [],
+      riskLevel: "medium",
+    };
+  }
+
+  return null;
 }
 
 type MiniAiMessage = { role: "user" | "assistant"; content: string; clarification?: string | null };
@@ -749,20 +848,17 @@ function WorkbenchView() {
               <p className="section-label flex items-center gap-2">
                 <Sparkles size={15} /> AI Agent Command Stream
               </p>
-              <h1 className="mt-3 text-2xl font-bold tracking-normal text-[var(--foreground)] md:text-3xl">
+              <h1 className="mt-2 text-2xl font-bold tracking-normal text-[var(--foreground)] md:text-3xl">
                 今天想怎么<span className="neon-text">编排?</span>
               </h1>
-              <p className="mt-3 text-sm text-[var(--muted-foreground)]">
-                告诉我你想推进什么，我会拆解任务、安排专注时段并启动计时。
-              </p>
             </div>
-            <div className="flex shrink-0 flex-col gap-2">
-              <button type="button" className="btn-glow rounded-xl px-4 py-2 text-sm font-semibold" onClick={() => setView("ai")}>
+            <div className="flex shrink-0 items-center gap-2">
+              <button type="button" className="btn-glow rounded-xl px-3 py-1.5 text-xs font-semibold" onClick={() => setView("ai")}>
                 打开 AI 工作区
               </button>
-            <button type="button" className="glass-inset px-4 py-2 text-sm [transition:var(--transition-smooth)] hover:text-[var(--neon-violet)]" onClick={() => setView("tasks")}>
-              手动创建
-            </button>
+              <button type="button" className="glass-inset px-3 py-1.5 text-xs [transition:var(--transition-smooth)] hover:text-[var(--neon-violet)]" onClick={() => setView("tasks")}>
+                手动创建
+              </button>
             </div>
           </div>
           <div className="min-h-0 flex-1 flex flex-col pb-1">
@@ -1158,8 +1254,7 @@ function AiPanel({
         </div>
       )}
       {embedded && (
-        <div className="mb-3 flex items-center justify-between gap-2">
-          <span className="text-xs font-semibold uppercase tracking-normal text-[var(--muted-foreground)]">AI</span>
+        <div className="mb-2 flex items-center justify-end gap-2">
           <div className="relative flex gap-2">
             <button
               className="glass-inset px-2.5 py-1 text-xs"
@@ -1219,11 +1314,8 @@ function AiPanel({
       )}
       <div ref={listRef} className="thin-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto overflow-x-hidden pr-1">
         {aiMessages.length === 0 ? (
-          <div className="glass-inset flex min-h-[76px] items-center gap-3 p-3 text-sm leading-6">
-            <span className="inline-grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[var(--neon-blue)] text-[var(--background)] shadow-[0_0_20px_var(--neon-blue)]">
-              <Sparkles size={18} />
-            </span>
-            <p>今天想怎么安排？告诉我你想创建什么任务、开始什么计时，我会用四象限帮你排序。</p>
+          <div className="glass-inset p-2.5 text-xs text-[var(--muted-foreground)]">
+            告诉我你想记录、规划或调整什么。
           </div>
         ) : (
           aiMessages.map((message, index) => (
@@ -1234,7 +1326,6 @@ function AiPanel({
                   <span className="typing-dots" aria-label="正在生成"><span /><span /><span /></span>
                 </span>
               ) : "")}
-              {message.clarification && <div className="glass-inset mt-2 p-2 text-[var(--neon-amber)]">{message.clarification}</div>}
             </div>
           ))
         )}
@@ -1332,6 +1423,9 @@ function AiView() {
   };
   const [loading, setLoading] = useState(false);
   const [thinkingLabel, setThinkingLabel] = useState("");
+  const sendingRef = useRef(false);
+  const currentRequestRef = useRef<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
   const [historySearch, setHistorySearch] = useState("");
   const [historyDetails, setHistoryDetails] = useState<Record<string, {
@@ -1441,8 +1535,15 @@ function AiView() {
       await appendAiMessage(role, content);
       return true;
     } catch (error) {
-      console.warn("AI workspace history append failed; keeping message visible locally.", error);
-      addEntry({ id: `local-${crypto.randomUUID()}`, role, kind: "message", content });
+      // appendAiMessage already created an optimistic entry in the store;
+      // only add a local fallback if the optimistic entry was NOT created
+      // (which happens when the function throws before the set() call).
+      console.warn("AI workspace history append failed; checking if optimistic entry exists.", error);
+      const current = useAppStore.getState().aiWorkspaceEntries;
+      const hasOptimistic = current.some((entry) => entry.kind === "message" && entry.role === role && entry.content === content);
+      if (!hasOptimistic) {
+        addEntry({ id: `local-${crypto.randomUUID()}`, role, kind: "message", content });
+      }
       return false;
     }
   };
@@ -1489,9 +1590,105 @@ function AiView() {
     setApplyResults([]);
   };
 
+  const executePendingAction = async (action: PendingAction) => {
+    setPendingAction(null);
+    await appendVisibleAiMessage("user", "确认");
+
+    if (action.type === "batch_delete") {
+      const afterDate = action.params.afterDate as string | undefined;
+      const targets = afterDate
+        ? allTasks.filter((t) => t.status === "todo" && t.planned_date && t.planned_date >= afterDate)
+        : allTasks.filter((t) => t.status === "todo");
+
+      let successCount = 0;
+      let failCount = 0;
+      const failures: string[] = [];
+
+      for (const task of targets) {
+        try {
+          await useAppStore.getState().updateTask({ id: task.id, status: "archived" });
+          successCount++;
+        } catch (error) {
+          failCount++;
+          failures.push(`${task.title}: ${error instanceof Error ? error.message : "未知错误"}`);
+        }
+      }
+
+      await useAppStore.getState().load();
+      const resultMsg = [
+        `批量删除完成：成功 ${successCount} 个`,
+        failCount > 0 ? `，失败 ${failCount} 个` : "",
+        failures.length > 0 ? `\n失败原因：${failures.slice(0, 3).join("；")}` : "",
+      ].join("");
+      await appendVisibleAiMessage("assistant", resultMsg);
+      showToast(`已删除 ${successCount} 个任务`);
+      return;
+    }
+
+    if (action.type === "batch_update") {
+      const msg = "批量修改需要更具体的指令，请指明要修改哪些任务和具体修改内容。";
+      await appendVisibleAiMessage("assistant", msg);
+      showToast(msg);
+      return;
+    }
+
+    await appendVisibleAiMessage("assistant", `已确认执行「${action.summary}」，但当前操作类型未绑定执行器。`);
+  };
+
   const submit = async (message = input) => {
     const text = message.trim();
-    if (!text || loading) return;
+    if (!text || loading || sendingRef.current) return;
+    sendingRef.current = true;
+    const requestId = crypto.randomUUID();
+    currentRequestRef.current = requestId;
+
+    // Handle pendingAction confirm/cancel
+    if (pendingAction && CONFIRM_KEYWORDS.test(text.trim())) {
+      setInput("");
+      try {
+        await executePendingAction(pendingAction);
+      } finally {
+        sendingRef.current = false;
+      }
+      return;
+    }
+    if (pendingAction && CANCEL_KEYWORDS.test(text.trim())) {
+      setPendingAction(null);
+      setInput("");
+      try {
+        await appendVisibleAiMessage("user", text);
+        await appendVisibleAiMessage("assistant", "已取消当前待确认操作。");
+      } finally {
+        sendingRef.current = false;
+      }
+      return;
+    }
+
+    // Detect dangerous operations before routing
+    const danger = detectDangerousOperation(text, allTasks);
+    if (danger && !pendingAction) {
+      setInput("");
+      const action: PendingAction = {
+        ...danger,
+        id: crypto.randomUUID(),
+        createdAt: Date.now(),
+        expiresAt: Date.now() + PENDING_ACTION_TTL_MS,
+        affectedCount: danger.affectedCount ?? 0,
+        affectedPreview: danger.affectedPreview ?? [],
+      };
+      setPendingAction(action);
+      try {
+        await appendVisibleAiMessage("user", text);
+        const previewText = danger.affectedPreview.length > 0
+          ? `\n\n影响任务（前 ${danger.affectedPreview.length} 个）：\n${danger.affectedPreview.map((t) => `• ${t}`).join("\n")}`
+          : "";
+        await appendVisibleAiMessage("assistant", `⚠️ ${danger.summary}${previewText}\n\n请回复「确认」执行，或「取消」放弃。`);
+      } finally {
+        sendingRef.current = false;
+      }
+      return;
+    }
+
     let route = routePlanningSkill(text, preferredSkill);
     if (!preferredSkill && /没完成|未完成|调整|顺延|重新安排|局部|太多|太满|延期/.test(text)) {
       route = { skill: "adaptive_reschedule", label: "调整计划" };
@@ -1541,13 +1738,17 @@ function AiView() {
         await appendVisibleAiMessage("assistant", planningChatSummary(parsed, response, route.skill));
       }
     } catch (error) {
+      if (currentRequestRef.current !== requestId) return;
       const message = error instanceof Error ? error.message : "这次处理失败了，请再试一次。";
       await appendVisibleAiMessage("assistant", message);
       showToast(message);
     } finally {
-      setLoading(false);
-      setThinkingLabel("");
-      setAiPreferredSkill(null);
+      if (currentRequestRef.current === requestId) {
+        setLoading(false);
+        setThinkingLabel("");
+        setAiPreferredSkill(null);
+      }
+      sendingRef.current = false;
     }
   };
 
@@ -1733,6 +1934,25 @@ function AiView() {
                 onCancel={() => updateInboxEntry(entry.id, (current) => ({ ...current, drafts: [], warnings: [], results: [] }))}
               />
             ))}
+            {pendingAction && !loading && (
+              <div className="glass-inset mr-auto max-w-[82%] space-y-2 rounded-xl border border-[var(--neon-amber)]/30 p-3 text-sm">
+                <p className="text-[var(--neon-amber)]">⚠️ 待确认操作</p>
+                <p>{pendingAction.summary}</p>
+                {pendingAction.affectedCount > 0 && (
+                  <p className="text-xs text-[var(--muted-foreground)]">影响 {pendingAction.affectedCount} 个任务</p>
+                )}
+                {pendingAction.affectedPreview.length > 0 && (
+                  <ul className="text-xs text-[var(--muted-foreground)] space-y-0.5">
+                    {pendingAction.affectedPreview.map((title, i) => <li key={i}>• {title}</li>)}
+                  </ul>
+                )}
+                <p className="text-xs text-[var(--muted-foreground)]">标记为 archived，可在任务筛选中查看。不可撤销。</p>
+                <div className="flex gap-2 pt-1">
+                  <button className="btn-glow rounded-lg px-3 py-1.5 text-xs font-semibold" type="button" onClick={() => { void executePendingAction(pendingAction); }}>确认执行</button>
+                  <button className="glass-inset rounded-lg px-3 py-1.5 text-xs" type="button" onClick={() => { setPendingAction(null); showToast("已取消。"); }}>取消</button>
+                </div>
+              </div>
+            )}
             {thinkingLabel && (
               <div className="chat-bubble chat-bubble-ai glass-inset mr-auto inline-flex items-center gap-2 rounded-xl text-sm leading-6">
                 <span>{thinkingLabel}</span>
@@ -2518,6 +2738,7 @@ function QuadrantColumn({
 }) {
   const updateTask = useAppStore((state) => state.updateTask);
   const meta = quadrantMeta[quadrant];
+  const containerRef = useCallback((el: HTMLDivElement | null) => registerQuadrantRef(quadrant, el), [quadrant]);
   const allowQuadrantDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     event.stopPropagation();
@@ -2541,7 +2762,7 @@ function QuadrantColumn({
     }
   };
   return (
-    <div className="quadrant-card glass-card flex min-h-0 flex-col p-3 [transition:var(--transition-smooth)]" onDragEnter={allowQuadrantDrop} onDragOver={allowQuadrantDrop} onDrop={dropToQuadrant}>
+    <div ref={containerRef} data-quadrant-drop={`Q${quadrant}`} className="quadrant-card glass-card flex min-h-0 flex-col p-3 [transition:var(--transition-smooth)]" onDragEnter={allowQuadrantDrop} onDragOver={allowQuadrantDrop} onDrop={dropToQuadrant}>
       <div className="mb-3 flex items-start justify-between gap-3">
         <div>
           <p className="text-xs font-semibold uppercase tracking-normal text-[var(--muted-foreground)]">Eisenhower Matrix</p>
@@ -2583,17 +2804,88 @@ function TaskRow({ task, selected, onToggleSelected, onSelect }: { task: Task; s
       showToast("移动失败，请再试一次。");
     }
   };
+
+  // Pointer Events drag handler for the drag handle
+  const onHandlePointerDown = useCallback((event: React.PointerEvent) => {
+    // Only primary button
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    const startX = event.clientX;
+    const startY = event.clientY;
+    let dragStarted = false;
+
+    // Capture pointer for reliable tracking even outside element
+    (event.target as HTMLElement).setPointerCapture(event.pointerId);
+
+    // Style the source card
+    const card = event.currentTarget.closest(".glass-inset") as HTMLElement | null;
+
+    const onMove = (e: PointerEvent) => {
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      // Only start dragging after 5px threshold
+      if (!dragStarted && (dx * dx + dy * dy) < 25) return;
+
+      if (!dragStarted) {
+        dragStarted = true;
+        _ptrDragTaskId = task.id;
+        // Create ghost
+        const ghost = document.createElement("div");
+        ghost.className = "drag-ghost";
+        ghost.textContent = task.title;
+        ghost.style.left = `${e.clientX}px`;
+        ghost.style.top = `${e.clientY}px`;
+        document.body.appendChild(ghost);
+        _ptrGhost = ghost;
+        if (card) card.style.opacity = "0.5";
+      }
+
+      if (_ptrGhost) {
+        _ptrGhost.style.left = `${e.clientX}px`;
+        _ptrGhost.style.top = `${e.clientY}px`;
+      }
+      const targetQ = findQuadrantAtPoint(e.clientX, e.clientY);
+      if (targetQ !== _ptrHighlightedQuadrant) {
+        clearPtrHighlight();
+        if (targetQ !== null) {
+          const el = _ptrQuadrantRefs.get(targetQ);
+          el?.classList.add("quadrant-drop-highlight");
+          _ptrHighlightedQuadrant = targetQ;
+        }
+      }
+    };
+
+    const onUp = async (e: PointerEvent) => {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      if (card) card.style.opacity = "";
+      clearPtrHighlight();
+      removePtrGhost();
+      const targetQ = findQuadrantAtPoint(e.clientX, e.clientY);
+      const dragId = _ptrDragTaskId;
+      _ptrDragTaskId = null;
+      if (dragStarted && targetQ !== null && dragId) {
+        const target = quadrantMeta[targetQ];
+        try {
+          await useAppStore.getState().updateTask({ id: dragId, urgency: target.urgency, importance: target.importance });
+          showToast(`已移动到 Q${targetQ}`);
+        } catch (error) {
+          console.warn("Pointer drag update failed", error);
+          showToast("拖拽更新失败，请再试一次。");
+        }
+      }
+    };
+
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+  }, [task.id, task.title]);
+
   return (
     <div
-      className="glass-inset group cursor-grab p-2.5 text-sm [transition:var(--transition-smooth)] hover:-translate-y-0.5 hover:border-[var(--ring)] active:cursor-grabbing"
-      draggable
-      onDragStart={(event) => {
-        event.currentTarget.classList.add("opacity-60");
-        setTaskDragData(event, task.id);
-      }}
-      onDragEnd={(event) => {
-        event.currentTarget.classList.remove("opacity-60");
-      }}
+      className="glass-inset group cursor-default p-2.5 text-sm [transition:var(--transition-smooth)] hover:-translate-y-0.5 hover:border-[var(--ring)]"
+      style={{ userSelect: "none" as const }}
       onClick={onSelect}
     >
       <div className="flex items-center gap-2">
@@ -2623,12 +2915,8 @@ function TaskRow({ task, selected, onToggleSelected, onSelect }: { task: Task; s
         </button>
         <strong className={done ? "task-done min-w-0 flex-1" : "min-w-0 flex-1"}>{task.title}</strong>
         <span
-          className="drag-handle glass-inset inline-flex h-7 w-7 shrink-0 cursor-grab select-none items-center justify-center rounded-lg text-xs text-[var(--muted-foreground)] hover:text-[var(--neon-blue)]"
-          draggable
-          onDragStart={(event) => {
-            event.stopPropagation();
-            setTaskDragData(event, task.id);
-          }}
+          className="pointer-drag-handle glass-inset inline-flex h-7 w-7 shrink-0 cursor-grab select-none items-center justify-center rounded-lg text-xs text-[var(--muted-foreground)] hover:text-[var(--neon-blue)]"
+          onPointerDown={onHandlePointerDown}
           title="拖拽移动象限"
         >
           ::
@@ -2662,7 +2950,7 @@ function TaskRow({ task, selected, onToggleSelected, onSelect }: { task: Task; s
             <Trash2 size={15} />
           </button>
           <select
-            className="quadrant-move-select glass-inset max-w-[88px] rounded-lg px-2 py-1 text-xs"
+            className="quadrant-move-select max-w-[120px] rounded-lg px-2 py-1 text-xs"
             value=""
             draggable={false}
             onPointerDown={(event) => event.stopPropagation()}
@@ -2677,9 +2965,10 @@ function TaskRow({ task, selected, onToggleSelected, onSelect }: { task: Task; s
             aria-label="移动到象限"
           >
             <option value="">移动到</option>
-            {[1, 2, 3, 4].map((target) => (
-              <option key={target} value={target}>Q{target}</option>
-            ))}
+            <option value="1">Q1 重要且紧急</option>
+            <option value="2">Q2 重要不紧急</option>
+            <option value="3">Q3 紧急不重要</option>
+            <option value="4">Q4 不重要不紧急</option>
           </select>
         </div>
       </div>
