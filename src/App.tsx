@@ -333,6 +333,39 @@ function fallbackGeneralChatReply(text: string) {
   return "我在。你可以直接告诉我要记录的任务、需要安排的计划，或哪里没完成需要调整。";
 }
 
+function setTaskDragData(event: DragEvent<HTMLElement>, taskId: string) {
+  event.dataTransfer.effectAllowed = "move";
+  event.dataTransfer.setData("application/x-smartfocus-task-id", taskId);
+  event.dataTransfer.setData("task-id", taskId);
+  event.dataTransfer.setData("text/plain", taskId);
+  console.debug("Quadrant drag started", { taskId, types: Array.from(event.dataTransfer.types) });
+}
+
+function getTaskDragData(event: DragEvent<HTMLElement>) {
+  return (
+    event.dataTransfer.getData("application/x-smartfocus-task-id")
+    || event.dataTransfer.getData("task-id")
+    || event.dataTransfer.getData("text/plain")
+  ).trim();
+}
+
+function planningChatSummary(parsed: StructuredPreviewState, response: { summary?: string }, skill: PlanningSkillId) {
+  const preview = parsed.parsed;
+  const questions = stringList(
+    !isAdaptiveReschedulePreview(preview) ? preview?.clarification_questions : preview?.clarification_questions,
+  );
+  if (questions.length > 0) return `还需要确认：${questions.slice(0, 3).join("、")}。`;
+  if (isAdaptiveReschedulePreview(preview)) {
+    return preview.summary || preview.reason || "我已经给出局部调整建议，右侧计划结果中可以查看受影响任务、调整原因和风险。";
+  }
+  if (response.summary) return response.summary;
+  if (preview?.summary) return preview.summary;
+  if (skill === "exam_review_plan" || skill === "goal_intake" || skill === "daily_plan" || skill === "weekly_plan") {
+    return "我已经生成了一个复习计划草案，右侧计划结果中可以查看章节覆盖、每日安排和风险提醒。";
+  }
+  return parsed.error ? "计划结果解析失败，已保留原文在计划结果中查看。" : "我已经整理出一版结构化计划，右侧计划结果已更新。";
+}
+
 type MiniAiMessage = { role: "user" | "assistant"; content: string; clarification?: string | null };
 type MiniAiHistoryItem = { id: string; title: string; messages: MiniAiMessage[]; updatedAt: string };
 const miniAiHistoryKey = "smartfocus.workbench_ai_history";
@@ -710,8 +743,8 @@ function WorkbenchView() {
   return (
     <section className="workbench-grid animate-rise min-h-0 gap-4 overflow-visible">
       <div className="workbench-main workbench-left-grid grid min-h-0 gap-4 overflow-visible">
-        <section data-ui-region="ai-command" className="glass-card hero-card-light lift-card flex min-h-[320px] flex-col overflow-hidden p-5">
-          <div className="mb-4 flex shrink-0 items-start justify-between gap-4">
+        <section data-ui-region="ai-command" className="glass-card hero-card-light lift-card flex min-h-[320px] flex-col overflow-hidden p-4">
+          <div className="mb-2 flex shrink-0 items-start justify-between gap-4">
             <div>
               <p className="section-label flex items-center gap-2">
                 <Sparkles size={15} /> AI Agent Command Stream
@@ -1186,16 +1219,21 @@ function AiPanel({
       )}
       <div ref={listRef} className="thin-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto overflow-x-hidden pr-1">
         {aiMessages.length === 0 ? (
-          <div className="glass-inset flex min-h-[104px] flex-col items-start gap-5 p-5 text-sm leading-7">
-            <span className="inline-grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[var(--neon-blue)] text-[var(--background)] shadow-[0_0_26px_var(--neon-blue)]">
+          <div className="glass-inset flex min-h-[76px] items-center gap-3 p-3 text-sm leading-6">
+            <span className="inline-grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[var(--neon-blue)] text-[var(--background)] shadow-[0_0_20px_var(--neon-blue)]">
               <Sparkles size={18} />
             </span>
             <p>今天想怎么安排？告诉我你想创建什么任务、开始什么计时，我会用四象限帮你排序。</p>
           </div>
         ) : (
           aiMessages.map((message, index) => (
-            <div key={index} className={`w-fit max-w-[78%] rounded-xl p-4 text-sm leading-6 break-words [transition:var(--transition-smooth)] ${message.role === "user" ? "btn-glow ml-auto text-[var(--primary-foreground)]" : "glass-inset mr-auto"}`}>
-              {message.content || (message.role === "assistant" ? "正在思考..." : "")}
+            <div key={index} className={`chat-bubble w-fit max-w-[78%] rounded-xl text-sm leading-6 break-words [transition:var(--transition-smooth)] ${message.role === "user" ? "chat-bubble-user btn-glow ml-auto text-[var(--primary-foreground)]" : "chat-bubble-ai glass-inset mr-auto"}`}>
+              {message.content || (message.role === "assistant" ? (
+                <span className="inline-flex items-center gap-2">
+                  正在思考
+                  <span className="typing-dots" aria-label="正在生成"><span /><span /><span /></span>
+                </span>
+              ) : "")}
               {message.clarification && <div className="glass-inset mt-2 p-2 text-[var(--neon-amber)]">{message.clarification}</div>}
             </div>
           ))
@@ -1293,6 +1331,7 @@ function AiView() {
     setActiveAiToolPanel((current) => (current === panel ? null : panel));
   };
   const [loading, setLoading] = useState(false);
+  const [thinkingLabel, setThinkingLabel] = useState("");
   const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
   const [historySearch, setHistorySearch] = useState("");
   const [historyDetails, setHistoryDetails] = useState<Record<string, {
@@ -1461,6 +1500,7 @@ function AiView() {
     }
     setLastRoute(route);
     setLoading(true);
+    setThinkingLabel(route.skill === "adaptive_reschedule" ? "正在整理调整建议" : isGeneralChatInput(text) ? "正在思考" : "正在整理计划");
     setInput("");
     try {
       await appendVisibleAiMessage("user", text);
@@ -1485,6 +1525,7 @@ function AiView() {
             warnings: parsed.warnings ?? [],
             results: [],
           });
+          await appendVisibleAiMessage("assistant", "我已经整理出待确认的任务草稿，可以在下方检查时间、提醒和标签后再应用。");
         }
       } else {
         const planningMessage = route.skill === "adaptive_reschedule"
@@ -1497,10 +1538,7 @@ function AiView() {
         );
         updatePreviewFromResponse(response);
         const parsed = parseLearningPlanText(response.reply ?? JSON.stringify(response));
-        const summary = parsed.parsed?.summary
-          || response.summary
-          || (parsed.error ? "计划结果解析失败，可查看原文。" : "我整理出了一版结构化计划，计划结果已就绪。");
-        await appendVisibleAiMessage("assistant", summary);
+        await appendVisibleAiMessage("assistant", planningChatSummary(parsed, response, route.skill));
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "这次处理失败了，请再试一次。";
@@ -1508,6 +1546,7 @@ function AiView() {
       showToast(message);
     } finally {
       setLoading(false);
+      setThinkingLabel("");
       setAiPreferredSkill(null);
     }
   };
@@ -1682,7 +1721,7 @@ function AiView() {
               </div>
             )}
             {entries.slice(-40).map((entry) => entry.kind === "message" ? (
-              <div key={entry.id} className={`max-w-[82%] rounded-xl p-4 text-sm leading-6 ${entry.role === "user" ? "btn-glow ml-auto text-[var(--primary-foreground)]" : "glass-inset"}`}>
+              <div key={entry.id} className={`chat-bubble max-w-[82%] rounded-xl text-sm leading-6 ${entry.role === "user" ? "chat-bubble-user btn-glow ml-auto text-[var(--primary-foreground)]" : "chat-bubble-ai glass-inset mr-auto"}`}>
                 {entry.content}
               </div>
             ) : (
@@ -1694,6 +1733,12 @@ function AiView() {
                 onCancel={() => updateInboxEntry(entry.id, (current) => ({ ...current, drafts: [], warnings: [], results: [] }))}
               />
             ))}
+            {thinkingLabel && (
+              <div className="chat-bubble chat-bubble-ai glass-inset mr-auto inline-flex items-center gap-2 rounded-xl text-sm leading-6">
+                <span>{thinkingLabel}</span>
+                <span className="typing-dots" aria-label="正在生成"><span /><span /><span /></span>
+              </div>
+            )}
           </div>
           {(preview.parsed || preview.error) && (
             <button className="glass-inset mt-3 flex flex-wrap items-center justify-between gap-2 p-3 text-left text-sm" type="button" onClick={() => toggleAiToolPanel("plan")}>
@@ -2481,7 +2526,7 @@ function QuadrantColumn({
   const dropToQuadrant = async (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     event.stopPropagation();
-    const id = event.dataTransfer.getData("application/x-smartfocus-task-id") || event.dataTransfer.getData("task-id") || event.dataTransfer.getData("text/plain");
+    const id = getTaskDragData(event);
     if (!id) {
       console.warn("Quadrant drop ignored: missing task id");
       showToast("拖拽失败：没有读取到任务 ID。");
@@ -2528,16 +2573,23 @@ function TaskRow({ task, selected, onToggleSelected, onSelect }: { task: Task; s
   const done = task.status === "done";
   const overdue = taskOverdueLabel(task);
   const tags = parseTags(task);
+  const moveToQuadrant = async (targetQuadrant: number) => {
+    const target = quadrantMeta[targetQuadrant];
+    try {
+      await updateTask({ id: task.id, urgency: target.urgency, importance: target.importance });
+      showToast(`已移动到 Q${targetQuadrant}`);
+    } catch (error) {
+      console.warn("Quadrant fallback move failed", error);
+      showToast("移动失败，请再试一次。");
+    }
+  };
   return (
     <div
-      className="glass-inset group p-3 text-sm [transition:var(--transition-smooth)] hover:-translate-y-0.5 hover:border-[var(--ring)]"
+      className="glass-inset group cursor-grab p-2.5 text-sm [transition:var(--transition-smooth)] hover:-translate-y-0.5 hover:border-[var(--ring)] active:cursor-grabbing"
       draggable
       onDragStart={(event) => {
         event.currentTarget.classList.add("opacity-60");
-        event.dataTransfer.effectAllowed = "move";
-        event.dataTransfer.setData("application/x-smartfocus-task-id", task.id);
-        event.dataTransfer.setData("task-id", task.id);
-        event.dataTransfer.setData("text/plain", task.id);
+        setTaskDragData(event, task.id);
       }}
       onDragEnd={(event) => {
         event.currentTarget.classList.remove("opacity-60");
@@ -2548,6 +2600,7 @@ function TaskRow({ task, selected, onToggleSelected, onSelect }: { task: Task; s
         <input
           type="checkbox"
           className="h-4 w-4 accent-[var(--neon-violet)]"
+          draggable={false}
           checked={selected}
           onChange={(event) => {
             event.stopPropagation();
@@ -2558,6 +2611,8 @@ function TaskRow({ task, selected, onToggleSelected, onSelect }: { task: Task; s
         />
         <button
           className="icon-btn"
+          draggable={false}
+          onPointerDown={(event) => event.stopPropagation()}
           onClick={(event) => {
             event.stopPropagation();
             updateTask({ id: task.id, status: done ? "todo" : "done" });
@@ -2567,6 +2622,17 @@ function TaskRow({ task, selected, onToggleSelected, onSelect }: { task: Task; s
           <Check size={16} />
         </button>
         <strong className={done ? "task-done min-w-0 flex-1" : "min-w-0 flex-1"}>{task.title}</strong>
+        <span
+          className="drag-handle glass-inset inline-flex h-7 w-7 shrink-0 cursor-grab select-none items-center justify-center rounded-lg text-xs text-[var(--muted-foreground)] hover:text-[var(--neon-blue)]"
+          draggable
+          onDragStart={(event) => {
+            event.stopPropagation();
+            setTaskDragData(event, task.id);
+          }}
+          title="拖拽移动象限"
+        >
+          ::
+        </span>
         <span className="glass-inset inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs">
           <PriorityDot quadrant={task.quadrant} />
           {priorityLabel(task.priority)}
@@ -2595,6 +2661,26 @@ function TaskRow({ task, selected, onToggleSelected, onSelect }: { task: Task; s
           >
             <Trash2 size={15} />
           </button>
+          <select
+            className="quadrant-move-select glass-inset max-w-[88px] rounded-lg px-2 py-1 text-xs"
+            value=""
+            draggable={false}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
+            onChange={(event) => {
+              event.stopPropagation();
+              const target = Number(event.target.value);
+              if (target) void moveToQuadrant(target);
+              event.currentTarget.value = "";
+            }}
+            title="移动到"
+            aria-label="移动到象限"
+          >
+            <option value="">移动到</option>
+            {[1, 2, 3, 4].map((target) => (
+              <option key={target} value={target}>Q{target}</option>
+            ))}
+          </select>
         </div>
       </div>
       {(overdue || isNeedsReviewTask(task) || tags.length > 0) && (

@@ -1,4 +1,56 @@
 # SmartFocus Phase 2 开发计划
+### Hotfix Sprint 20B.5：四象限拖拽根因定位与 AI 对话体验修复
+
+状态：已完成回归修复；未进入新 Sprint，未新增数据库字段，未新增 SQLx migration，未修改 `plan.md`。
+
+四象限拖拽真正失效原因：
+- 任务卡主要依赖整张卡片作为拖拽起点，checkbox、完成、播放、删除等控件位于卡片内部，真实操作时容易从不可预期的子元素开始拖动，Tauri WebView 下 HTML5 drag/drop 体验不稳定。
+- drop 目标虽已覆盖 quadrant 外层和内部滚动列表，但缺少明确 drag handle 与可用保底路径；当 `dataTransfer` 读取失败时只能提示失败，无法继续完成移动。
+
+drag/drop 修复方式：
+- 新增统一 `setTaskDragData` / `getTaskDragData`，`dragstart` 同时写入 `application/x-smartfocus-task-id`、`task-id`、`text/plain`，drop 兼容三种读取方式。
+- 任务卡保留整卡可拖，并新增小型 drag handle；checkbox、完成、播放、删除、点击详情继续独立工作。
+- quadrant 外层 card 与内部滚动任务列表继续绑定 `onDragEnter` / `onDragOver preventDefault` / `onDrop`。
+- drop 成功只调用 `updateTask({ id, urgency, importance })`；不直接写 `quadrant`，quadrant 仍由 Rust `update_task` 根据 urgency + importance 计算。
+- drop 缺少 task id 或更新失败时继续 `console.warn` + toast，不静默失败。
+
+是否增加“移动到 Q1-Q4”保底菜单：
+- 已增加。每张任务卡右侧有轻量“移动到”下拉，可选择 Q1 / Q2 / Q3 / Q4。
+- 保底菜单同样只更新 urgency / importance，不直接写 quadrant。
+
+AI 工作区 loading / thinking 状态：
+- 独立 AI 工作区请求期间显示动态状态：普通聊天为“正在思考”，计划生成为“正在整理计划”，局部重排为“正在整理调整建议”，并带三点脉冲。
+- Workbench AI 小卡片的空 assistant 回复也改为带动态三点的 thinking 状态。
+
+普通聊天与计划类输入的分流逻辑：
+- “你好”等短普通聊天直接走自然语言回复，不强行生成 Plan Canvas。
+- “两周后考试、每天一小时”等计划类输入进入结构化计划生成，同时聊天区写入摘要。
+- “今天没完成第二章、局部调整”等输入进入 adaptive_reschedule，同时聊天区写入调整说明，Plan Canvas 保留结构化建议。
+- internal prompt、`buildPlanningPrompt`、`RESCHEDULE_CONTEXT`、schema 继续只进入模型请求，不进入可见聊天历史。
+
+消息气泡布局修复：
+- 用户消息靠右，AI 消息靠左。
+- 气泡宽度按内容自适应，设置 max-width，长文本换行，不再全部等宽撑满。
+- 消息 padding 缩小，独立 AI 工作区与 Workbench 小卡片都应用统一 `chat-bubble` 样式。
+
+Workbench AI 小卡片压缩：
+- 主页面 AI 卡片 padding 与标题区间距缩小。
+- 欢迎卡片从竖排改为图标与文字同一行，降低高度。
+- 对话区可用高度增加，新对话 / 历史入口保留在右上。
+
+验收结果：
+- `npm run build`：通过。
+- `cargo test`：通过，2 个 Rust 单元测试 + 1 个 migration 测试均通过。
+- `git diff --check`：通过。
+- `plan.md`：未修改。
+- 代码检查确认拖拽与保底移动均只写 urgency / importance，没有直接写 quadrant；Rust `update_task` 继续计算 quadrant。
+
+剩余 TODO：
+- 需要在真实 Tauri 窗口中手动拖拽验证：Q2 -> Q1、Q1 -> Q4、空象限拖入、刷新后保持。
+- 如某些系统 WebView 仍偶发吞掉 HTML5 drop，可直接使用“移动到 Q1-Q4”保底菜单完成移动。
+
+下一 Sprint 建议：
+- Hotfix 20B.5 验收后，可以继续进入后续 Sprint；进入前建议先做一次真实窗口的四象限拖拽与 AI 工作区三条验收输入回归。
 
 ### Hotfix Sprint 20B.4：计时器实时同步、AI 工作区对话历史、四象限拖拽彻底回归修复
 
