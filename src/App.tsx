@@ -41,7 +41,7 @@ import dayjs from "dayjs";
 import isBetween from "dayjs/plugin/isBetween";
 import { api } from "./lib/api";
 import { TaskUpdatePatch, useAppStore, type AiWorkspaceEntry } from "./lib/store";
-import type { AiConversationMessage, Importance, Material, Priority, Reminder, Task, TimerMode, TimerSnapshot, Urgency } from "./lib/types";
+import type { AiConversationMessage, Importance, Material, PendingAction, Priority, Reminder, Task, TimerMode, TimerSnapshot, Urgency } from "./lib/types";
 import {
   formatMinutes,
   formatSeconds,
@@ -397,18 +397,6 @@ function planningChatSummary(parsed: StructuredPreviewState, response: { summary
   return parsed.error ? "计划结果解析失败，已保留原文在计划结果中查看。" : "我已经整理出一版结构化计划，右侧计划结果已更新。";
 }
 
-type PendingAction = {
-  id: string;
-  type: "batch_delete" | "batch_update" | "dangerous_operation";
-  params: Record<string, unknown>;
-  summary: string;
-  affectedCount: number;
-  affectedPreview: string[];
-  riskLevel: "low" | "medium" | "high";
-  createdAt: number;
-  expiresAt: number;
-};
-
 const PENDING_ACTION_TTL_MS = 5 * 60 * 1000;
 
 const CONFIRM_KEYWORDS = /^(确认|是|执行|确认删除|继续|好|yes|ok|确定|执行吧|删吧|干吧|走|do)$/;
@@ -417,7 +405,7 @@ const CANCEL_KEYWORDS = /^(取消|不要|算了|不了|不执行|取消操作|ca
 function detectDangerousOperation(
   text: string,
   tasks: Task[],
-): Omit<PendingAction, "id" | "createdAt" | "expiresAt"> | null {
+): Omit<PendingAction, "id" | "createdAt" | "expiresAt" | "source"> | null {
   const normalized = text.trim();
   const today = new Date().toISOString().slice(0, 10);
   const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
@@ -431,7 +419,7 @@ function detectDangerousOperation(
     return {
       type: "batch_delete",
       params: { raw, afterDate },
-      summary: `将删除 ${afterDate} 之后的 ${affected.length} 个任务。此操作标记为 archived，可在任务筛选中查看。确认执行吗？`,
+      summary: `将 ${afterDate} 之后的 ${affected.length} 个任务移动到回收站，可恢复。确认执行吗？`,
       affectedCount: affected.length,
       affectedPreview: affected.slice(0, 5).map((t) => t.title),
       riskLevel: "high",
@@ -443,7 +431,7 @@ function detectDangerousOperation(
     return {
       type: "batch_delete",
       params: { raw: normalized },
-      summary: `你要求执行危险操作：「${normalized.slice(0, 40)}」。确认执行吗？`,
+      summary: `你要求将任务移动到回收站：「${normalized.slice(0, 40)}」。确认执行吗？`,
       affectedCount: 0,
       affectedPreview: [],
       riskLevel: "high",
@@ -1403,6 +1391,7 @@ function AiView() {
     aiPlanCanvasOpen, setAiPlanCanvasOpen,
     conversations, activeConversationId, loadConversations, createConversation, openConversation,
     renameConversation, deleteConversation, appendAiMessage, saveCurrentPlanSnapshot,
+    pendingAction, setPendingAction, moveTasksToTrash, loadTrashedTasks, load: storeLoad,
   } = useAppStore();
   const preferredSkill = aiPreferredSkill as PlanningSkillId | null;
   const [materialSearch, setMaterialSearch] = useState("");
@@ -1425,8 +1414,8 @@ function AiView() {
   const [thinkingLabel, setThinkingLabel] = useState("");
   const sendingRef = useRef(false);
   const currentRequestRef = useRef<string | null>(null);
-  const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
+  const [trashDialogOpen, setTrashDialogOpen] = useState(false);
   const [historySearch, setHistorySearch] = useState("");
   const [historyDetails, setHistoryDetails] = useState<Record<string, {
     messages: AiConversationMessage[];
@@ -1499,6 +1488,15 @@ function AiView() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [historyDialogOpen]);
+
+  useEffect(() => {
+    if (!trashDialogOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setTrashDialogOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [trashDialogOpen]);
 
   useEffect(() => {
     if (!historyDialogOpen) return;
@@ -1606,7 +1604,7 @@ function AiView() {
 
       for (const task of targets) {
         try {
-          await useAppStore.getState().updateTask({ id: task.id, status: "archived" });
+          await moveTasksToTrash([task.id], afterDate ? `delete_after_${afterDate}` : "batch_delete");
           successCount++;
         } catch (error) {
           failCount++;
@@ -1614,14 +1612,14 @@ function AiView() {
         }
       }
 
-      await useAppStore.getState().load();
+      await storeLoad();
       const resultMsg = [
-        `批量删除完成：成功 ${successCount} 个`,
+        `已将 ${successCount} 个任务移动到回收站，可在回收站恢复`,
         failCount > 0 ? `，失败 ${failCount} 个` : "",
         failures.length > 0 ? `\n失败原因：${failures.slice(0, 3).join("；")}` : "",
       ].join("");
       await appendVisibleAiMessage("assistant", resultMsg);
-      showToast(`已删除 ${successCount} 个任务`);
+      showToast(`已将 ${successCount} 个任务移动到回收站`);
       return;
     }
 
@@ -1671,6 +1669,7 @@ function AiView() {
       const action: PendingAction = {
         ...danger,
         id: crypto.randomUUID(),
+        source: "ai_workspace",
         createdAt: Date.now(),
         expiresAt: Date.now() + PENDING_ACTION_TTL_MS,
         affectedCount: danger.affectedCount ?? 0,
@@ -1903,9 +1902,14 @@ function AiView() {
     <section className="glass-card ai-workspace flex h-full min-h-0 flex-col overflow-hidden p-5">
       <div className="flex items-start justify-between gap-3">
         <Header title="AI 计划编排" subtitle="用自然语言记录任务、安排计划、调整日程" />
-        <button className="glass-inset shrink-0 px-3 py-2 text-sm" type="button" onClick={() => setHistoryDialogOpen(true)}>
-          历史记录
-        </button>
+        <div className="flex shrink-0 gap-2">
+          <button className="glass-inset px-3 py-2 text-sm" type="button" onClick={() => setTrashDialogOpen(true)}>
+            回收站
+          </button>
+          <button className="glass-inset px-3 py-2 text-sm" type="button" onClick={() => setHistoryDialogOpen(true)}>
+            历史记录
+          </button>
+        </div>
       </div>
       <div className="ai-dialogue-shell mt-4 grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_auto]">
         <div className="glass-inset flex min-h-[520px] min-w-0 flex-col overflow-hidden p-4">
@@ -2252,8 +2256,114 @@ function AiView() {
         </div>,
         document.body,
       )}
+      {trashDialogOpen && createPortal(
+        <TrashDialog onClose={() => setTrashDialogOpen(false)} />,
+        document.body,
+      )}
       {(preview.parsed || preview.error) && activeAiToolPanel === "plan" && <button className="ai-drawer-backdrop xl:hidden" type="button" aria-label="关闭计划结果" onClick={() => setActiveAiToolPanel(null)} />}
     </section>
+  );
+}
+
+function TrashDialog({ onClose }: { onClose: () => void }) {
+  const { trashedTasks, trashLoading, trashError, loadTrashedTasks, restoreTaskFromTrash, deleteTaskPermanently } = useAppStore();
+  const [search, setSearch] = useState("");
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  useEffect(() => { void loadTrashedTasks(); }, [loadTrashedTasks]);
+
+  const filtered = trashedTasks.filter((task) => {
+    const haystack = `${task.title} ${task.tags} ${task.description ?? ""}`.toLowerCase();
+    return haystack.includes(search.toLowerCase());
+  });
+
+  const handlePermanentDelete = async (id: string) => {
+    try {
+      await deleteTaskPermanently(id);
+      showToast("已彻底删除");
+      setConfirmDeleteId(null);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "删除失败");
+    }
+  };
+
+  const handleRestore = async (id: string) => {
+    try {
+      await restoreTaskFromTrash(id);
+      showToast("已恢复任务");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "恢复失败");
+    }
+  };
+
+  const quadrantLabel = (q: number) => ["Q1 重要且紧急", "Q2 重要不紧急", "Q3 紧急不重要", "Q4 不重要不紧急"][q - 1] ?? `Q${q}`;
+
+  return (
+    <div className="ai-history-backdrop" role="presentation" onMouseDown={onClose}>
+      <section className="ai-history-dialog glass-card" role="dialog" aria-modal="true" aria-label="回收站" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-4">
+          <div>
+            <h3 className="text-lg font-semibold">回收站</h3>
+            <p className="mt-1 text-sm text-[var(--muted-foreground)]">删除的任务会先放在这里，可恢复。</p>
+          </div>
+          <div className="flex gap-2">
+            <button className="glass-inset px-3 py-2 text-sm" type="button" onClick={() => void loadTrashedTasks()}>刷新</button>
+            <button className="glass-inset px-3 py-2 text-sm" type="button" onClick={onClose}>关闭</button>
+          </div>
+        </div>
+        <input className="field mt-4 w-full" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索任务标题、标签、备注" />
+        <div className="thin-scrollbar mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+          {trashLoading && <p className="text-sm text-[var(--muted-foreground)]">加载中...</p>}
+          {trashError && <p className="text-sm text-red-400">{trashError}</p>}
+          {!trashLoading && filtered.length === 0 && (
+            <div className="glass-inset p-6 text-center text-sm text-[var(--muted-foreground)]">
+              回收站为空。删除的任务会先放在这里，可恢复。
+            </div>
+          )}
+          {filtered.map((task) => {
+            const tags = (() => { try { return JSON.parse(task.tags) as string[]; } catch { return []; } })();
+            return (
+              <div key={task.id} className="rounded-2xl border border-white/10 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="font-medium">{task.title}</p>
+                  <span className="text-xs text-[var(--muted-foreground)]">Q{task.quadrant} {quadrantLabel(task.quadrant)}</span>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2 text-xs text-[var(--muted-foreground)]">
+                  {task.planned_date && <span>计划: {task.planned_date}</span>}
+                  {task.deadline && <span>截止: {task.deadline.slice(0, 10)}</span>}
+                  {task.trashed_at && <span>删除于: {dayjs(task.trashed_at).format("YYYY-MM-DD HH:mm")}</span>}
+                  {task.trash_reason && <span>原因: {task.trash_reason}</span>}
+                </div>
+                {tags.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {tags.map((tag, i) => <span key={i} className="rounded-full border border-white/10 px-2 py-0.5 text-xs">{tag}</span>)}
+                  </div>
+                )}
+                {task.description && (
+                  <p className="mt-2 line-clamp-1 text-sm text-[var(--muted-foreground)]">{task.description}</p>
+                )}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button className="glass-inset flex items-center gap-1.5 px-3 py-1.5 text-xs" type="button" onClick={() => void handleRestore(task.id)}>
+                    <RotateCcw size={13} /> 恢复
+                  </button>
+                  {confirmDeleteId === task.id ? (
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-red-400">彻底删除后无法恢复，是否继续？</span>
+                      <button className="rounded-lg bg-red-600 px-3 py-1.5 text-xs text-white" type="button" onClick={() => void handlePermanentDelete(task.id)}>确认</button>
+                      <button className="glass-inset px-3 py-1.5 text-xs" type="button" onClick={() => setConfirmDeleteId(null)}>取消</button>
+                    </div>
+                  ) : (
+                    <button className="glass-inset flex items-center gap-1.5 px-3 py-1.5 text-xs text-red-400" type="button" onClick={() => setConfirmDeleteId(task.id)}>
+                      <Trash2 size={13} /> 彻底删除
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+    </div>
   );
 }
 

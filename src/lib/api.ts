@@ -262,6 +262,8 @@ function normalizeTask(input: TaskInput): Task {
     sort_order: input.sort_order ?? 0,
     created_at: now(),
     updated_at: now(),
+    trashed_at: null,
+    trash_reason: null,
   };
 }
 
@@ -309,7 +311,7 @@ class FallbackApi {
   } | null = null;
 
   async list_tasks(): Promise<Task[]> {
-    return ensureFallbackTasks().filter((task) => task.status !== "archived");
+    return ensureFallbackTasks().filter((task) => task.status !== "archived" && !task.trashed_at);
   }
 
   async create_task(input: TaskInput): Promise<Task> {
@@ -343,7 +345,50 @@ class FallbackApi {
   }
 
   async delete_task(id: string) {
+    // Legacy: soft-delete via archived status. Prefer move_task_to_trash.
     await this.update_task({ id, status: "archived" });
+  }
+
+  async move_task_to_trash(id: string, reason?: string) {
+    const tasks = readJson<Task[]>(taskKey, []);
+    const nowTime = now();
+    const next = tasks.map((task) =>
+      task.id === id ? { ...task, trashed_at: nowTime, trash_reason: reason ?? "manual", updated_at: nowTime } : task,
+    );
+    writeJson(taskKey, next);
+    return next.find((task) => task.id === id) ?? null;
+  }
+
+  async move_tasks_to_trash(ids: string[], reason?: string) {
+    const tasks = readJson<Task[]>(taskKey, []);
+    const nowTime = now();
+    const idSet = new Set(ids);
+    const next = tasks.map((task) =>
+      idSet.has(task.id) && !task.trashed_at ? { ...task, trashed_at: nowTime, trash_reason: reason ?? "batch_delete", updated_at: nowTime } : task,
+    );
+    writeJson(taskKey, next);
+    return next.filter((task) => idSet.has(task.id));
+  }
+
+  async list_trashed_tasks() {
+    return readJson<Task[]>(taskKey, []).filter((task) => task.trashed_at != null);
+  }
+
+  async restore_task_from_trash(id: string) {
+    const tasks = readJson<Task[]>(taskKey, []);
+    const nowTime = now();
+    const next = tasks.map((task) =>
+      task.id === id ? { ...task, trashed_at: null, trash_reason: null, updated_at: nowTime } : task,
+    );
+    writeJson(taskKey, next);
+    return next.find((task) => task.id === id) ?? null;
+  }
+
+  async delete_task_permanently(id: string) {
+    const tasks = readJson<Task[]>(taskKey, []);
+    const task = tasks.find((t) => t.id === id);
+    if (!task?.trashed_at) throw new Error("任务不在回收站中，无法彻底删除。");
+    writeJson(taskKey, tasks.filter((t) => t.id !== id));
   }
 
   async start_timer(input: {
@@ -875,6 +920,10 @@ export async function api<T>(cmd: string, args?: Record<string, unknown>): Promi
   if (cmd === "update_ai_conversation_title") return fn.call(fallback, args);
   if (cmd === "append_ai_message") return fn.call(fallback, args);
   if (cmd === "save_ai_plan_snapshot") return fn.call(fallback, args);
+  if (cmd === "move_task_to_trash") return fn.call(fallback, args.id, args.reason);
+  if (cmd === "move_tasks_to_trash") return fn.call(fallback, args.ids, args.reason);
+  if (cmd === "restore_task_from_trash") return fn.call(fallback, args.id);
+  if (cmd === "delete_task_permanently") return fn.call(fallback, args.id);
   const firstArg = Object.values(args)[0];
   return fn.call(fallback, firstArg);
 }

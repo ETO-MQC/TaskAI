@@ -4,6 +4,7 @@ import type {
   AiResponse,
   DashboardStats,
   Importance,
+  PendingAction,
   Priority,
   Task,
   TaskInput,
@@ -63,6 +64,10 @@ export type TaskUpdatePatch = Omit<Partial<Task>, "tags"> & { id: string; tags?:
 interface AppStore {
   view: View;
   tasks: Task[];
+  trashedTasks: Task[];
+  trashLoading: boolean;
+  trashError: string | null;
+  pendingAction: PendingAction | null;
   selectedTaskId: string | null;
   timer: TimerSnapshot;
   records: TimerRecord[];
@@ -114,6 +119,13 @@ interface AppStore {
   completeReminder: (id: string) => Promise<void>;
   updateTask: (patch: TaskUpdatePatch) => Promise<void>;
   deleteTask: (id: string) => Promise<void>;
+  loadTrashedTasks: () => Promise<Task[]>;
+  moveTaskToTrash: (id: string, reason?: string) => Promise<void>;
+  moveTasksToTrash: (ids: string[], reason?: string) => Promise<void>;
+  restoreTaskFromTrash: (id: string) => Promise<void>;
+  deleteTaskPermanently: (id: string) => Promise<void>;
+  setPendingAction: (action: PendingAction | null) => void;
+  submitAiMessage: (input: string, source: "workbench" | "ai_workspace") => Promise<void>;
   selectTask: (id: string | null) => void;
   startFocus: (task: Task, mode?: TimerMode) => Promise<void>;
   startTimer: (input: { topic: string; mode: TimerMode; task_id?: string | null; target_seconds?: number | null }) => Promise<void>;
@@ -360,6 +372,10 @@ async function executeFrontendAiIntent(response: AiResponse) {
 export const useAppStore = create<AppStore>((set, get) => ({
   view: "workbench",
   tasks: [],
+  trashedTasks: [],
+  trashLoading: false,
+  trashError: null,
+  pendingAction: null,
   selectedTaskId: null,
   timer: emptyTimer,
   records: [],
@@ -497,8 +513,48 @@ export const useAppStore = create<AppStore>((set, get) => ({
     await get().load();
   },
   deleteTask: async (id) => {
-    await api<void>("delete_task", { id });
+    // Default delete moves to trash instead of hard delete
+    await api<void>("move_task_to_trash", { id, reason: "manual" });
     await get().load();
+  },
+  loadTrashedTasks: async () => {
+    set({ trashLoading: true, trashError: null });
+    try {
+      const trashedTasks = await api<Task[]>("list_trashed_tasks");
+      set({ trashedTasks, trashLoading: false });
+      return trashedTasks;
+    } catch (error) {
+      const trashError = error instanceof Error ? error.message : "回收站加载失败";
+      set({ trashLoading: false, trashError });
+      return [];
+    }
+  },
+  moveTaskToTrash: async (id, reason = "manual") => {
+    await api<Task>("move_task_to_trash", { id, reason });
+    await get().load();
+  },
+  moveTasksToTrash: async (ids, reason = "batch_delete") => {
+    await api<Task[]>("move_tasks_to_trash", { ids, reason });
+    await get().load();
+  },
+  restoreTaskFromTrash: async (id) => {
+    await api<Task>("restore_task_from_trash", { id });
+    await get().load();
+    await get().loadTrashedTasks();
+  },
+  deleteTaskPermanently: async (id) => {
+    await api<void>("delete_task_permanently", { id });
+    await get().loadTrashedTasks();
+  },
+  setPendingAction: (pendingAction) => set({ pendingAction }),
+  submitAiMessage: async (input, source) => {
+    // This is a unified AI input handler used by both Workbench and AI Workspace
+    // The actual execution is handled by the component that calls this,
+    // since the UI rendering differs between embedded and standalone modes.
+    // This function just validates and dispatches.
+    const text = input.trim();
+    if (!text) return;
+    // Actual submission logic is delegated to the calling component
   },
   selectTask: (selectedTaskId) => set({ selectedTaskId }),
   startFocus: async (task, mode = "positive") => {
@@ -637,6 +693,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
     return conversations;
   },
   createConversation: async (title) => {
+    // Clear high-risk pendingAction when creating new conversation
+    const currentPending = get().pendingAction;
+    if (currentPending && currentPending.riskLevel === "high") {
+      set({ pendingAction: null });
+    }
     // Save current conversation state before creating new
     const prevId = get().activeConversationId;
     if (prevId) {

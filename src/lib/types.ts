@@ -24,6 +24,8 @@ export interface Task {
   sort_order: number;
   created_at: string;
   updated_at: string;
+  trashed_at?: string | null;
+  trash_reason?: string | null;
 }
 
 export interface TaskInput {
@@ -162,6 +164,19 @@ export interface AiResponse {
   created_tasks?: Task[];
   updated_task?: Task;
   timer?: TimerSnapshot;
+}
+
+export interface PendingAction {
+  id: string;
+  type: "batch_delete" | "batch_update" | "dangerous_operation";
+  params: Record<string, unknown>;
+  summary: string;
+  affectedCount: number;
+  affectedPreview: string[];
+  riskLevel: "low" | "medium" | "high";
+  source: "workbench" | "ai_workspace";
+  createdAt: number;
+  expiresAt: number;
 }
 
 export interface DashboardStats {

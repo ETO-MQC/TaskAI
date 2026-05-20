@@ -1,4 +1,80 @@
 # SmartFocus Phase 2 开发计划
+### Hotfix Sprint 20B.8：统一 AI 执行中枢、确认执行闭环与任务回收站
+
+状态：已完成核心功能；`cargo test` 被 `smartfocus.exe` 占用阻塞，需关闭 SmartFocus 后重试。
+
+一、统一 AI 执行中枢：
+- Workbench AI 小卡片和 AI 独立工作区的 pendingAction 已从 AiView 局部 state 迁移到 Zustand 共享 store（`pendingAction` / `setPendingAction`），两个入口可共享确认/取消状态。
+- pendingAction 结构已扩展 `source` 字段（`workbench` / `ai_workspace`），支持跨入口识别。
+- 新建对话时如果存在高风险 pendingAction，自动清除，避免误执行。
+- 确认词 / 取消词保持现有覆盖范围，pendingAction 存在时确认词直接执行 `executePendingAction`，不再发给 AI 模型。
+
+二、确认执行闭环：
+- `executePendingAction` 的 `batch_delete` 类型改为调用 `moveTasksToTrash`（而非 `updateTask({ status: "archived" })`），执行后聊天区反馈"已将 X 个任务移动到回收站，可在回收站恢复"。
+- `detectDangerousOperation` 摘要文案更新为"将任务移动到回收站，可恢复"，不再说"标记为 archived"。
+- 删除后自动刷新 store（`load()`），任务页、日历、Today Stack 同步更新。
+
+三、任务回收站机制：
+- 新增 SQLx migration `20260520100000_add_task_trash.sql`，给 tasks 表新增 `trashed_at TEXT` 和 `trash_reason TEXT` 两个可空字段，带索引。
+- migration 可在旧库和空库上运行，不修改旧 migration，不重建表，不删除旧数据。
+- Rust Task struct 新增 `trashed_at: Option<String>` 和 `trash_reason: Option<String>`。
+- 新增 Rust 命令：`move_task_to_trash`、`move_tasks_to_trash`、`list_trashed_tasks`、`restore_task_from_trash`、`delete_task_permanently`。
+- `list_tasks` 查询增加 `AND trashed_at IS NULL`，默认不返回回收站任务。
+- `get_dashboard_stats` 所有任务计数查询增加 `AND trashed_at IS NULL`，回收站任务不参与四象限统计、今日完成数、开放任务数、周/月完成率。
+- `delete_task_permanently` 仅允许 trashed_at IS NOT NULL 的任务执行物理删除。
+- 前端 fallback API 同步实现所有 trash 命令。
+
+四、统一删除入口：
+- store 的 `deleteTask` 改为调用 `move_task_to_trash`（而非 `delete_task`），所有任务页垃圾桶按钮自动走回收站语义。
+- TaskRow、Today Stack 等所有使用 `deleteTask` 的入口均统一进入回收站。
+- AI 对话中的 `executePendingAction`（batch_delete）使用 `moveTasksToTrash`。
+
+五、回收站 UI：
+- AI 页面右上角"历史记录"按钮旁新增"回收站"按钮。
+- 点击后打开居中深色玻璃弹窗，支持 Escape 和点击遮罩关闭。
+- 弹窗加载时自动调用 `loadTrashedTasks`，支持搜索标题/标签/备注。
+- 列表显示：任务标题、原 planned_date、deadline、quadrant、trashed_at、trash_reason、tags、备注摘要。
+- 每条任务提供"恢复"和"彻底删除"按钮。
+- 彻底删除前必须二次确认："彻底删除后无法恢复，是否继续？"。
+- 空状态文案："回收站为空。删除的任务会先放在这里，可恢复。"
+
+六、前端类型与 Store：
+- `Task` 接口新增 `trashed_at?: string | null` 和 `trash_reason?: string | null`。
+- `PendingAction` 从 App.tsx 局部类型迁移到 `types.ts`，新增 `source` 字段。
+- Zustand store 新增：`trashedTasks`、`trashLoading`、`trashError`、`pendingAction`、`loadTrashedTasks`、`moveTaskToTrash`、`moveTasksToTrash`、`restoreTaskFromTrash`、`deleteTaskPermanently`、`setPendingAction`、`submitAiMessage`。
+- fallback `normalizeTask` 新增 `trashed_at: null`、`trash_reason: null` 默认值。
+
+七、四象限拖拽经验固化：
+- 继续使用 drag handle + Pointer Events，不使用整张卡片 draggable。
+- 所有移动只写 urgency / importance，不写 quadrant。
+- 保留"移动到 Q1-Q4"菜单保底。
+- 本轮未改动拖拽布局，未破坏现有拖拽功能。
+
+验收结果：
+- `npm run build`：通过。
+- `cargo test`：未通过，原因是 `smartfocus.exe` 被占用，需关闭 SmartFocus 后重试。
+- `git diff --check`：通过。
+- `plan.md`：未修改。
+
+是否新增 migration：
+- 是。`20260520100000_add_task_trash.sql`，字段：`trashed_at TEXT`、`trash_reason TEXT`，均为 NULLABLE，带索引。
+
+是否还使用 status: archived：
+- `delete_task` Rust 命令仍保留 `status = 'archived'` 作为遗留兼容，但新代码统一走 `move_task_to_trash`。
+- `list_tasks` 继续过滤 `status != 'archived'` 和 `trashed_at IS NULL`。
+
+剩余 TODO：
+- 关闭 SmartFocus 后重新执行 `cargo test`。
+- 在真实 Tauri 窗口中手动验证：任务页垃圾桶 → 任务进入回收站 → 回收站弹窗可见 → 可恢复 → 彻底删除二次确认。
+- 在真实 Tauri 窗口中手动验证：AI 输入"删除明天以后的任务" → 确认卡片 → 输入"确认" → 任务进入回收站 → 任务页/日历/Today Stack 同步刷新。
+- 在真实 Tauri 窗口中手动验证：Workbench 小卡片和 AI 工作区共享 pendingAction 状态。
+- 补充 Workbench 小卡片的回收站轻量入口（当前仅 AI 工作区有完整入口）。
+
+下一 Sprint 建议：
+- 当前 hotfix 验收后，可继续进入后续 Sprint；建议先做一次真实窗口的回收站、AI 删除确认和跨入口 pendingAction 回归。
+
+---
+
 ### Hotfix Sprint 20B.7：AI 消息去重、工具执行闭环、四象限移动稳定化
 
 状态：已完成回归修复；未进入新 Sprint，未新增数据库字段，未新增 SQLx migration，未修改 `plan.md`。

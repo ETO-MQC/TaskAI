@@ -246,6 +246,8 @@ struct Task {
     sort_order: i64,
     created_at: String,
     updated_at: String,
+    trashed_at: Option<String>,
+    trash_reason: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, FromRow)]
@@ -1049,9 +1051,82 @@ async fn update_task(state: State<'_, AppState>, patch: TaskPatch) -> Result<Tas
 
 #[tauri::command]
 async fn delete_task(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    // Legacy: soft-delete via archived status. Prefer move_task_to_trash for new code.
     sqlx::query("UPDATE tasks SET status = 'archived', updated_at = ? WHERE id = ?")
         .bind(now_iso())
         .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn move_task_to_trash(state: State<'_, AppState>, id: String, reason: Option<String>) -> Result<Task, String> {
+    let now = now_iso();
+    sqlx::query("UPDATE tasks SET trashed_at = ?, trash_reason = ?, updated_at = ? WHERE id = ? AND trashed_at IS NULL")
+        .bind(&now)
+        .bind(reason.as_deref().unwrap_or("manual"))
+        .bind(&now)
+        .bind(&id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    get_task_by_id(&state.db, &id).await
+}
+
+#[tauri::command]
+async fn move_tasks_to_trash(state: State<'_, AppState>, ids: Vec<String>, reason: Option<String>) -> Result<Vec<Task>, String> {
+    let now = now_iso();
+    let reason_str = reason.as_deref().unwrap_or("manual");
+    let mut results = Vec::new();
+    for id in &ids {
+        sqlx::query("UPDATE tasks SET trashed_at = ?, trash_reason = ?, updated_at = ? WHERE id = ? AND trashed_at IS NULL")
+            .bind(&now)
+            .bind(reason_str)
+            .bind(&now)
+            .bind(id)
+            .execute(&state.db)
+            .await
+            .map_err(|e| e.to_string())?;
+        if let Ok(task) = get_task_by_id(&state.db, id).await {
+            results.push(task);
+        }
+    }
+    Ok(results)
+}
+
+#[tauri::command]
+async fn list_trashed_tasks(state: State<'_, AppState>) -> Result<Vec<Task>, String> {
+    sqlx::query_as::<_, Task>(
+        "SELECT * FROM tasks WHERE trashed_at IS NOT NULL ORDER BY trashed_at DESC",
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn restore_task_from_trash(state: State<'_, AppState>, id: String) -> Result<Task, String> {
+    let now = now_iso();
+    sqlx::query("UPDATE tasks SET trashed_at = NULL, trash_reason = NULL, updated_at = ? WHERE id = ?")
+        .bind(&now)
+        .bind(&id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    get_task_by_id(&state.db, &id).await
+}
+
+#[tauri::command]
+async fn delete_task_permanently(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    // Only allow permanent delete for trashed tasks
+    let task = get_task_by_id(&state.db, &id).await?;
+    if task.trashed_at.is_none() {
+        return Err("任务不在回收站中，无法彻底删除。".to_string());
+    }
+    sqlx::query("DELETE FROM tasks WHERE id = ?")
+        .bind(&id)
         .execute(&state.db)
         .await
         .map_err(|e| e.to_string())?;
@@ -1157,7 +1232,7 @@ async fn complete_reminder(state: State<'_, AppState>, id: String) -> Result<Rem
 #[tauri::command]
 async fn list_tasks(state: State<'_, AppState>) -> Result<Vec<Task>, String> {
     sqlx::query_as::<_, Task>(
-        "SELECT * FROM tasks WHERE status != 'archived' ORDER BY status ASC, sort_order ASC, created_at DESC",
+        "SELECT * FROM tasks WHERE status != 'archived' AND trashed_at IS NULL ORDER BY status ASC, sort_order ASC, created_at DESC",
     )
     .fetch_all(&state.db)
     .await
@@ -1440,26 +1515,26 @@ async fn get_dashboard_stats(state: State<'_, AppState>) -> Result<DashboardStat
     .await
     .map_err(|e| e.to_string())?;
     let completed_today = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM tasks WHERE status = 'done' AND date(updated_at, 'localtime') = date('now', 'localtime')",
+        "SELECT COUNT(*) FROM tasks WHERE status = 'done' AND trashed_at IS NULL AND date(updated_at, 'localtime') = date('now', 'localtime')",
     )
     .fetch_one(&state.db)
     .await
     .map_err(|e| e.to_string())?;
     let open_tasks = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM tasks WHERE status = 'todo'",
+        "SELECT COUNT(*) FROM tasks WHERE status = 'todo' AND trashed_at IS NULL",
     )
     .fetch_one(&state.db)
     .await
     .map_err(|e| e.to_string())?;
     let total_tasks = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM tasks WHERE status != 'archived'",
+        "SELECT COUNT(*) FROM tasks WHERE status != 'archived' AND trashed_at IS NULL",
     )
     .fetch_one(&state.db)
     .await
     .map_err(|e| e.to_string())?;
     let weekly_planned_total = sqlx::query_scalar::<_, i64>(
         r#"SELECT COUNT(*) FROM tasks
-        WHERE status != 'archived'
+        WHERE status != 'archived' AND trashed_at IS NULL
           AND date(COALESCE(planned_date, deadline)) >= date('now', '-' || ((CAST(strftime('%w', 'now') AS INTEGER) + 6) % 7) || ' days')
           AND date(COALESCE(planned_date, deadline)) < date('now', '-' || ((CAST(strftime('%w', 'now') AS INTEGER) + 6) % 7) || ' days', '+7 days')"#,
     )
@@ -1468,7 +1543,7 @@ async fn get_dashboard_stats(state: State<'_, AppState>) -> Result<DashboardStat
     .map_err(|e| e.to_string())?;
     let weekly_completed = sqlx::query_scalar::<_, i64>(
         r#"SELECT COUNT(*) FROM tasks
-        WHERE status = 'done'
+        WHERE status = 'done' AND trashed_at IS NULL
           AND date(COALESCE(planned_date, deadline)) >= date('now', '-' || ((CAST(strftime('%w', 'now') AS INTEGER) + 6) % 7) || ' days')
           AND date(COALESCE(planned_date, deadline)) < date('now', '-' || ((CAST(strftime('%w', 'now') AS INTEGER) + 6) % 7) || ' days', '+7 days')"#,
     )
@@ -1477,7 +1552,7 @@ async fn get_dashboard_stats(state: State<'_, AppState>) -> Result<DashboardStat
     .map_err(|e| e.to_string())?;
     let monthly_planned_total = sqlx::query_scalar::<_, i64>(
         r#"SELECT COUNT(*) FROM tasks
-        WHERE status != 'archived'
+        WHERE status != 'archived' AND trashed_at IS NULL
           AND date(COALESCE(planned_date, deadline)) >= date('now', 'start of month')
           AND date(COALESCE(planned_date, deadline)) < date('now', 'start of month', '+1 month')"#,
     )
@@ -1486,7 +1561,7 @@ async fn get_dashboard_stats(state: State<'_, AppState>) -> Result<DashboardStat
     .map_err(|e| e.to_string())?;
     let monthly_completed = sqlx::query_scalar::<_, i64>(
         r#"SELECT COUNT(*) FROM tasks
-        WHERE status = 'done'
+        WHERE status = 'done' AND trashed_at IS NULL
           AND date(COALESCE(planned_date, deadline)) >= date('now', 'start of month')
           AND date(COALESCE(planned_date, deadline)) < date('now', 'start of month', '+1 month')"#,
     )
@@ -1496,7 +1571,7 @@ async fn get_dashboard_stats(state: State<'_, AppState>) -> Result<DashboardStat
     let weekly_completion_rate = completion_rate(weekly_completed, weekly_planned_total);
     let monthly_completion_rate = completion_rate(monthly_completed, monthly_planned_total);
     let quadrant_counts = sqlx::query_as::<_, QuadrantCount>(
-        "SELECT quadrant, COUNT(*) as count FROM tasks WHERE status != 'archived' GROUP BY quadrant",
+        "SELECT quadrant, COUNT(*) as count FROM tasks WHERE status != 'archived' AND trashed_at IS NULL GROUP BY quadrant",
     )
     .fetch_all(&state.db)
     .await
@@ -2487,6 +2562,11 @@ fn main() {
             create_task,
             update_task,
             delete_task,
+            move_task_to_trash,
+            move_tasks_to_trash,
+            list_trashed_tasks,
+            restore_task_from_trash,
+            delete_task_permanently,
             create_reminder,
             list_reminders,
             trigger_due_reminders,
