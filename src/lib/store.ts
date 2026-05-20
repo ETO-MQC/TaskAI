@@ -125,6 +125,7 @@ interface AppStore {
   restoreTaskFromTrash: (id: string) => Promise<void>;
   deleteTaskPermanently: (id: string) => Promise<void>;
   setPendingAction: (action: PendingAction | null) => void;
+  executePendingAction: () => Promise<{ successCount: number; failCount: number; resultMsg: string } | null>;
   submitAiMessage: (input: string, source: "workbench" | "ai_workspace") => Promise<void>;
   selectTask: (id: string | null) => void;
   startFocus: (task: Task, mode?: TimerMode) => Promise<void>;
@@ -325,6 +326,45 @@ function formatShortDateTime(value: string) {
   const hour = String(date.getHours()).padStart(2, "0");
   const minute = String(date.getMinutes()).padStart(2, "0");
   return `${month}-${day} ${hour}:${minute}`;
+}
+
+function localDateKeyStore(value: string | Date = new Date()) {
+  const date = typeof value === "string" ? new Date(value) : value;
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function resolveDateKey(ref: "today" | "yesterday" | "tomorrow" | "day_after_tomorrow" | "custom", custom?: string | null): string {
+  const now = new Date();
+  if (ref === "today") return localDateKeyStore(now);
+  if (ref === "yesterday") { const d = new Date(now); d.setDate(d.getDate() - 1); return localDateKeyStore(d); }
+  if (ref === "tomorrow") { const d = new Date(now); d.setDate(d.getDate() + 1); return localDateKeyStore(d); }
+  if (ref === "day_after_tomorrow") { const d = new Date(now); d.setDate(d.getDate() + 2); return localDateKeyStore(d); }
+  return custom ?? localDateKeyStore(now);
+}
+
+function resolveDeleteTasks(
+  mode: "planned_or_deadline" | "created_at" | "all",
+  dateOp: "eq" | "gte",
+  targetDate: string,
+  tasks: Task[],
+): Task[] {
+  return tasks.filter((task) => {
+    if (task.status === "archived" || task.trashed_at) return false;
+    if (mode === "all") return true;
+    if (mode === "created_at") {
+      const created = task.created_at?.slice(0, 10);
+      if (!created) return false;
+      return dateOp === "eq" ? created === targetDate : created >= targetDate;
+    }
+    const dates = [task.planned_date, task.deadline].filter(Boolean).map((d) => d!.slice(0, 10));
+    if (dates.length === 0) return false;
+    return dateOp === "eq"
+      ? dates.some((d) => d === targetDate)
+      : dates.some((d) => d >= targetDate);
+  });
 }
 
 async function executeFrontendAiIntent(response: AiResponse) {
@@ -547,6 +587,47 @@ export const useAppStore = create<AppStore>((set, get) => ({
     await get().loadTrashedTasks();
   },
   setPendingAction: (pendingAction) => set({ pendingAction }),
+  executePendingAction: async () => {
+    const action = get().pendingAction;
+    if (!action) return null;
+    set({ pendingAction: null });
+
+    if (action.type === "batch_delete") {
+      const ids = action.taskIds.length > 0
+        ? action.taskIds
+        : resolveDeleteTasks(
+            (action.params.dateMode as string ?? "planned_or_deadline") as "planned_or_deadline" | "created_at" | "all",
+            (action.params.dateOperator as string ?? "eq") as "eq" | "gte",
+            (action.params.targetDate as string) ?? localDateKeyStore(),
+            get().tasks,
+          ).map((t) => t.id);
+
+      let successCount = 0;
+      let failCount = 0;
+      const failures: string[] = [];
+      for (const id of ids) {
+        try {
+          await api<Task>("move_task_to_trash", { id, reason: action.params.reason as string ?? "batch_delete" });
+          successCount++;
+        } catch (error) {
+          failCount++;
+          failures.push(error instanceof Error ? error.message : "未知错误");
+        }
+      }
+      await get().load();
+      const resultMsg = [
+        `已将 ${successCount} 个任务移动到回收站，可在回收站恢复`,
+        failCount > 0 ? `，失败 ${failCount} 个` : "",
+      ].join("");
+      return { successCount, failCount, resultMsg };
+    }
+
+    if (action.type === "batch_update") {
+      return { successCount: 0, failCount: 0, resultMsg: "批量修改需要更具体的指令，请指明要修改哪些任务和具体修改内容。" };
+    }
+
+    return { successCount: 0, failCount: 0, resultMsg: `已确认执行「${action.summary}」，但当前操作类型未绑定执行器。` };
+  },
   submitAiMessage: async (input, source) => {
     // This is a unified AI input handler used by both Workbench and AI Workspace
     // The actual execution is handled by the component that calls this,
@@ -594,6 +675,50 @@ export const useAppStore = create<AppStore>((set, get) => ({
     await get().load();
   },
   sendAi: async (message) => {
+    const CONFIRM_RE = /^(确认|是|执行|确认删除|继续|好|yes|ok|确定|执行吧|删吧|干吧|走|do|可以|对|没错|就这样)$/;
+    const CANCEL_RE = /^(取消|不要|算了|不了|不执行|取消操作|cancel|no|不|停止|别删|先不做)$/;
+    const text = message.trim();
+    const pendingAction = get().pendingAction;
+
+    if (pendingAction && CONFIRM_RE.test(text)) {
+      const result = await get().executePendingAction();
+      const nextMessages = [
+        ...get().aiMessages,
+        { role: "user", content: text } as AiMessage,
+        { role: "assistant", content: result?.resultMsg ?? "已确认执行。" } as AiMessage,
+      ].slice(-50);
+      set({ aiMessages: nextMessages });
+      persistAiMessages(nextMessages);
+      return {
+        intent: "general_chat",
+        action: "reply",
+        data: {},
+        needs_clarification: false,
+        clarification: null,
+        reply: result?.resultMsg ?? "已确认执行。",
+      };
+    }
+
+    if (pendingAction && CANCEL_RE.test(text)) {
+      set({ pendingAction: null });
+      const cancelMsg = "已取消当前待确认操作。";
+      const nextMessages = [
+        ...get().aiMessages,
+        { role: "user", content: text } as AiMessage,
+        { role: "assistant", content: cancelMsg } as AiMessage,
+      ].slice(-50);
+      set({ aiMessages: nextMessages });
+      persistAiMessages(nextMessages);
+      return {
+        intent: "general_chat",
+        action: "reply",
+        data: {},
+        needs_clarification: false,
+        clarification: null,
+        reply: cancelMsg,
+      };
+    }
+
     const nextMessages = [
       ...get().aiMessages,
       { role: "user", content: message } as AiMessage,

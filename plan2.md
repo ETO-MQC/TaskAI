@@ -1,4 +1,78 @@
 # SmartFocus Phase 2 开发计划
+### Hotfix Sprint 20B.9：日期删除语义、AI 确认状态机与任务页回收站入口修复
+
+状态：已完成。
+
+实现范围：
+一、日期删除语义修复：
+- `detectDangerousOperation` 重写，新增 `resolveDeleteTasksApp` 辅助函数，按 `planned_date / deadline` 匹配日期，而非 `created_at`。
+- "昨天任务" / "把昨天所有任务都删除" 默认按 `planned_date = 昨天 OR deadline = 昨天` 筛选，不再误判为"昨天创建的任务"。
+- 只有用户明确说"昨天创建的任务" / "昨天添加的任务" / "昨天录入的任务" 才按 `created_at = 昨天` 筛选。
+- "明天以后的任务" / "从今天往后的计划" 按 `planned_date >= target OR deadline >= target` 筛选。
+- "删除所有未完成任务" 按 `status = todo` 筛选。
+- "删除所有任务" 作为最高风险操作展示确认，受影响任务数和前 5 个预览。
+- 无 `planned_date` 且无 `deadline` 的任务不自动纳入日期删除范围。
+
+二、pendingAction 状态机修复：
+- `PendingAction` 类型新增 `taskIds: string[]` 字段，确认时直接使用已保存的任务 ID，不再重新查询。
+- `submit()` 创建 pendingAction 时预查询受影响任务并保存 `taskIds`、`affectedCount`、`affectedPreview`。
+- Workbench AiPanel 的 `sendAi()` 新增 pendingAction 优先检查：确认词直接执行 `executePendingAction`，取消词清除 pendingAction，其他输入提示用户当前有待确认操作。
+- 确认词范围扩展：增加"可以"、"对"、"没错"、"就这样"。
+- 取消词范围扩展：增加"停止"、"别删"、"先不做"。
+- Zustand store 新增 `executePendingAction` 方法，使用 `moveTaskToTrash` 执行批量删除。
+- AiView 的 `executePendingAction` 改为调用 store 的 `executePendingAction`。
+
+三、回收站入口调整：
+- 回收站主入口从 AI 页面右上角移动到任务列表页面，位于筛选行右侧"新建任务"按钮左侧。
+- AI 页面保留次级入口，移入"更多"菜单中，不再是顶层常驻按钮。
+- 回收站弹窗继续使用居中深色玻璃风格，支持搜索、恢复、彻底删除（二次确认）和空状态提示。
+
+四、确认卡片文案更新：
+- 待确认操作卡片风险提示从"标记为 archived，可在任务筛选中查看。不可撤销。"改为"将任务移动到回收站，可在回收站恢复。"
+
+验收结果：
+- `npm run build`：通过。
+- `cargo test`：通过（3 测试均通过）。
+- `git diff --check`：通过。
+- `plan.md`：未修改。
+
+是否修复"昨天任务"误判为"昨天创建任务"：
+- 是。"昨天任务"现在按 `planned_date = 昨天 OR deadline = 昨天` 筛选。
+
+日期删除现在按什么字段筛选：
+- 默认按 `planned_date` 和 `deadline`，非 `created_at`。
+
+created_at 何时才使用：
+- 仅当用户明确说"昨天创建的任务" / "昨天添加的任务" / "昨天录入的任务"。
+
+pendingAction 是否保存 taskIds：
+- 是。`PendingAction.taskIds` 保存预查询的任务 ID。
+
+用户输入"确认"是否直接执行 pendingAction：
+- 是。AiView 的 `submit()` 和 Workbench 的 `sendAi()` 都优先检查 pendingAction，确认词直接执行，不再发给模型。
+
+Workbench 和 AI Workspace 是否表现一致：
+- 是。两者共用 `detectDangerousOperation` 和 `executePendingAction`。
+
+删除是否进入回收站：
+- 是。调用 `moveTasksToTrash` / `move_task_to_trash`，不物理删除。
+
+回收站主入口是否移动到任务页：
+- 是。任务页筛选行右侧新增"回收站"按钮。AI 页面回收站移入"更多"菜单。
+
+手动删除是否仍进入回收站：
+- 是。`store.deleteTask` 继续调用 `move_task_to_trash`。
+
+剩余 TODO：
+- 在真实 Tauri 窗口中手动验证：输入"把昨天所有任务都删除" → 确认卡片 → 输入"确认" → 任务进入回收站 → 任务页/日历/Today Stack 同步刷新。
+- 验证 Workbench 小卡片和 AI 工作区共享 pendingAction 状态。
+- 关闭 SmartFocus 后重新执行 `cargo test`（本次已通过）。
+
+下一 Sprint 建议：
+- 当前 hotfix 验收后，可以继续进入后续 Sprint；建议先做一次真实窗口的删除确认、回收站入口和跨入口 pendingAction 回归。
+
+---
+
 ### Hotfix Sprint 20B.8：统一 AI 执行中枢、确认执行闭环与任务回收站
 
 状态：已完成核心功能；`cargo test` 被 `smartfocus.exe` 占用阻塞，需关闭 SmartFocus 后重试。

@@ -173,6 +173,7 @@ export interface PendingAction {
   summary: string;
   affectedCount: number;
   affectedPreview: string[];
+  taskIds: string[];
   riskLevel: "low" | "medium" | "high";
   source: "workbench" | "ai_workspace";
   createdAt: number;

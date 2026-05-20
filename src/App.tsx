@@ -399,41 +399,137 @@ function planningChatSummary(parsed: StructuredPreviewState, response: { summary
 
 const PENDING_ACTION_TTL_MS = 5 * 60 * 1000;
 
-const CONFIRM_KEYWORDS = /^(确认|是|执行|确认删除|继续|好|yes|ok|确定|执行吧|删吧|干吧|走|do)$/;
-const CANCEL_KEYWORDS = /^(取消|不要|算了|不了|不执行|取消操作|cancel|no|不)$/;
+const CONFIRM_KEYWORDS = /^(确认|是|执行|确认删除|继续|好|yes|ok|确定|执行吧|删吧|干吧|走|do|可以|对|没错|就这样)$/;
+const CANCEL_KEYWORDS = /^(取消|不要|算了|不了|不执行|取消操作|cancel|no|不|停止|别删|先不做)$/;
+
+function localDateKeyApp(value: string | Date = new Date()) {
+  const date = typeof value === "string" ? new Date(value) : value;
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function resolveDeleteTasksApp(
+  mode: "planned_or_deadline" | "created_at" | "all",
+  dateOp: "eq" | "gte",
+  targetDate: string,
+  tasks: Task[],
+): Task[] {
+  return tasks.filter((task) => {
+    if (task.status === "archived" || task.trashed_at) return false;
+    if (mode === "all") return true;
+    if (mode === "created_at") {
+      const created = task.created_at?.slice(0, 10);
+      if (!created) return false;
+      return dateOp === "eq" ? created === targetDate : created >= targetDate;
+    }
+    // planned_or_deadline: match if planned_date or deadline is on/after targetDate
+    const dates = [task.planned_date, task.deadline].filter(Boolean).map((d) => d!.slice(0, 10));
+    if (dates.length === 0) return false;
+    return dateOp === "eq"
+      ? dates.some((d) => d === targetDate)
+      : dates.some((d) => d >= targetDate);
+  });
+}
 
 function detectDangerousOperation(
   text: string,
   tasks: Task[],
 ): Omit<PendingAction, "id" | "createdAt" | "expiresAt" | "source"> | null {
   const normalized = text.trim();
-  const today = new Date().toISOString().slice(0, 10);
-  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+  const today = localDateKeyApp();
+  const yesterday = (() => { const d = new Date(); d.setDate(d.getDate() - 1); return localDateKeyApp(d); })();
+  const tomorrow = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return localDateKeyApp(d); })();
+  const dayAfterTomorrow = (() => { const d = new Date(); d.setDate(d.getDate() + 2); return localDateKeyApp(d); })();
 
-  // Delete future tasks: "删除明天以后的任务", "删除从今天往后的计划", "清空未来任务" etc.
+  // "昨天创建的任务" / "昨天添加的任务" / "昨天录入的任务" — explicit created_at mode
+  if (/昨天\s*(创建|添加|录入|新建)/.test(normalized)) {
+    const affected = resolveDeleteTasksApp("created_at", "eq", yesterday, tasks);
+    return {
+      type: "batch_delete",
+      params: { raw: normalized, dateMode: "created_at", dateOperator: "eq", targetDate: yesterday, reason: "delete_created_yesterday" },
+      summary: `将昨天创建的 ${affected.length} 个任务移动到回收站，可恢复。确认执行吗？`,
+      affectedCount: affected.length,
+      affectedPreview: affected.slice(0, 5).map((t) => t.title),
+      taskIds: affected.map((t) => t.id),
+      riskLevel: "high",
+    };
+  }
+
+  // "把昨天所有任务都删除" / "删除昨天任务" / "昨天的任务" — default = planned_date/deadline
+  if (/删除.*昨天|昨天.*删除|把.*昨天.*(?:删除|清|移)|昨天.*(?:任务|计划|待办)/.test(normalized)) {
+    const affected = resolveDeleteTasksApp("planned_or_deadline", "eq", yesterday, tasks);
+    return {
+      type: "batch_delete",
+      params: { raw: normalized, dateMode: "planned_or_deadline", dateOperator: "eq", targetDate: yesterday, reason: "delete_yesterday_tasks" },
+      summary: `将 ${affected.length} 个昨天任务移动到回收站，可恢复。确认执行吗？`,
+      affectedCount: affected.length,
+      affectedPreview: affected.slice(0, 5).map((t) => t.title),
+      taskIds: affected.map((t) => t.id),
+      riskLevel: "high",
+    };
+  }
+
+  // Delete future tasks: "删除明天以后的任务", "删除从今天往后的计划", "清除从今天往后" etc.
   const futureDeleteMatch = normalized.match(/删除(?:从|了)?\s*(今天|明天|后天|今日|明日)(?:以|之|往|开始|之后|以后|起)(?:的|所有|全部)?\s*(?:任务|计划|待办|事项|东西)/);
-  if (futureDeleteMatch || /清空.*(?:未来|以后|之后|往后|往后).*(?:任务|计划|待办)|(?:删除|清除|清空)(?:所有|全部|所有)\s*(?:未完成|未来|之后)/.test(normalized)) {
-    const afterDate = /今天|今日/.test(futureDeleteMatch?.[1] ?? "") ? today : tomorrow;
-    const affected = tasks.filter((t) => t.status === "todo" && t.planned_date && t.planned_date >= afterDate);
+  if (futureDeleteMatch || /清空.*(?:未来|以后|之后|往后).*(?:任务|计划|待办)|(?:删除|清除|清空)\s*(?:所有|全部)\s*(?:未完成|未来|之后)/.test(normalized)) {
+    const ref = futureDeleteMatch?.[1] ?? "";
+    let targetDate = today;
+    let dateLabel = "今天";
+    if (/明天|明日/.test(ref)) { targetDate = tomorrow; dateLabel = "明天"; }
+    else if (/后天/.test(ref)) { targetDate = dayAfterTomorrow; dateLabel = "后天"; }
+    else { targetDate = today; dateLabel = "今天"; }
+    const affected = resolveDeleteTasksApp("planned_or_deadline", "gte", targetDate, tasks);
     const raw = futureDeleteMatch?.[0] ?? normalized;
     return {
       type: "batch_delete",
-      params: { raw, afterDate },
-      summary: `将 ${afterDate} 之后的 ${affected.length} 个任务移动到回收站，可恢复。确认执行吗？`,
+      params: { raw, dateMode: "planned_or_deadline", dateOperator: "gte", targetDate, reason: `delete_after_${dateLabel}` },
+      summary: `将 ${dateLabel}及之后的 ${affected.length} 个任务移动到回收站，可恢复。确认执行吗？`,
       affectedCount: affected.length,
       affectedPreview: affected.slice(0, 5).map((t) => t.title),
+      taskIds: affected.map((t) => t.id),
+      riskLevel: "high",
+    };
+  }
+
+  // "删除所有未完成任务"
+  if (/删除\s*(?:所有|全部)\s*未完成/.test(normalized)) {
+    const affected = tasks.filter((t) => t.status === "todo" && !t.trashed_at);
+    return {
+      type: "batch_delete",
+      params: { raw: normalized, dateMode: "all", reason: "delete_all_incomplete" },
+      summary: `将 ${affected.length} 个未完成任务移动到回收站，可恢复。确认执行吗？`,
+      affectedCount: affected.length,
+      affectedPreview: affected.slice(0, 5).map((t) => t.title),
+      taskIds: affected.map((t) => t.id),
+      riskLevel: "high",
+    };
+  }
+
+  // "删除所有任务" — highest risk
+  if (/删除\s*(?:所有|全部)\s*(?:任务|计划|待办)/.test(normalized)) {
+    const affected = tasks.filter((t) => t.status !== "archived" && !t.trashed_at);
+    return {
+      type: "batch_delete",
+      params: { raw: normalized, dateMode: "all", reason: "delete_all" },
+      summary: `⚠️ 将全部 ${affected.length} 个任务移动到回收站，可恢复。这是高风险操作，确认执行吗？`,
+      affectedCount: affected.length,
+      affectedPreview: affected.slice(0, 5).map((t) => t.title),
+      taskIds: affected.map((t) => t.id),
       riskLevel: "high",
     };
   }
 
   // Generic delete/clear patterns
-  if (/清除|删除.*计划|清空.*任务|批量删除|全部删除|清除所有|删除所有/.test(normalized)) {
+  if (/清除|删除.*计划|清空.*任务|批量删除|全部删除|清除所有/.test(normalized)) {
     return {
       type: "batch_delete",
-      params: { raw: normalized },
+      params: { raw: normalized, dateMode: "all", reason: "batch_delete" },
       summary: `你要求将任务移动到回收站：「${normalized.slice(0, 40)}」。确认执行吗？`,
       affectedCount: 0,
       affectedPreview: [],
+      taskIds: [],
       riskLevel: "high",
     };
   }
@@ -446,6 +542,7 @@ function detectDangerousOperation(
       summary: `你要求批量修改：「${normalized.slice(0, 40)}」。确认执行吗？`,
       affectedCount: 0,
       affectedPreview: [],
+      taskIds: [],
       riskLevel: "medium",
     };
   }
@@ -1592,34 +1689,12 @@ function AiView() {
     setPendingAction(null);
     await appendVisibleAiMessage("user", "确认");
 
+    // Use store's executePendingAction for batch_delete
     if (action.type === "batch_delete") {
-      const afterDate = action.params.afterDate as string | undefined;
-      const targets = afterDate
-        ? allTasks.filter((t) => t.status === "todo" && t.planned_date && t.planned_date >= afterDate)
-        : allTasks.filter((t) => t.status === "todo");
-
-      let successCount = 0;
-      let failCount = 0;
-      const failures: string[] = [];
-
-      for (const task of targets) {
-        try {
-          await moveTasksToTrash([task.id], afterDate ? `delete_after_${afterDate}` : "batch_delete");
-          successCount++;
-        } catch (error) {
-          failCount++;
-          failures.push(`${task.title}: ${error instanceof Error ? error.message : "未知错误"}`);
-        }
-      }
-
-      await storeLoad();
-      const resultMsg = [
-        `已将 ${successCount} 个任务移动到回收站，可在回收站恢复`,
-        failCount > 0 ? `，失败 ${failCount} 个` : "",
-        failures.length > 0 ? `\n失败原因：${failures.slice(0, 3).join("；")}` : "",
-      ].join("");
+      const storeResult = await useAppStore.getState().executePendingAction();
+      const resultMsg = storeResult?.resultMsg ?? "已确认执行。";
       await appendVisibleAiMessage("assistant", resultMsg);
-      showToast(`已将 ${successCount} 个任务移动到回收站`);
+      showToast(resultMsg);
       return;
     }
 
@@ -1674,6 +1749,7 @@ function AiView() {
         expiresAt: Date.now() + PENDING_ACTION_TTL_MS,
         affectedCount: danger.affectedCount ?? 0,
         affectedPreview: danger.affectedPreview ?? [],
+        taskIds: danger.taskIds ?? [],
       };
       setPendingAction(action);
       try {
@@ -1903,9 +1979,6 @@ function AiView() {
       <div className="flex items-start justify-between gap-3">
         <Header title="AI 计划编排" subtitle="用自然语言记录任务、安排计划、调整日程" />
         <div className="flex shrink-0 gap-2">
-          <button className="glass-inset px-3 py-2 text-sm" type="button" onClick={() => setTrashDialogOpen(true)}>
-            回收站
-          </button>
           <button className="glass-inset px-3 py-2 text-sm" type="button" onClick={() => setHistoryDialogOpen(true)}>
             历史记录
           </button>
@@ -1950,7 +2023,7 @@ function AiView() {
                     {pendingAction.affectedPreview.map((title, i) => <li key={i}>• {title}</li>)}
                   </ul>
                 )}
-                <p className="text-xs text-[var(--muted-foreground)]">标记为 archived，可在任务筛选中查看。不可撤销。</p>
+                <p className="text-xs text-[var(--muted-foreground)]">将任务移动到回收站，可在回收站恢复。</p>
                 <div className="flex gap-2 pt-1">
                   <button className="btn-glow rounded-lg px-3 py-1.5 text-xs font-semibold" type="button" onClick={() => { void executePendingAction(pendingAction); }}>确认执行</button>
                   <button className="glass-inset rounded-lg px-3 py-1.5 text-xs" type="button" onClick={() => { setPendingAction(null); showToast("已取消。"); }}>取消</button>
@@ -2113,7 +2186,8 @@ function AiView() {
                     <button className="glass-inset block w-full px-3 py-2 text-left text-sm" type="button" onClick={() => { showToast("AI 工作流：说出目标 → AI 规划 → 预览 → 确认 → 应用为任务。整个过程对话优先。"); setActiveAiToolPanel(null); }}>📋 AI 工作流说明</button>
                     <button className="glass-inset block w-full px-3 py-2 text-left text-sm" type="button" onClick={() => { showToast("AI 只使用任务、日期、目标和资料摘要，不反复索取无关上下文。资料全文解析留给后续 Sprint。"); setActiveAiToolPanel(null); }}>📉 低 token 使用说明</button>
                     <button className="glass-inset block w-full px-3 py-2 text-left text-sm" type="button" onClick={() => { showToast("SmartFocus 负责计划、任务、日程和计时；LearnKATA 负责讲解、练习、测验和掌握度。两者通过 learnkata_links 联动。"); setActiveAiToolPanel(null); }}>🔗 LearnKATA 联动边界</button>
-                    <button className="glass-inset block w-full px-3 py-2 text-left text-sm" type="button" onClick={() => { setInput(""); setActiveAiToolPanel(null); }}>🗑️ 清空当前输入</button>
+                    <button className="glass-inset block w-full px-3 py-2 text-left text-sm" type="button" onClick={() => { setTrashDialogOpen(true); setActiveAiToolPanel(null); }}>🗑️ 回收站</button>
+                    <button className="glass-inset block w-full px-3 py-2 text-left text-sm" type="button" onClick={() => { setInput(""); setActiveAiToolPanel(null); }}>✕ 清空当前输入</button>
                     <button className="glass-inset block w-full px-3 py-2 text-left text-sm" type="button" onClick={() => setActiveAiToolPanel(null)}>✕ 关闭</button>
                   </div>
                 )}
@@ -2674,6 +2748,7 @@ function TasksView() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [batchDate, setBatchDate] = useState(defaultTaskDate);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [trashDialogOpen, setTrashDialogOpen] = useState(false);
   const selected = tasks.find((task) => task.id === selectedTaskId) ?? tasks[0] ?? null;
   const visibleTasks = tasks.filter((task) => isTaskVisibleForDateFilter(task, dateFilter, customDate));
   const selectedTasks = tasks.filter((task) => selectedIds.includes(task.id));
@@ -2712,7 +2787,10 @@ function TasksView() {
           {dateFilter === "custom" && (
             <input className="field py-1.5" type="date" value={customDate} onChange={(event) => setCustomDate(event.target.value)} />
           )}
-          <button type="button" className="btn-glow ml-auto rounded-xl px-3 py-1.5 text-xs font-semibold" onClick={() => setCreateDialogOpen(true)}>
+          <button type="button" className="glass-inset ml-auto rounded-xl px-3 py-1.5 text-xs" onClick={() => setTrashDialogOpen(true)}>
+            回收站
+          </button>
+          <button type="button" className="btn-glow rounded-xl px-3 py-1.5 text-xs font-semibold" onClick={() => setCreateDialogOpen(true)}>
             新建任务
           </button>
         </div>
@@ -2750,6 +2828,10 @@ function TasksView() {
         </div>
       </div>
       <TaskDetail task={selected} />
+      {trashDialogOpen && createPortal(
+        <TrashDialog onClose={() => setTrashDialogOpen(false)} />,
+        document.body,
+      )}
     </section>
   );
 }
