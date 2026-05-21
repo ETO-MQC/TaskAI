@@ -21,6 +21,8 @@ import type {
   Urgency,
 } from "./types";
 import { filterVisibleConversationMessages, isInternalPlanningPrompt } from "./aiHistory";
+import { routeSmartFocusIntent, buildPendingActionFromIntent, isConfirmKeyword, isCancelKeyword, isGeneralChatIntent } from "./intentRouter";
+import { executeTool, type ToolContext } from "./aiTools";
 
 type View = "workbench" | "tasks" | "timer" | "calendar" | "stats" | "settings" | "ai";
 
@@ -134,7 +136,8 @@ interface AppStore {
   resetTimer: () => Promise<void>;
   stopTimer: (taskId?: string | null, note?: string) => Promise<void>;
   confirmRecordLink: (taskId?: string | null) => Promise<void>;
-  sendAi: (message: string) => Promise<AiResponse>;
+  sendAi: (message: string, source?: "workbench" | "ai_workspace") => Promise<AiResponse>;
+  orchestrateAiInput: (message: string) => Promise<{ response: AiResponse | null; handled: boolean }>;
   appendAiStream: (delta: string) => void;
   setAiMessages: (messages: AiMessage[] | ((messages: AiMessage[]) => AiMessage[])) => void;
   setAiWorkspaceEntries: (entries: AiWorkspaceEntry[] | ((entries: AiWorkspaceEntry[]) => AiWorkspaceEntry[])) => void;
@@ -301,6 +304,13 @@ function taskPatchFromIntentData(data: Record<string, unknown>, tasks: Task[]) {
   };
 }
 
+function fallbackGeneralChatReply(text: string) {
+  if (/你好|您好|hi|hello|hey|嗨|哈喽/.test(text.trim().toLowerCase())) {
+    return "你好，我可以帮你记录任务、安排计划、调整日程，也可以协助启动和管理专注计时。";
+  }
+  return "我在。你可以直接告诉我要记录的任务、需要安排的计划，或哪里没完成需要调整。";
+}
+
 function summarizeAiResponse(response: AiResponse) {
   if (response.needs_clarification) return response.clarification || response.reply;
   const created = response.created_tasks?.[0];
@@ -407,6 +417,22 @@ async function executeFrontendAiIntent(response: AiResponse) {
     return { ...response, executed: true };
   }
   return response;
+}
+
+function buildToolContext(get: () => AppStore): ToolContext {
+  return {
+    getTasks: () => get().tasks,
+    moveTasksToTrash: async (ids, reason) => { await get().moveTasksToTrash(ids, reason); },
+    moveTaskToTrash: async (id, reason) => { await get().moveTaskToTrash(id, reason); },
+    restoreTaskFromTrash: async (id) => { await get().restoreTaskFromTrash(id); },
+    updateTask: async (patch) => { await get().updateTask(patch); },
+    createTask: (draft) => get().createTask(draft),
+    createReminder: (input) => get().createReminder(input),
+    startTimer: async (input) => { await get().startTimer(input); },
+    stopTimer: async (taskId, note) => { await get().stopTimer(taskId, note); },
+    load: async () => { await get().load(); },
+    loadTrashedTasks: async () => { await get().loadTrashedTasks(); },
+  };
 }
 
 export const useAppStore = create<AppStore>((set, get) => ({
@@ -674,72 +700,155 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ pendingRecord: null, linkPanelOpen: false });
     await get().load();
   },
-  sendAi: async (message) => {
-    const CONFIRM_RE = /^(确认|是|执行|确认删除|继续|好|yes|ok|确定|执行吧|删吧|干吧|走|do|可以|对|没错|就这样)$/;
-    const CANCEL_RE = /^(取消|不要|算了|不了|不执行|取消操作|cancel|no|不|停止|别删|先不做)$/;
+  sendAi: async (message, source) => {
+    const text = message.trim();
+    const src = source ?? "workbench";
+    const pendingAction = get().pendingAction;
+
+    // --- Step 1: PendingAction confirm/cancel ---
+    if (pendingAction && isConfirmKeyword(text)) {
+      const result = await get().executePendingAction();
+      const reply = result?.resultMsg ?? "已确认执行。";
+      if (src === "workbench") {
+        const nextMessages = [...get().aiMessages, { role: "user", content: text } as AiMessage, { role: "assistant", content: reply } as AiMessage].slice(-50);
+        set({ aiMessages: nextMessages });
+        persistAiMessages(nextMessages);
+      }
+      return { intent: "tool_executed", action: "confirm_pending", data: {}, needs_clarification: false, clarification: null, reply };
+    }
+    if (pendingAction && isCancelKeyword(text)) {
+      set({ pendingAction: null });
+      const reply = "已取消当前待确认操作。";
+      if (src === "workbench") {
+        const nextMessages = [...get().aiMessages, { role: "user", content: text } as AiMessage, { role: "assistant", content: reply } as AiMessage].slice(-50);
+        set({ aiMessages: nextMessages });
+        persistAiMessages(nextMessages);
+      }
+      return { intent: "general_chat", action: "cancel_pending", data: {}, needs_clarification: false, clarification: null, reply };
+    }
+
+    // --- Step 2: Intent routing ---
+    const intentResult = routeSmartFocusIntent(text, { tasks: get().tasks });
+
+    // --- Step 3: High-confidence tool intents ---
+    if (intentResult.intent === "move_tasks_to_trash" && !intentResult.needsClarification) {
+      const action = buildPendingActionFromIntent(intentResult, get().tasks, src);
+      if (action) {
+        set({ pendingAction: action });
+        const previewText = action.affectedPreview.length > 0
+          ? `\n\n影响任务（前 ${action.affectedPreview.length} 个）：\n${action.affectedPreview.map((t: string) => `• ${t}`).join("\n")}`
+          : "";
+        const reply = `${action.summary}${previewText}\n\n请回复「确认」执行，或「取消」放弃。`;
+        if (src === "workbench") {
+          const nextMessages = [...get().aiMessages, { role: "user", content: text } as AiMessage, { role: "assistant", content: reply } as AiMessage].slice(-50);
+          set({ aiMessages: nextMessages });
+          persistAiMessages(nextMessages);
+        }
+        return { intent: "move_tasks_to_trash", action: "pending_confirmation", data: action.params, needs_clarification: false, clarification: null, reply };
+      }
+    }
+
+    // Needs clarification for delete intent
+    if (intentResult.intent === "move_tasks_to_trash" && intentResult.needsClarification) {
+      const reply = intentResult.clarificationQuestion ?? "请说明要删除哪些任务。";
+      if (src === "workbench") {
+        const nextMessages = [...get().aiMessages, { role: "user", content: text } as AiMessage, { role: "assistant", content: reply } as AiMessage].slice(-50);
+        set({ aiMessages: nextMessages });
+        persistAiMessages(nextMessages);
+      }
+      return { intent: "move_tasks_to_trash", action: "clarify", data: {}, needs_clarification: true, clarification: reply, reply };
+    }
+
+    // --- Step 4: Direct tool execution (non-delete, no confirmation needed) ---
+    if (intentResult.intent === "create_task" && intentResult.confidence >= 0.8) {
+      const toolCtx = buildToolContext(get);
+      const result = await executeTool("create_task", { title: text.replace(/帮我记|创建任务|记一下|帮我创建|新建任务|加一个任务|添加任务/g, "").trim() || text, ...intentResult.params }, toolCtx);
+      if (src === "workbench") {
+        const nextMessages = [...get().aiMessages, { role: "user", content: text } as AiMessage, { role: "assistant", content: result.message } as AiMessage].slice(-50);
+        set({ aiMessages: nextMessages });
+        persistAiMessages(nextMessages);
+      }
+      return { intent: "create_task", action: "tool_executed", data: {}, needs_clarification: false, clarification: null, reply: result.message };
+    }
+    if (intentResult.intent === "stop_timer" && intentResult.confidence >= 0.8) {
+      const toolCtx = buildToolContext(get);
+      const result = await executeTool("stop_timer", intentResult.params, toolCtx);
+      if (src === "workbench") {
+        const nextMessages = [...get().aiMessages, { role: "user", content: text } as AiMessage, { role: "assistant", content: result.message } as AiMessage].slice(-50);
+        set({ aiMessages: nextMessages });
+        persistAiMessages(nextMessages);
+      }
+      return { intent: "stop_timer", action: "tool_executed", data: {}, needs_clarification: false, clarification: null, reply: result.message };
+    }
+
+    // --- Step 5: Backend delegation (chat, planning, etc.) ---
+    if (src === "workbench") {
+      const nextMessages = [...get().aiMessages, { role: "user", content: message } as AiMessage, { role: "assistant", content: "" } as AiMessage].slice(-50);
+      set({ aiMessages: nextMessages });
+      persistAiMessages(nextMessages);
+    }
+    const response = await executeFrontendAiIntent(await api<AiResponse>("send_ai_message", { message }));
+    await get().load();
+    if (src === "workbench") {
+      const updatedMessages = get().aiMessages.map((item, index, list) =>
+        index === list.length - 1 && item.role === "assistant"
+          ? { ...item, content: summarizeAiResponse(response), clarification: response.needs_clarification ? response.clarification : null }
+          : item,
+      );
+      set({ aiMessages: updatedMessages });
+      persistAiMessages(updatedMessages);
+    }
+    return response;
+  },
+  orchestrateAiInput: async (message) => {
     const text = message.trim();
     const pendingAction = get().pendingAction;
 
-    if (pendingAction && CONFIRM_RE.test(text)) {
+    // Confirm
+    if (pendingAction && isConfirmKeyword(text)) {
       const result = await get().executePendingAction();
-      const nextMessages = [
-        ...get().aiMessages,
-        { role: "user", content: text } as AiMessage,
-        { role: "assistant", content: result?.resultMsg ?? "已确认执行。" } as AiMessage,
-      ].slice(-50);
-      set({ aiMessages: nextMessages });
-      persistAiMessages(nextMessages);
-      return {
-        intent: "general_chat",
-        action: "reply",
-        data: {},
-        needs_clarification: false,
-        clarification: null,
-        reply: result?.resultMsg ?? "已确认执行。",
-      };
+      return { response: { intent: "tool_executed", action: "confirm_pending", data: {}, needs_clarification: false, clarification: null, reply: result?.resultMsg ?? "已确认执行。" }, handled: true };
     }
-
-    if (pendingAction && CANCEL_RE.test(text)) {
+    // Cancel
+    if (pendingAction && isCancelKeyword(text)) {
       set({ pendingAction: null });
-      const cancelMsg = "已取消当前待确认操作。";
-      const nextMessages = [
-        ...get().aiMessages,
-        { role: "user", content: text } as AiMessage,
-        { role: "assistant", content: cancelMsg } as AiMessage,
-      ].slice(-50);
-      set({ aiMessages: nextMessages });
-      persistAiMessages(nextMessages);
-      return {
-        intent: "general_chat",
-        action: "reply",
-        data: {},
-        needs_clarification: false,
-        clarification: null,
-        reply: cancelMsg,
-      };
+      return { response: { intent: "general_chat", action: "cancel_pending", data: {}, needs_clarification: false, clarification: null, reply: "已取消当前待确认操作。" }, handled: true };
     }
 
-    const nextMessages = [
-      ...get().aiMessages,
-      { role: "user", content: message } as AiMessage,
-      { role: "assistant", content: "" } as AiMessage,
-    ].slice(-50);
-    set({ aiMessages: nextMessages });
-    persistAiMessages(nextMessages);
-    const response = await executeFrontendAiIntent(await api<AiResponse>("send_ai_message", { message }));
-    await get().load();
-    const updatedMessages = get().aiMessages.map((item, index, list) =>
-        index === list.length - 1 && item.role === "assistant"
-          ? {
-              ...item,
-              content: summarizeAiResponse(response),
-              clarification: response.needs_clarification ? response.clarification : null,
-            }
-          : item,
-      );
-    set({ aiMessages: updatedMessages });
-    persistAiMessages(updatedMessages);
-    return response;
+    const intentResult = routeSmartFocusIntent(text, { tasks: get().tasks });
+
+    // Delete → pendingAction
+    if (intentResult.intent === "move_tasks_to_trash" && !intentResult.needsClarification) {
+      const action = buildPendingActionFromIntent(intentResult, get().tasks, "ai_workspace");
+      if (action) {
+        set({ pendingAction: action });
+        const previewText = action.affectedPreview.length > 0 ? `\n\n影响任务（前 ${action.affectedPreview.length} 个）：\n${action.affectedPreview.map((t: string) => `• ${t}`).join("\n")}` : "";
+        return { response: { intent: "move_tasks_to_trash", action: "pending_confirmation", data: action.params, needs_clarification: false, clarification: null, reply: `${action.summary}${previewText}\n\n请回复「确认」执行，或「取消」放弃。` }, handled: true };
+      }
+    }
+    if (intentResult.intent === "move_tasks_to_trash" && intentResult.needsClarification) {
+      return { response: { intent: "move_tasks_to_trash", action: "clarify", data: {}, needs_clarification: true, clarification: intentResult.clarificationQuestion ?? "请说明要删除哪些任务。", reply: intentResult.clarificationQuestion ?? "请说明要删除哪些任务。" }, handled: true };
+    }
+
+    // Direct tool execution
+    if (intentResult.intent === "create_task" && intentResult.confidence >= 0.8) {
+      const toolCtx = buildToolContext(get);
+      const result = await executeTool("create_task", { title: text.replace(/帮我记|创建任务|记一下|帮我创建|新建任务|加一个任务|添加任务/g, "").trim() || text }, toolCtx);
+      return { response: { intent: "create_task", action: "tool_executed", data: {}, needs_clarification: false, clarification: null, reply: result.message }, handled: true };
+    }
+    if (intentResult.intent === "stop_timer" && intentResult.confidence >= 0.8) {
+      const toolCtx = buildToolContext(get);
+      const result = await executeTool("stop_timer", intentResult.params, toolCtx);
+      return { response: { intent: "stop_timer", action: "tool_executed", data: {}, needs_clarification: false, clarification: null, reply: result.message }, handled: true };
+    }
+
+    // General chat → local reply
+    if (intentResult.intent === "chat" && intentResult.confidence >= 0.8) {
+      return { response: { intent: "general_chat", action: "reply", data: {}, needs_clarification: false, clarification: null, reply: fallbackGeneralChatReply(text) }, handled: true };
+    }
+
+    // Not handled by orchestrator — caller should delegate to backend
+    return { response: null, handled: false };
   },
   appendAiStream: (delta) => {
     if (!delta) return;

@@ -411,11 +411,95 @@ Phase 2 目标是在一期稳定基础上继续增强产品深度：
 
 ## 3. 当前执行 Sprint
 
-当前执行：Sprint 20A 学习项目一键规划 MVP
+当前执行：Sprint 20C SmartFocus AI Tool Orchestrator v1
 
 状态：已完成
 
 ## 4. Phase 2 Sprint 列表
+
+### Sprint 20C：SmartFocus AI Tool Orchestrator v1
+
+状态：已完成。
+
+实现范围：
+
+一、Tool Registry（`src/lib/aiTools.ts`）：
+- 新增 `ToolDefinition` 接口：name、description、riskLevel、requiresConfirmation、inputSchema、execute。
+- 新增 `ToolContext` 接口：为工具执行提供 store 方法依赖注入。
+- 新增 `TaskDraft`、`TaskUpdatePatch` 类型导出。
+- 注册 10 个工具：list_tasks、preview_tasks_for_action、move_tasks_to_trash、restore_task_from_trash、update_task_fields、create_task、create_reminder、start_timer、stop_timer、adaptive_reschedule。
+- 新增 `executeTool(toolName, params, context)` 统一工具执行入口。
+- 新增 `filterTasksByDate(tasks, mode, op, targetDate)` 通用日期筛选函数，支持 planned_or_deadline / created_at / all 模式和 eq / gte / lte 操作符。
+
+二、Intent Router（`src/lib/intentRouter.ts`）：
+- 新增 `routeSmartFocusIntent(input, context)` 统一意图路由器。
+- 输出：intent、confidence、params、missingFields、riskLevel、needsClarification、clarificationQuestion。
+- 支持确定性规则：删除类（删除/清除/移除 + 任务/计划）、日期语义（昨天及以前=planned_date<=昨天、明天以后=planned_date>=明天、昨天创建=created_at=昨天）、任务创建、提醒、计时、计划、自适应调整、普通问候。
+- 日期表达提取器 `extractDateExpressions` 覆盖：昨天/今天/明天/后天、昨天及以前、明天及以后、今天及以后、昨天创建、具体日期（X月X日）。
+- 新增 `buildPendingActionFromIntent(intentResult, tasks, source)` 从意图结果构建 PendingAction。
+- 新增 `isConfirmKeyword` / `isCancelKeyword` / `isGeneralChatIntent` 辅助函数。
+
+三、PendingAction 类型扩展（`src/lib/types.ts`）：
+- `PendingAction` 新增可选 `toolName` 字段，标识关联的工具名称。
+
+四、Store 集成（`src/lib/store.ts`）：
+- 新增 `buildToolContext(get)` 将 store 方法注入 ToolContext。
+- 新增 `orchestrateAiInput(message)` 方法：统一的 AI 输入编排入口，处理确认/取消、意图路由、pendingAction 创建、工具直接执行，返回 `{ response, handled }`。
+- 更新 `sendAi(message, source?)`：支持 `source` 参数区分 workbench / ai_workspace；workbench 路径使用意图路由和工具执行；保留后端回退。
+- 导入 intentRouter 和 aiTools 模块。
+
+五、AI Workspace 集成（`src/App.tsx` AiView）：
+- `submit()` 前置调用 `orchestrateAiInput(text)`，若 handled=true 则直接展示结果，不再进入 detectDangerousOperation 和独立确认/取消逻辑。
+- 删除 AiView submit 中的独立 `CONFIRM_KEYWORDS` / `CANCEL_KEYWORDS` / `detectDangerousOperation` 检测（已由 orchestrator 统一处理）。
+- Workbench AiPanel 继续调用 `sendAi(text)`，store 内部已使用意图路由。
+
+六、AI System Prompt 更新（`src/lib/aiPlanning.ts`）：
+- 新增"SmartFocus 内置工具能力"说明，要求 AI 通过工具链执行操作。
+- 新增"绝对不允许"列表：不得说"我无法直接操作数据库"、"你需要手动去任务列表删除"、"作为 AI 助手我不能执行"。
+
+验收结果：
+- `npm run build`：通过。
+- `cargo test`：通过（3 测试均通过）。
+- `git diff --check`：通过。
+- `plan.md`：未修改。
+
+是否建立 Tool Registry：
+- 是。`src/lib/aiTools.ts` 包含 10 个工具定义、ToolContext、executeTool 和 filterTasksByDate。
+
+是否建立 Intent Router：
+- 是。`src/lib/intentRouter.ts` 包含 routeSmartFocusIntent、日期表达提取、confirm/cancel 检测和 PendingAction 构建。
+
+是否建立 Tool Executor：
+- 是。通过 `executeTool(toolName, params, context)` 在 aiTools.ts 中实现。
+
+Workbench 和 AI Workspace 是否共用 Orchestrator：
+- 是。两者都通过 `orchestrateAiInput` 或 `sendAi` 使用同一套路由 → pendingAction → 执行链路。
+
+pendingAction 是否稳定：
+- 是。PendingAction 结构保持不变，新增 toolName 可选字段。taskIds 继续在创建时预查询并保存。
+
+删除计划日期在昨天及以前任务是否可执行：
+- 是。intentRouter 识别"昨天及以前"→ dateMode=planned_or_deadline, dateOperator=lte, targetDate=yesterday → previewTasksForAction → moveTasksToTrash。
+
+删除任务是否进入回收站：
+- 是。调用 moveTasksToTrash，不物理删除。
+
+是否还出现"我无法操作数据库"：
+- AI system prompt 已明确禁止此回复，工具链已建立。
+
+测试结果：
+- 前端 build 通过，3 个 Rust 测试通过，git diff --check 通过。
+
+剩余 TODO：
+- 在真实 Tauri 窗口中验证：Workbench 输入"请删除昨天及以前的计划"→ 追问 planned_date 还是 deadline → 用户说 planned_date → 确认卡片 → 确认 → 移动到回收站。
+- 在真实 Tauri 窗口中验证：AI Workspace 同样流程通过。
+- 在真实 Tauri 窗口中验证：输入"你好"→ 普通聊天，不触发工具。
+- 补充更多工具的 UI 交互（如 create_reminder、start_timer 的确认卡片）。
+
+下一 Sprint 建议：
+- Sprint 20C 验收后，可以继续进入 Sprint 21（测试、打包与发布验收）或继续增强 Tool Orchestrator 的 UI 覆盖。
+
+---
 
 ### Sprint 20A：学习项目一键规划 MVP
 

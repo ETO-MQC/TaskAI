@@ -1488,7 +1488,7 @@ function AiView() {
     aiPlanCanvasOpen, setAiPlanCanvasOpen,
     conversations, activeConversationId, loadConversations, createConversation, openConversation,
     renameConversation, deleteConversation, appendAiMessage, saveCurrentPlanSnapshot,
-    pendingAction, setPendingAction, moveTasksToTrash, loadTrashedTasks, load: storeLoad,
+    pendingAction, setPendingAction, moveTasksToTrash, loadTrashedTasks, load: storeLoad, orchestrateAiInput,
   } = useAppStore();
   const preferredSkill = aiPreferredSkill as PlanningSkillId | null;
   const [materialSearch, setMaterialSearch] = useState("");
@@ -1715,55 +1715,21 @@ function AiView() {
     const requestId = crypto.randomUUID();
     currentRequestRef.current = requestId;
 
-    // Handle pendingAction confirm/cancel
-    if (pendingAction && CONFIRM_KEYWORDS.test(text.trim())) {
-      setInput("");
-      try {
-        await executePendingAction(pendingAction);
-      } finally {
-        sendingRef.current = false;
-      }
-      return;
-    }
-    if (pendingAction && CANCEL_KEYWORDS.test(text.trim())) {
-      setPendingAction(null);
+    // --- Unified orchestrator: confirm/cancel, intent routing, tool execution ---
+    const { response: orchResponse, handled } = await orchestrateAiInput(text);
+    if (handled && orchResponse) {
       setInput("");
       try {
         await appendVisibleAiMessage("user", text);
-        await appendVisibleAiMessage("assistant", "已取消当前待确认操作。");
+        await appendVisibleAiMessage("assistant", orchResponse.reply);
+        if (orchResponse.reply && !orchResponse.reply.includes("请回复")) showToast(orchResponse.reply);
       } finally {
         sendingRef.current = false;
       }
       return;
     }
 
-    // Detect dangerous operations before routing
-    const danger = detectDangerousOperation(text, allTasks);
-    if (danger && !pendingAction) {
-      setInput("");
-      const action: PendingAction = {
-        ...danger,
-        id: crypto.randomUUID(),
-        source: "ai_workspace",
-        createdAt: Date.now(),
-        expiresAt: Date.now() + PENDING_ACTION_TTL_MS,
-        affectedCount: danger.affectedCount ?? 0,
-        affectedPreview: danger.affectedPreview ?? [],
-        taskIds: danger.taskIds ?? [],
-      };
-      setPendingAction(action);
-      try {
-        await appendVisibleAiMessage("user", text);
-        const previewText = danger.affectedPreview.length > 0
-          ? `\n\n影响任务（前 ${danger.affectedPreview.length} 个）：\n${danger.affectedPreview.map((t) => `• ${t}`).join("\n")}`
-          : "";
-        await appendVisibleAiMessage("assistant", `⚠️ ${danger.summary}${previewText}\n\n请回复「确认」执行，或「取消」放弃。`);
-      } finally {
-        sendingRef.current = false;
-      }
-      return;
-    }
-
+    // --- Not handled by orchestrator: delegate to planning/inbox/backend ---
     let route = routePlanningSkill(text, preferredSkill);
     if (!preferredSkill && /没完成|未完成|调整|顺延|重新安排|局部|太多|太满|延期/.test(text)) {
       route = { skill: "adaptive_reschedule", label: "调整计划" };
@@ -1772,13 +1738,11 @@ function AiView() {
     }
     setLastRoute(route);
     setLoading(true);
-    setThinkingLabel(route.skill === "adaptive_reschedule" ? "正在整理调整建议" : isGeneralChatInput(text) ? "正在思考" : "正在整理计划");
+    setThinkingLabel(route.skill === "adaptive_reschedule" ? "正在整理调整建议" : "正在整理计划");
     setInput("");
     try {
       await appendVisibleAiMessage("user", text);
-      if (isGeneralChatInput(text)) {
-        await appendVisibleAiMessage("assistant", fallbackGeneralChatReply(text));
-      } else if (route.skill === "inbox_capture") {
+      if (route.skill === "inbox_capture") {
         const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Shanghai";
         const response = await import("./lib/api").then(({ api }) =>
           api<{ reply: string }>("send_ai_message", {
