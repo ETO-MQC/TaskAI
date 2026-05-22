@@ -265,6 +265,75 @@ const stopTimerTool: ToolDefinition = {
   },
 };
 
+const shiftTasksDateTool: ToolDefinition = {
+  name: "shift_tasks_date",
+  description: "批量顺延任务的计划日期（planned_date +N天），不修改 deadline / quadrant / urgency / importance",
+  riskLevel: "medium",
+  requiresConfirmation: true,
+  inputSchema: {
+    taskIds: "string[] — 要顺延的任务 ID",
+    shiftDays: "number — 顺延天数（默认 1）",
+  },
+  execute: async (params, ctx) => {
+    const ids = params.taskIds as string[];
+    const shiftDays = Number(params.shiftDays) || 1;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return { success: false, message: "没有指定要顺延的任务。" };
+    }
+    const tasks = ctx.getTasks();
+    let successCount = 0;
+    let skipCount = 0;
+    for (const id of ids) {
+      const task = tasks.find((t) => t.id === id);
+      if (!task || !task.planned_date) { skipCount++; continue; }
+      const oldDate = new Date(task.planned_date);
+      oldDate.setDate(oldDate.getDate() + shiftDays);
+      const year = oldDate.getFullYear();
+      const month = String(oldDate.getMonth() + 1).padStart(2, "0");
+      const day = String(oldDate.getDate()).padStart(2, "0");
+      const newDate = `${year}-${month}-${day}`;
+      try {
+        await ctx.updateTask({ id, planned_date: newDate });
+        successCount++;
+      } catch { skipCount++; }
+    }
+    await ctx.load();
+    const msg = `已将 ${successCount} 个任务顺延 ${shiftDays} 天。${skipCount > 0 ? `跳过 ${skipCount} 个无计划日期或失败任务。` : ""}`;
+    return { success: true, message: msg, affectedCount: successCount };
+  },
+};
+
+const markNeedsReviewTool: ToolDefinition = {
+  name: "mark_needs_review",
+  description: "给任务追加「待整理」标签，不覆盖原标签",
+  riskLevel: "low",
+  requiresConfirmation: false,
+  inputSchema: {
+    taskIds: "string[] — 要标记的任务 ID",
+  },
+  execute: async (params, ctx) => {
+    const ids = params.taskIds as string[];
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return { success: false, message: "没有指定要标记的任务。" };
+    }
+    const tasks = ctx.getTasks();
+    let successCount = 0;
+    for (const id of ids) {
+      const task = tasks.find((t) => t.id === id);
+      if (!task) continue;
+      let existingTags: string[] = [];
+      try { existingTags = JSON.parse(task.tags); } catch { existingTags = []; }
+      if (existingTags.includes("待整理")) { successCount++; continue; }
+      try {
+        await ctx.updateTask({ id, tags: [...existingTags, "待整理"] });
+        successCount++;
+      } catch { /* skip */ }
+    }
+    await ctx.load();
+    return { success: true, message: `已将 ${successCount} 个任务标记为待整理。`, affectedCount: successCount };
+  },
+};
+
 const adaptiveRescheduleTool: ToolDefinition = {
   name: "adaptive_reschedule",
   description: "生成自适应排程调整建议（仅预览，不直接修改）",
@@ -298,6 +367,8 @@ register(createTaskTool);
 register(createReminderTool);
 register(startTimerTool);
 register(stopTimerTool);
+register(shiftTasksDateTool);
+register(markNeedsReviewTool);
 register(adaptiveRescheduleTool);
 
 export function getTool(name: string): ToolDefinition | undefined {
@@ -322,8 +393,20 @@ export async function executeTool(
 
 // ---------- Shared date filtering ----------
 
-type FilterMode = "planned_or_deadline" | "created_at" | "all";
+type FilterMode = "planned_or_deadline" | "created_at" | "all" | "today_view";
 type FilterOp = "eq" | "gte" | "lte";
+
+export function isInTodayView(task: import("./types").Task, today: string): boolean {
+  if (task.status !== "todo" || task.trashed_at) return false;
+  // planned_date = today
+  if (task.planned_date?.slice(0, 10) === today) return true;
+  // no planned_date (unassigned incomplete tasks show in today view)
+  if (!task.planned_date) return true;
+  // important or urgent overdue tasks
+  const plannedDate = task.planned_date.slice(0, 10);
+  if (plannedDate < today && (task.importance === "important" || task.urgency === "urgent")) return true;
+  return false;
+}
 
 export function filterTasksByDate(
   tasks: import("./types").Task[],
@@ -334,6 +417,7 @@ export function filterTasksByDate(
   return tasks.filter((task) => {
     if (task.status === "archived" || task.trashed_at) return false;
     if (mode === "all") return true;
+    if (mode === "today_view") return isInTodayView(task, targetDate);
     if (mode === "created_at") {
       const created = task.created_at?.slice(0, 10);
       if (!created) return false;

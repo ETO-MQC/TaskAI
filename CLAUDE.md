@@ -32,3 +32,5 @@ SmartFocus 一期开发已经完成并归档在 `plan.md`。后续开发进入 P
 - Database: SQLite via SQLx migrations
 - AI: DeepSeek Chat Completions proxied by Rust
 - Timer: Rust backend `tokio::time::Instant`
+
+## 在改动某一行代码时，自己想想改动后会不会出错，如果不会出错就改动

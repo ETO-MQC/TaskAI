@@ -1689,8 +1689,8 @@ function AiView() {
     setPendingAction(null);
     await appendVisibleAiMessage("user", "确认");
 
-    // Use store's executePendingAction for batch_delete
-    if (action.type === "batch_delete") {
+    // Use store's executePendingAction for all action types
+    if (action.type === "batch_delete" || action.type === "shift_tasks_date" || action.type === "mark_needs_review") {
       const storeResult = await useAppStore.getState().executePendingAction();
       const resultMsg = storeResult?.resultMsg ?? "已确认执行。";
       await appendVisibleAiMessage("assistant", resultMsg);
@@ -3569,8 +3569,19 @@ function DonutCenter({ value, label }: { value: number | string; label: string }
   );
 }
 
+type StatsRange = "today" | "week" | "month" | "year" | "all";
+
+const STATS_RANGE_OPTIONS: { value: StatsRange; label: string }[] = [
+  { value: "today", label: "今日" },
+  { value: "week", label: "本周" },
+  { value: "month", label: "本月" },
+  { value: "year", label: "本年" },
+  { value: "all", label: "全部" },
+];
+
 function StatsView() {
   const { stats, tasks, records, timer } = useAppStore();
+  const [statsRange, setStatsRange] = useState<StatsRange>("all");
   const today = dayjs().format("YYYY-MM-DD");
   const recentDays = useMemo(() => Array.from({ length: 7 }, (_, index) => dayjs().subtract(6 - index, "day")), []);
   const todayTasks = tasks.filter((task) => task.status !== "archived" && (!task.planned_date || task.planned_date === today));
@@ -3588,14 +3599,40 @@ function StatsView() {
       completed: tasks.filter((task) => task.status === "done" && dayjs(task.updated_at).format("YYYY-MM-DD") === key).length,
     };
   });
+
+  // Filter tasks by range for donut charts
+  const rangeTasks = useMemo(() => {
+    const now = dayjs();
+    const startDate = statsRange === "today" ? now.startOf("day")
+      : statsRange === "week" ? now.startOf("week")
+      : statsRange === "month" ? now.startOf("month")
+      : statsRange === "year" ? now.startOf("year")
+      : null;
+    const endDate = statsRange === "today" ? now.endOf("day")
+      : statsRange === "week" ? now.endOf("week")
+      : statsRange === "month" ? now.endOf("month")
+      : statsRange === "year" ? now.endOf("year")
+      : null;
+    return tasks.filter((task) => {
+      if (task.status === "archived" || task.trashed_at) return false;
+      if (!startDate || !endDate) return true;
+      const pd = task.planned_date ? dayjs(task.planned_date) : null;
+      const dl = task.deadline ? dayjs(task.deadline) : null;
+      const ca = task.created_at ? dayjs(task.created_at) : null;
+      const inRange = (d: dayjs.Dayjs | null) => d && d.isAfter(startDate.subtract(1, "ms")) && d.isBefore(endDate.add(1, "ms"));
+      return inRange(pd) || inRange(dl) || (!pd && !dl && inRange(ca));
+    });
+  }, [tasks, statsRange]);
+
+  const rangeLabel = statsRange === "today" ? "今日" : statsRange === "week" ? "本周" : statsRange === "month" ? "本月" : statsRange === "year" ? "本年" : "全部";
   const quadrantData = [1, 2, 3, 4].map((quadrant) => ({
     quadrant,
     label: `Q${quadrant}`,
-    count: tasks.filter((task) => task.status !== "archived" && task.quadrant === quadrant).length,
+    count: rangeTasks.filter((task) => task.quadrant === quadrant).length,
   }));
   const statusData = [
-    { name: "已完成", value: tasks.filter((task) => task.status === "done").length },
-    { name: "未完成", value: tasks.filter((task) => task.status !== "done" && task.status !== "archived").length },
+    { name: "已完成", value: rangeTasks.filter((task) => task.status === "done").length },
+    { name: "未完成", value: rangeTasks.filter((task) => task.status === "todo").length },
   ];
   const activeDays = new Set(records.map((record) => dayjs(record.started_at).format("YYYY-MM-DD")));
   let streak = 0;
@@ -3616,23 +3653,39 @@ function StatsView() {
     { label: statusData[0].name, value: statusData[0].value, color: "var(--neon-blue)" },
     { label: statusData[1].name, value: statusData[1].value, color: "var(--neon-pink)" },
   ];
+
+  const RangeSelector = () => (
+    <div className="flex shrink-0 items-center gap-1">
+      {STATS_RANGE_OPTIONS.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          className={`rounded-md px-2 py-0.5 text-[11px] font-semibold [transition:var(--transition-smooth)] ${statsRange === option.value ? "bg-[var(--neon-violet)]/20 text-[var(--neon-violet)]" : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"}`}
+          onClick={() => setStatsRange(option.value)}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+
   return (
-    <section className="glass-card animate-rise flex h-full min-h-0 flex-col p-5">
+    <section className="glass-card animate-rise flex h-full min-h-0 flex-col overflow-x-hidden p-5">
       <Header title="统计" subtitle="今日概览、7 天趋势、任务分布和效率指标" />
-      <div className="thin-scrollbar grid min-h-0 flex-1 grid-cols-1 gap-5 overflow-auto pr-1 xl:grid-cols-2">
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+      <div className="thin-scrollbar grid min-h-0 flex-1 grid-cols-1 gap-5 overflow-y-auto overflow-x-hidden pr-1 xl:grid-cols-2">
+        <div className="grid min-w-0 grid-cols-2 gap-3 md:grid-cols-3">
           <StatCard label="今日总任务" value={todayTasks.length} />
           <StatCard label="今日完成" value={completedToday} />
           <StatCard label="今日未完成" value={openToday} />
           <StatCard label="今日专注" value={formatMinutes(todayMinutes)} />
           <StatCard label="今日番茄" value={pomodoroCount} />
           <StatCard label="达成率" value={`${completionRate}%`} />
-          <div className="glass-card chart-card col-span-2 flex h-72 flex-col p-5 md:col-span-3">
+          <div className="glass-card chart-card col-span-2 flex h-72 min-w-0 flex-col p-5 md:col-span-3">
             <div className="mb-2 shrink-0">
               <h3 className="text-sm font-semibold">最近 7 天专注时长</h3>
               <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">来自 timer_records，包含当前正在运行的计时。</p>
             </div>
-            <div className="min-h-0 flex-1">
+            <div className="min-h-0 min-w-0 flex-1">
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={trend} margin={{ top: 8, right: 12, left: -4, bottom: 0 }}>
                   <XAxis dataKey="day" tick={{ fill: "var(--muted-foreground)", fontSize: 11 }} axisLine={false} tickLine={false} />
@@ -3643,12 +3696,12 @@ function StatsView() {
               </ResponsiveContainer>
             </div>
           </div>
-          <div className="glass-card chart-card col-span-2 flex h-72 flex-col p-5 md:col-span-3">
+          <div className="glass-card chart-card col-span-2 flex h-72 min-w-0 flex-col p-5 md:col-span-3">
             <div className="mb-2 shrink-0">
               <h3 className="text-sm font-semibold">最近 7 天完成任务数</h3>
               <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">按任务完成更新时间统计，不用示例数据填充。</p>
             </div>
-            <div className="min-h-0 flex-1">
+            <div className="min-h-0 min-w-0 flex-1">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={trend} margin={{ top: 8, right: 12, left: -4, bottom: 0 }}>
                   <XAxis dataKey="day" tick={{ fill: "var(--muted-foreground)", fontSize: 11 }} axisLine={false} tickLine={false} />
@@ -3660,17 +3713,20 @@ function StatsView() {
             </div>
           </div>
         </div>
-        <div className="grid grid-cols-1 gap-4">
-          <div className="glass-card chart-card flex min-h-[220px] flex-col p-5">
-            <div className="mb-3 shrink-0">
-              <h3 className="text-sm font-semibold">四象限任务分布</h3>
-              <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">由任务的 urgency / importance 计算结果汇总。</p>
+        <div className="grid min-w-0 grid-cols-1 gap-4">
+          <div className="glass-card chart-card flex min-h-[220px] min-w-0 flex-col p-5">
+            <div className="mb-3 flex shrink-0 items-start justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-semibold">四象限任务分布</h3>
+                <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">{rangeLabel}任务，按 urgency / importance 计算。</p>
+              </div>
+              <RangeSelector />
             </div>
-            <div className="flex min-h-0 flex-1 items-center gap-5">
-              <div className="relative shrink-0" style={{ width: 160, height: 160 }}>
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col items-center gap-4 md:flex-row md:gap-5">
+              <div className="relative shrink-0" style={{ width: 140, height: 140 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
-                    <Pie data={quadrantData} dataKey="count" nameKey="label" innerRadius="56%" outerRadius="84%" paddingAngle={4} cornerRadius={6} stroke="oklch(1 0 0 / 0.18)" strokeWidth={1}>
+                    <Pie data={quadrantData} dataKey="count" nameKey="label" innerRadius="52%" outerRadius="82%" paddingAngle={4} cornerRadius={6} stroke="oklch(1 0 0 / 0.18)" strokeWidth={1}>
                       {quadrantData.map((entry) => <Cell key={entry.quadrant} fill={quadrantColors[entry.quadrant]} />)}
                     </Pie>
                     <Tooltip contentStyle={chartTooltipStyle} />
@@ -3678,7 +3734,7 @@ function StatsView() {
                 </ResponsiveContainer>
                 <div className="pointer-events-none absolute inset-0 grid place-items-center">
                   <div className="text-center">
-                    <div className="font-mono text-[1.4rem] font-semibold leading-none tabular-nums text-[var(--foreground)]">{quadrantTotal}</div>
+                    <div className="font-mono text-[1.2rem] font-semibold leading-none tabular-nums text-[var(--foreground)]">{quadrantTotal}</div>
                     <div className="mt-0.5 text-[10px] leading-4 text-[var(--muted-foreground)]">tasks</div>
                   </div>
                 </div>
@@ -3693,14 +3749,15 @@ function StatsView() {
                 ))}
               </div>
             </div>
+            {quadrantTotal === 0 && <p className="mt-2 text-center text-xs text-[var(--muted-foreground)]">当前范围内没有任务。</p>}
           </div>
-          <div className="glass-card chart-card flex min-h-[220px] flex-col p-5">
+          <div className="glass-card chart-card flex min-h-[220px] min-w-0 flex-col p-5">
             <div className="mb-3 shrink-0">
               <h3 className="text-sm font-semibold">完成 / 未完成分布</h3>
-              <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">展示当前真实任务状态，归档任务不计入未完成。</p>
+              <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">{rangeLabel}任务，归档和回收站不计入。</p>
             </div>
-            <div className="flex min-h-0 flex-1 items-center gap-5">
-              <div className="relative shrink-0" style={{ width: 160, height: 160 }}>
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col items-center gap-4 md:flex-row md:gap-5">
+              <div className="relative shrink-0" style={{ width: 140, height: 140 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <defs>
@@ -3713,7 +3770,7 @@ function StatsView() {
                         <stop offset="100%" stopColor="var(--neon-violet)" />
                       </linearGradient>
                     </defs>
-                    <Pie data={statusData} dataKey="value" nameKey="name" innerRadius="56%" outerRadius="84%" paddingAngle={5} cornerRadius={7} stroke="oklch(1 0 0 / 0.18)" strokeWidth={1}>
+                    <Pie data={statusData} dataKey="value" nameKey="name" innerRadius="52%" outerRadius="82%" paddingAngle={5} cornerRadius={7} stroke="oklch(1 0 0 / 0.18)" strokeWidth={1}>
                       <Cell fill="url(#doneGradient)" />
                       <Cell fill="url(#openGradient)" />
                     </Pie>
@@ -3722,7 +3779,7 @@ function StatsView() {
                 </ResponsiveContainer>
                 <div className="pointer-events-none absolute inset-0 grid place-items-center">
                   <div className="text-center">
-                    <div className="font-mono text-[1.4rem] font-semibold leading-none tabular-nums text-[var(--foreground)]">{statusTotal}</div>
+                    <div className="font-mono text-[1.2rem] font-semibold leading-none tabular-nums text-[var(--foreground)]">{statusTotal}</div>
                     <div className="mt-0.5 text-[10px] leading-4 text-[var(--muted-foreground)]">tasks</div>
                   </div>
                 </div>
@@ -3737,6 +3794,7 @@ function StatsView() {
                 ))}
               </div>
             </div>
+            {statusTotal === 0 && <p className="mt-2 text-center text-xs text-[var(--muted-foreground)]">当前范围内没有任务。</p>}
           </div>
           <div className="grid grid-cols-3 gap-3">
             <StatCard label="连续专注" value={`${streak} 天`} />
@@ -4457,8 +4515,22 @@ function CalendarView() {
         </div>
         <aside className="calendar-detail-sidebar glass-card flex min-h-0 flex-col overflow-hidden p-4">
           <div className="shrink-0">
-            <p className="section-label">Selected Day</p>
-            <h3 className="mt-1 font-semibold">{selected}</h3>
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <p className="section-label">Selected Day</p>
+                <h3 className="mt-1 font-semibold">{selected}</h3>
+              </div>
+              <button
+                type="button"
+                className="glass-inset flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-[var(--muted-foreground)] [transition:var(--transition-smooth)] hover:border-[var(--ring)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={requestScheduleSuggestion}
+                disabled={schedulePreview.loading}
+                title={hasSchedulePreview ? `建议 ${scheduleSuggestionCount} · 过载 ${scheduleOverloadCount} · 补估 ${scheduleEstimateCount}` : "生成排程建议"}
+              >
+                <Sparkles size={13} />
+                {schedulePreview.loading ? "生成中..." : hasSchedulePreview ? `排程 (${scheduleSuggestionCount})` : "AI 排程"}
+              </button>
+            </div>
             <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
               <Info label="任务数量" value={`${selectedTasks.length}`} />
               <Info label="预计负荷" value={formatMinutes(selectedEstimatedMinutes)} />
@@ -4476,43 +4548,15 @@ function CalendarView() {
                 {selectedUnestimatedCount ? `${selectedUnestimatedCount} 项未估时` : "当天未完成任务均已估时"} · 计时 {formatMinutes(selectedRecordMinutes)}
               </p>
             </div>
-            <div className="mt-3 glass-inset p-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <p className="section-label">AI Schedule</p>
-                  <h4 className="mt-1 text-sm font-semibold">排程建议</h4>
-                </div>
-                <span className="rounded-full border border-[var(--glass-inset-border)] px-2 py-0.5 text-xs text-[var(--muted-foreground)]">
-                  {schedulePreview.loading ? "生成中" : hasSchedulePreview ? "已生成" : "未生成"}
-                </span>
-              </div>
-              <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
-                <Info label="建议" value={`${scheduleSuggestionCount}`} />
-                <Info label="过载" value={`${scheduleOverloadCount}`} />
-                <Info label="补估时" value={`${scheduleEstimateCount}`} />
-              </div>
-              {schedulePreview.error && (
-                <p className="mt-2 text-xs leading-5 text-[var(--destructive)]">JSON 解析失败，可在详情中查看原文。</p>
-              )}
-              <div className="mt-3 grid gap-2">
-                <button
-                  type="button"
-                  className="rounded-xl border border-[var(--glass-inset-border)] px-3 py-2 text-sm font-semibold text-[var(--muted-foreground)] [transition:var(--transition-smooth)] hover:border-[var(--ring)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
-                  onClick={() => setScheduleDialogOpen(true)}
-                  disabled={!hasSchedulePreview}
-                >
-                  查看详情
-                </button>
-                <button
-                  type="button"
-                  className="btn-glow rounded-xl px-3 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-60"
-                  onClick={requestScheduleSuggestion}
-                  disabled={schedulePreview.loading}
-                >
-                  {schedulePreview.loading ? "正在生成建议..." : "重新生成本周排程建议"}
-                </button>
-              </div>
-            </div>
+            {hasSchedulePreview && (
+              <button
+                type="button"
+                className="mt-2 w-full rounded-lg border border-[var(--glass-inset-border)] px-3 py-1.5 text-xs text-[var(--muted-foreground)] [transition:var(--transition-smooth)] hover:border-[var(--ring)] hover:text-[var(--foreground)]"
+                onClick={() => setScheduleDialogOpen(true)}
+              >
+                查看排程建议详情 →
+              </button>
+            )}
           </div>
           <div className="thin-scrollbar mt-4 min-h-0 flex-1 space-y-2 overflow-auto pr-1">
             {selectedTasks.map((task) => renderTaskButton(task))}

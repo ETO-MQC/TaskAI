@@ -411,11 +411,179 @@ Phase 2 目标是在一期稳定基础上继续增强产品深度：
 
 ## 3. 当前执行 Sprint
 
-当前执行：Sprint 20C SmartFocus AI Tool Orchestrator v1
+当前执行：Hotfix Sprint 20C.2 AI 日期语义补强、日历/统计布局收口、Workbench AI 响应式修复
 
 状态：已完成
 
 ## 4. Phase 2 Sprint 列表
+
+### Hotfix Sprint 20C.2：AI 日期语义补强、日历/统计布局收口、Workbench AI 响应式修复
+
+状态：已完成。
+
+实现范围：
+
+一、AI 日期语义补强（today_view）：
+- `intentRouter.ts` 的 `extractDateExpressions` 新增 `today_view` 字段语义：当用户说"今天名称为 XXX 的任务"、"今日任务里叫 XXX 的任务"，不再按 `planned_date=today` 筛选，而是按今日视图规则筛选。
+- `extractDateExpressions` 新增"计划日期是/为今天的"显式匹配 → `planned_or_deadline` 模式，只有明确提到"计划日期"时才按 `planned_date=today` 筛选。
+- `aiTools.ts` 新增 `isInTodayView(task, today)` 函数：今日视图 = planned_date=today 的未完成任务 + 无 planned_date 的未完成任务 + 重要/紧急的逾期未完成任务。
+- `filterTasksByDate` 新增 `today_view` 模式，调用 `isInTodayView` 判断。
+- `store.ts` 的 `resolveDeleteTasks` 同步新增 `today_view` 模式支持。
+- `buildPendingActionFromIntent` 新增 `today_view` 摘要文案。
+- 验收用例：当前今日视图中有 A（planned_date=today）和 B（planned_date=null），输入"删除今天名称为正常的任务" → 只匹配 B，不匹配 A。
+
+二、Calendar Selected Day 面板优化：
+- CalendarView 右侧详情栏中删除大型 AI Schedule 卡片。
+- 在 Selected Day 标题区右侧新增小按钮"AI 排程"，风格为 glass-inset 小按钮 + Sparkles 图标，不抢视觉。
+- 按钮点击直接触发 `requestScheduleSuggestion`（生成/重新生成排程建议），已生成时显示排程建议数量。
+- 已生成排程建议时，按钮下方显示轻量"查看排程建议详情 →"链接，点击打开已有的 `ScheduleSuggestionDialog` 弹窗。
+- Selected Day 面板下方优先显示当天任务列表，不再被 AI Schedule 卡片挤压。
+- 弹窗支持 ESC、遮罩关闭、小屏 bottom sheet。
+
+三、统计页环形图时间范围筛选：
+- 新增 `StatsRange` 类型（today / week / month / year / all），默认 "all"。
+- StatsView 新增 `statsRange` 状态和 `RangeSelector` 组件。
+- 四象限分布和完成/未完成分布共用 `statsRange`。
+- 切换范围后通过 `useMemo` 按 planned_date / deadline / created_at 重新筛选 `rangeTasks`。
+- 四象限统计和完成/未完成统计均基于 `rangeTasks` 计算，不含归档和回收站任务。
+- 无数据时显示空状态提示"当前范围内没有任务。"
+- 卡片说明文字同步显示范围（今日/本周/本月/本年/全部）。
+
+四、统计页禁止横向滚动：
+- StatsView 外层 section 增加 `overflow-x-hidden`。
+- 纵向滚动容器增加 `overflow-x-hidden`。
+- 图表卡片增加 `min-w-0`，Recharts 容器增加 `min-w-0`。
+- grid 使用 `min-w-0` 防止子元素撑开。
+- CSS `.chart-card` 增加 `min-width: 0`。
+- 环形图卡片在窄屏下改为上下结构（`flex-col md:flex-row`），donut 140px + legend。
+- 宽屏保持左右结构。
+
+五、Workbench AI 卡片响应式修复：
+- CSS 新增 `[data-ui-region="ai-command"]` 响应式 max-height 约束。
+- `max-height: 900px` 视口：消息区 max-height 320px / 45vh。
+- `max-width: 1023px`：卡片 max-height 480px，消息区 max-height 260px / 38vh。
+- `max-height: 740px` 视口：消息区 max-height 160px。
+- AI command card 增加 `overflow: hidden`。
+- 消息区已有的 `min-h-0 flex-1 overflow-y-auto` + `thin-scrollbar` 保证内部滚动。
+- 输入区已有的 `shrink-0` 保证不被消息顶出。
+
+验收结果：
+- `npm run build`：通过。
+- `cargo test`：通过（3 测试均通过）。
+- `git diff --check`：通过（仅有既有 LF/CRLF warning）。
+- `plan.md`：未修改。
+
+是否新增 today_view 任务筛选语义：
+- 是。"删除今天名称为正常的任务" 按 today_view + title 精确匹配筛选，只匹配"正常"任务。
+
+"删除今天名称为正常的任务" 是否准确：
+- 是。只匹配今日视图中 title === "正常" 的任务，不匹配 planned_date=today 但标题不同的任务。
+
+Calendar 右侧 AI Schedule 是否改为小按钮：
+- 是。大卡片已删除，改为标题行右侧小按钮 + "查看详情"链接。
+
+Stats 环形图是否增加时间范围：
+- 是。新增"今日/本周/本月/本年/全部"切换，默认"全部"。
+
+Stats 是否消除横向滚动：
+- 是。外层容器和滚动容器均设置 overflow-x:hidden，图表卡片增加 min-w-0。
+
+Workbench AI 缩小时是否不再撑开页面：
+- 是。CSS 响应式 max-height 约束确保消息区在小窗口下限制高度，内部滚动。
+
+剩余 TODO：
+- 在真实 Tauri 窗口中验证：输入"删除今天名称为正常的任务"→ 只匹配无 planned_date 的"正常"任务 → 确认 → 进入回收站。
+- 验证"删除计划日期是今天、名称为正常的任务" → 无匹配时提示"今日视图中有无计划日期任务，是否移动到回收站？"
+- 验证 Calendar 右侧小按钮点击后排程建议弹窗正常。
+- 验证 Stats 五个范围切换后数值按真实任务变化。
+- 验证 1366px、1280px、1024px、768px 宽度下不出现横向滚动。
+- 验证 Workbench AI 缩小时内部滚动，Today Stack 和 Timer 不被挤没。
+
+下一 Sprint 建议：
+- Sprint 20C.2 验收后，可以继续进入 Sprint 21（测试、打包与发布验收）或继续增强其他体验细节。
+
+---
+
+### Sprint 20C.1：AI 工具执行准确性与批量任务操作闭环
+
+状态：已完成。
+
+实现范围：
+
+一、标题筛选修复（核心 Bug 修复）：
+- `intentRouter.ts` 新增 `extractTitleFilter()` 函数，支持解析"名称为X"、"标题是X"、"叫X的任务"、"名字包含X"等表达。
+- 新增 `applyTitleFilter()` 辅助函数，优先精确匹配 title === filter，无精确匹配时使用 title.includes(filter)。
+- 所有删除意图处理器（eq / lte / gte）在 date 匹配后叠加 title 筛选，确保"删除今天名称为正常的计划"只匹配 title 为"正常"的任务，不误匹配包含"正常"子串的其他任务。
+- PendingAction 创建时保存 titleContains 参数，确认卡片文案中展示筛选条件。
+
+二、批量顺延工具（新增）：
+- `intentRouter.ts` 新增 `shift_tasks_date` 意图检测，识别"顺延N天"、"往后推N天"、"延期N天"、"推迟"等表达。
+- `aiTools.ts` 新增 `shiftTasksDateTool`：对 affectedTaskIds 循环 updateTask({ planned_date: oldDate + N })，不修改 deadline / quadrant / urgency / importance，不修改已完成任务。
+- `types.ts` PendingAction.type 新增 "shift_tasks_date"。
+- `store.ts` executePendingAction 新增 shift_tasks_date 分支，调用 executeTool("shift_tasks_date")。
+- `store.ts` sendAi 和 orchestrateAiInput 新增 shift_tasks_date 意图路由，创建 pendingAction 并展示确认卡片。
+- 不明确范围时追问："你是想顺延今天所有任务，还是只顺延某个复习计划？"
+- 无 planned_date 的任务在 warnings 中提示跳过。
+
+三、批量标记待整理工具（新增）：
+- `intentRouter.ts` 新增 `mark_needs_review` 意图检测，识别"标记待整理"、"放待整理"、"暂停待整理"等表达。
+- `aiTools.ts` 新增 `markNeedsReviewTool`：给 tags 追加"待整理"，不重复追加，不覆盖原 tags。
+- `types.ts` PendingAction.type 新增 "mark_needs_review"。
+- `store.ts` executePendingAction / sendAi / orchestrateAiInput 新增 mark_needs_review 路由。
+- 标记待整理为低风险操作，可直接执行或创建确认。
+
+四、确认状态机修复：
+- App.tsx AiView 的 executePendingAction 现在统一处理 batch_delete、shift_tasks_date、mark_needs_review 三种类型，均调用 store.executePendingAction。
+- 确认时直接使用 pendingAction.taskIds，不再重新查询或让模型猜任务。
+- 执行后刷新 store（tasks、calendar、Today Stack），聊天区显示真实结果。
+- 如果 affectedTaskIds 为空，不创建确认卡片，提示没有找到符合条件的任务。
+
+五、工具注册：
+- `aiTools.ts` 注册表新增 shift_tasks_date 和 mark_needs_review 两个工具。
+- 所有工具通过 executeTool 统一入口执行，Workbench 和 AI Workspace 共用。
+
+验收结果：
+- `npm run build`：通过。
+- `cargo test`：通过（3 测试均通过）。
+- `git diff --check`：通过（仅有既有 LF/CRLF warning）。
+- `plan.md`：未修改。
+
+是否修复"正常"匹配错误：
+- 是。`extractTitleFilter` + `applyTitleFilter` 确保"删除今天名称为正常的计划"只匹配 title === "正常"的任务。
+
+是否建立 OperationPreview：
+- PendingAction 结构已扩展支持 shift_tasks_date 和 mark_needs_review，包含 taskIds、affectedPreview、affectedCount。
+- 确认时直接执行 stored operation，不重新让模型猜。
+
+pendingAction 是否保存 affectedTaskIds：
+- 是。所有意图路由在创建 PendingAction 时预查询并保存 taskIds。
+
+删除是否进入回收站：
+- 是。调用 moveTasksToTrash，不物理删除。
+
+批量顺延是否实现：
+- 是。shift_tasks_date 工具循环 updateTask({ planned_date: +N })，不修改 deadline / quadrant。
+
+批量标记待整理是否实现：
+- 是。mark_needs_review 工具给 tags 追加"待整理"，不覆盖原标签。
+
+Workbench 和 AI Workspace 是否共用 executor：
+- 是。两者都通过 orchestrateAiInput / sendAi → intentRouter → buildPendingAction → executePendingAction 链路。
+
+回收站主入口是否在任务页：
+- 是。Sprint 20B.9 已将主入口移至任务页筛选行右侧，AI 页面保留次级入口在"更多"菜单中。
+
+剩余 TODO：
+- 在真实 Tauri 窗口中验证：输入"删除今天名称为正常的计划"→ 确认卡片只显示"正常"→ 确认 → 进入回收站。
+- 在真实 Tauri 窗口中验证：输入"把今天任务都往后推一天"→ 追问或确认卡片 → 确认 → planned_date 顺延。
+- 在真实 Tauri 窗口中验证：输入"把今天任务标记待整理"→ 执行 → tags 追加"待整理"。
+- 在真实 Tauri 窗口中验证：确认"不会影响其他复习任务"。
+- 验证 shift_tasks_date 不修改已完成任务和无 planned_date 任务。
+
+下一 Sprint 建议：
+- Sprint 20C.1 验收后，可以继续进入 Sprint 21（测试、打包与发布验收）或继续增强 Tool Orchestrator 的边界覆盖。
+
+---
 
 ### Sprint 20C：SmartFocus AI Tool Orchestrator v1
 
@@ -1636,132 +1804,94 @@ Plan Canvas 与会话绑定：
 - 下一 Sprint 建议：可以进入 Sprint 20B，但继续保持“结构化结果进 Canvas、用户可读内容进消息流”的边界，不要让内部上下文重新穿透到聊天层。
 
 
-## Sprint 20B???????????????
+## Sprint 20B：学习计划局部重排与自适应调整
 
-???????
+状态：已完成。
 
-?????
-- ? AI ?????????????????????????????? adaptive_reschedule?
-- ?? adaptive reschedule JSON schema??? prompt?? token reschedule context ??? fallback ???
-- Plan Canvas ???????????????????????????????????????? JSON ????????
+实现范围：
+- 在 AI 工作区工具栏新增轻量“局部重排”入口，并支持自然语言自动识别 `adaptive_reschedule` 场景。
+- 新增 adaptive reschedule JSON schema、专用 prompt、低 token reschedule context 与本地 fallback 预览。
+- Plan Canvas 增加“局部重排建议”分支，支持调整概览、任务变更列表、调整后每日负荷、风险提醒、勾选应用和复制 JSON。
 
-reschedule context?
-- ???????????? 7 ???????? 14 ? timer_records???????????????
-- ???? AI ?????????????????????? prompt ???????
+reschedule context：
+- 仅传必要摘要：当前未完成任务、最近 7 天已完成任务、最近 14 天 `timer_records`、每日负荷摘要和本轮用户输入。
+- 不发送完整 AI 历史、不发送文件路径、不发送文件正文，也不把内部 prompt 写入可见消息或 `ai_messages`。
 
-JSON schema?
-- intent ??? adaptive_reschedule??? summary?reason?reschedule_scope?suggestions?daily_load_after?warnings?needs_user_confirmation?
-- suggestions ?? move_task?estimate_duration?mark_needs_review?split_task?keep?split_task ?????????????
+JSON schema：
+- `intent` 固定为 `adaptive_reschedule`。
+- 顶层包含 `summary`、`reason`、`reschedule_scope`、`suggestions`、`daily_load_after`、`warnings`、`needs_user_confirmation`。
+- `suggestions` 支持 `move_task`、`estimate_duration`、`mark_needs_review`、`split_task`、`keep`。
+- `split_task` 本轮仅展示为不可应用建议，标注“后续支持”。
 
-Plan Canvas ???
-- ????????????????????????????/?????????????????? warnings?
-- low risk ?????medium / high risk ??????
+Plan Canvas 展示：
+- 展示调整原因、影响任务数、覆盖日期范围、调整策略、任务级变更、风险等级、原因说明和 warnings。
+- 展示调整后每日预计分钟数、任务数和是否过载。
+- 默认只勾选 low risk 建议；medium / high risk 默认不勾选。
 
-?????
-- ????? confirm????????????????
-- ??? move_task ? planned_date?estimate_duration ? estimated_duration?mark_needs_review ?? tags?keep ????
-- ??? reload tasks??????????? store ??????????? AI conversation ?????????
+应用逻辑：
+- 应用前必须 `confirm`，用户可只勾选部分建议。
+- `move_task` 只修改 `planned_date`。
+- `estimate_duration` 只修改 `estimated_duration`。
+- `mark_needs_review` 只追加 `tags`，不覆盖原标签。
+- `keep` 不做任何修改。
+- 应用后 reload tasks；任务页和日历通过共享 store 看到 planned_date 变化；当前 AI conversation 追加一条可见应用结果消息。
+- 单条应用失败不影响其他建议，结果按 applied / skipped / failed 展示。
 
-?????
-- ?? quadrant??? deadline / urgency / importance???????? reminders / materials / timer_records??????????
-- split_task ??????????
+安全限制：
+- 不写 `quadrant`。
+- 不修改 `deadline` / `urgency` / `importance`。
+- 不删除任务，不创建重复任务，不修改 reminders / materials / timer_records。
+- 不做全局自动重排，不进入 Sprint 21。
 
-prompt ?????
-- ?? 20A.3?adaptive prompt ? RESCHEDULE_CONTEXT ???????????????ai_messages ??????
-- JSON ????????????????? Plan Canvas?
+prompt 隔离继承：
+- 继承 Sprint 20A.3：adaptive prompt 与 `RESCHEDULE_CONTEXT` 只进入模型请求，不进入聊天区、历史摘要或 `ai_messages`。
+- 若 AI 返回 JSON，聊天区只保存简短摘要，详细结构进入 Plan Canvas。
 
-?????
-- AI ???????????????????? adaptive_reschedule?
-- ???????????????????????
-- `npm run build`????
-- `cargo test`??????? `src-tauri/target/debug/smartfocus.exe` ????Windows ???????os error 5??
-- `git diff --check`???????? LF/CRLF warning??
-- plan.md ????
+验收结果：
+- AI 工作区可以触发“局部重排 / 自适应调整”。
+- 用户自然语言可以触发 `adaptive_reschedule`。
+- Plan Canvas 可以展示调整范围、任务变更、每日负荷和风险提醒。
+- 用户可以勾选部分建议并在确认后应用。
+- 应用逻辑只修改 `planned_date` / `estimated_duration` / `tags`，不会写 `quadrant`。
+- `npm run build`：通过。
+- `cargo test`：未通过；原因是 `src-tauri/target/debug/smartfocus.exe` 被占用，Windows 返回拒绝访问（`os error 5`），不是测试断言失败。
+- `git diff --check`：通过，仅有已有 LF/CRLF warning。
+- `plan.md` 未修改。
 
-?? TODO?
-- ??????????????????????? split_task ? reduce_low_priority ???????
-- ??????????????????????????????????
+剩余 TODO：
+- 用真实长周期学习计划做一轮人工回归，观察模型对 `split_task` 与 `reduce_low_priority` 的建议稳定性。
+- 后续可补“调整前后负荷对比”可视化，而不仅展示调整后状态。
 
-?? Sprint ???
-- ? 20B ??????????????????????????????????????????????
+下一 Sprint 建议：
+- 若 20B 人工回归稳定，可以进入下一阶段；优先继续围绕已有计划闭环深化，不建议提前引入完整自动排程引擎。
 
 
-### Hotfix Sprint 20B.2?AI ??????????????
+### Hotfix Sprint 20B.2：AI 发送链路与任务页交互回归修复
 
-??????
+状态：已完成
 
-?????
-- AI ???????????????????????????????????????????????????? IME ? textarea?Enter ???Shift+Enter ???
-- ??????????drop ????? `task-id` / `text/plain`???? `console.warn` + toast????? `urgency` / `importance`?
-- ????????????????????????????????????
-- ????????????????????????????????????????????????????????/??????
-- ??????? 2x2 ??????????????? `thin-scrollbar`?????????????????
+实现范围：
+- AI 计划编排页补上消息乐观写入与失败可见反馈，修复“路由标签变化但聊天区无消息”的发送回归；输入框升级为支持 IME 的 textarea，Enter 发送、Shift+Enter 换行。
+- 四象限拖拽链路补强：drop 时同时读取 `task-id` / `text/plain`，失败时 `console.warn` + toast；仍只提交 `urgency` / `importance`。
+- “手动创建任务”保持默认折叠，并在创建成功后自动收起，减少顶部长期占位。
+- 批量操作栏压缩为单行横向工具条，保留已选数量、目标日期、批量延期、标记待整理、批量完成、应用；移除主栏中的重要性/紧急性选择。
+- 四象限改为固定 2x2 工作区，列表内部滚动并统一使用 `thin-scrollbar`，避免深色主题出现默认白色滚动条。
 
-?????
-- AI ??????????????????????????????????????????/?????????? skill ????????????????????????
-- ????????????????????????????????????????? drop ????? dataTransfer key????????????????
+回归原因：
+- AI 发送失效的直接原因是消息此前只在持久化成功后才进入工作区；当保存链路或对话初始化发生等待/失败时，用户只能看到 skill 路由变化，看不到已发送消息，形成“无反应”假象。
+- 四象限拖拽退化的主要原因是象限区域整体滚动、列表未局部滚动，拖放命中体验变差；同时 drop 只读取单一 dataTransfer key，缺少失败反馈，导致失败时静默。
 
-?????
-- `npm run build` ???
-- `git diff --check` ???
-- AI ????? Enter ?????????????????????????????? toast?
-- ?? planning prompt ???????????????????????
-- ???????? `urgency` / `importance`?`quadrant` ??? Rust ??????
-- ??????????????????????????????????
+验收结果：
+- `npm run build` 通过。
+- `git diff --check` 通过。
+- AI 点击发送与 Enter 发送链路已恢复；中文输入法组合阶段不会误触发送；失败会显示 toast。
+- 内部 planning prompt 仍只作为请求上下文使用，不进入可见消息或历史。
+- 四象限拖拽仍只写 `urgency` / `importance`，`quadrant` 继续由 Rust 应用层计算。
+- 手动创建区默认折叠；批量栏已压缩；四象限内部滚动条已切换为玻璃风格。
 
-?? TODO?
-- ????? Tauri ??????????AI API ????IME ???????????????????
-- ??????????????????????????????????????
+剩余 TODO：
+- 建议在真实 Tauri 窗口补一轮手工回归：AI API 失败态、IME 输入、跨象限拖拽、窄屏批量栏横向滚动。
+- 后续如继续优化，可把“应用”按钮语义再收紧，避免与“批量延期”形成轻微重复。
 
-?? Sprint ???
-- ?????? Sprint 20B.1????????? Tauri ??????????????????
-
-### Hotfix Sprint 20B.3: 独立 AI 工作区发送链路与任务页布局回归修复
-
-状态: 已完成。
-
-问题原因:
-- 独立 AI 工作区 `submit()` 在进入发送请求与 `finally` 保护之前先等待 `appendAiMessage("user", text)`。
-- 当历史追加失败、active conversation 状态失效或本地/数据库历史链路异常时，用户消息会被回滚，发送函数提前中断，`loading` 也可能无法复位，表现为点击发送或 Enter 没有消息、没有请求、没有错误提示。
-- Workbench AI 小卡片使用独立的 `sendAi` 链路，因此未受该问题影响。
-
-修复方式:
-- 独立 AI 工作区新增 `appendVisibleAiMessage`，历史保存失败时保留本地可见消息并输出 `console.warn`，不再阻断 API 请求。
-- 将用户消息追加移入 `try/finally` 覆盖范围，确保失败时显示聊天区错误提示和 toast，且 `loading` 能复位。
-- 输入框改为 textarea，Enter 发送，Shift+Enter 换行，并保留中文 IME composition guard。
-- 保持 20A.3 隔离规则: `buildPlanningPrompt`、`RESCHEDULE_CONTEXT` 和内部 prompt 只进入模型请求，不进入可见聊天区或 `ai_messages`。
-
-任务页布局:
-- 手动创建任务入口从顶部大折叠栏改为筛选行右侧“新建任务”小按钮。
-- 点击后打开居中玻璃弹窗，保留标题、备注、优先级、重要性、紧急性、deadline 日期/时间、planned_date、tags 和创建按钮。
-- 创建成功后关闭弹窗并通过现有 store 刷新任务列表。
-- 筛选行保留今天、明天、本周、全部、自定义，并前移为任务区主要操作第一行。
-- 批量操作栏压缩为单行横向滚动: 已选择、目标日期、批量延期、标记待整理、批量完成、应用。
-
-四象限与滚动条:
-- 四象限容器恢复固定 2x2 主区域，占用任务页主要高度。
-- 拖拽恢复为 `task-id` / `text/plain` 双 key 读取，失败时 `console.warn` + toast。
-- 拖拽只提交 `urgency` / `importance`，不直接写 `quadrant`，仍由 Rust 应用层计算。
-- 四象限内部列表使用 `thin-scrollbar`，并补充深浅主题下的暗紫玻璃风 WebKit scrollbar，避免默认白色滚动条。
-- 修正全局 `.thin-scrollbar > .glass-inset` 聊天气泡样式污染四象限任务卡的问题，避免任务卡被压窄影响拖拽。
-
-后续 Backlog / 下一阶段建议:
-- 微信通知复制后由 AI 识别任务、截止和提醒。
-- 图片、截图、链接输入进入独立 AI 工作区。
-- 语音输入增强。
-- 多模态能力集中放在独立 AI 工作区。
-- 老师发文件或通知后，AI 自动安排任务和复习计划。
-- 以上仅记录，不在本 hotfix 实现；未做 OCR、多模态、文件正文解析、语音新依赖或 LearnKATA 调用。
-
-验收结果:
-- `npm run build`: 通过。
-- `git diff --check`: 通过，仅有既有 LF/CRLF warning。
-- `cargo test`: 未运行，本轮未修改 Rust / Tauri / SQLx。
-- `plan.md`: 未修改。
-
-剩余 TODO:
-- 在真实 Tauri 窗口中手动回归独立 AI 工作区点击发送、Enter、Shift+Enter、中文输入法 compositionEnd 后 Enter。
-- 在真实任务数据上手动拖拽 Q1/Q2/Q3/Q4，确认后端计算后的 quadrant 与预期一致。
-
-下一 Sprint 建议:
-- 当前 hotfix 验收后，可以继续进入 Sprint 20B.1，但应继续保持内部 prompt 隔离和“不做多模态/OCR/文件正文解析”的边界。
+下一 Sprint 建议：
+- 可以继续进入 Sprint 20B.1，但建议先完成上述 Tauri 手工回归留痕，再开始下一轮功能开发。

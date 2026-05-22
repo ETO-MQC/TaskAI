@@ -356,7 +356,7 @@ function resolveDateKey(ref: "today" | "yesterday" | "tomorrow" | "day_after_tom
 }
 
 function resolveDeleteTasks(
-  mode: "planned_or_deadline" | "created_at" | "all",
+  mode: "planned_or_deadline" | "created_at" | "all" | "today_view",
   dateOp: "eq" | "gte",
   targetDate: string,
   tasks: Task[],
@@ -364,6 +364,15 @@ function resolveDeleteTasks(
   return tasks.filter((task) => {
     if (task.status === "archived" || task.trashed_at) return false;
     if (mode === "all") return true;
+    if (mode === "today_view") {
+      // today_view: planned_date=today + no planned_date + important/urgent overdue
+      if (task.status !== "todo") return false;
+      if (task.planned_date?.slice(0, 10) === targetDate) return true;
+      if (!task.planned_date) return true;
+      const pd = task.planned_date.slice(0, 10);
+      if (pd < targetDate && (task.importance === "important" || task.urgency === "urgent")) return true;
+      return false;
+    }
     if (mode === "created_at") {
       const created = task.created_at?.slice(0, 10);
       if (!created) return false;
@@ -648,6 +657,21 @@ export const useAppStore = create<AppStore>((set, get) => ({
       return { successCount, failCount, resultMsg };
     }
 
+    if (action.type === "shift_tasks_date") {
+      const ids = action.taskIds;
+      const shiftDays = Number(action.params.shiftDays) || 1;
+      const toolCtx = buildToolContext(get);
+      const result = await executeTool("shift_tasks_date", { taskIds: ids, shiftDays }, toolCtx);
+      return { successCount: result.affectedCount ?? 0, failCount: ids.length - (result.affectedCount ?? 0), resultMsg: result.message };
+    }
+
+    if (action.type === "mark_needs_review") {
+      const ids = action.taskIds;
+      const toolCtx = buildToolContext(get);
+      const result = await executeTool("mark_needs_review", { taskIds: ids }, toolCtx);
+      return { successCount: result.affectedCount ?? 0, failCount: ids.length - (result.affectedCount ?? 0), resultMsg: result.message };
+    }
+
     if (action.type === "batch_update") {
       return { successCount: 0, failCount: 0, resultMsg: "批量修改需要更具体的指令，请指明要修改哪些任务和具体修改内容。" };
     }
@@ -759,6 +783,72 @@ export const useAppStore = create<AppStore>((set, get) => ({
       return { intent: "move_tasks_to_trash", action: "clarify", data: {}, needs_clarification: true, clarification: reply, reply };
     }
 
+    // Shift tasks date
+    if (intentResult.intent === "shift_tasks_date" && !intentResult.needsClarification) {
+      const action = buildPendingActionFromIntent(intentResult, get().tasks, src);
+      if (action) {
+        set({ pendingAction: action });
+        const previewText = action.affectedPreview.length > 0
+          ? `\n\n影响任务（前 ${action.affectedPreview.length} 个）：\n${action.affectedPreview.map((t: string) => `• ${t}`).join("\n")}`
+          : "";
+        const reply = `${action.summary}${previewText}\n\n请回复「确认」执行，或「取消」放弃。`;
+        if (src === "workbench") {
+          const nextMessages = [...get().aiMessages, { role: "user", content: text } as AiMessage, { role: "assistant", content: reply } as AiMessage].slice(-50);
+          set({ aiMessages: nextMessages });
+          persistAiMessages(nextMessages);
+        }
+        return { intent: "shift_tasks_date", action: "pending_confirmation", data: action.params, needs_clarification: false, clarification: null, reply };
+      }
+    }
+
+    // Shift needs clarification
+    if (intentResult.intent === "shift_tasks_date" && intentResult.needsClarification) {
+      const reply = intentResult.clarificationQuestion ?? "请说明要顺延哪些任务。";
+      if (src === "workbench") {
+        const nextMessages = [...get().aiMessages, { role: "user", content: text } as AiMessage, { role: "assistant", content: reply } as AiMessage].slice(-50);
+        set({ aiMessages: nextMessages });
+        persistAiMessages(nextMessages);
+      }
+      return { intent: "shift_tasks_date", action: "clarify", data: {}, needs_clarification: true, clarification: reply, reply };
+    }
+
+    // Mark needs review
+    if (intentResult.intent === "mark_needs_review" && !intentResult.needsClarification) {
+      const action = buildPendingActionFromIntent(intentResult, get().tasks, src);
+      if (action) {
+        set({ pendingAction: action });
+        const previewText = action.affectedPreview.length > 0
+          ? `\n\n影响任务（前 ${action.affectedPreview.length} 个）：\n${action.affectedPreview.map((t: string) => `• ${t}`).join("\n")}`
+          : "";
+        const reply = `${action.summary}${previewText}\n\n请回复「确认」执行，或「取消」放弃。`;
+        if (src === "workbench") {
+          const nextMessages = [...get().aiMessages, { role: "user", content: text } as AiMessage, { role: "assistant", content: reply } as AiMessage].slice(-50);
+          set({ aiMessages: nextMessages });
+          persistAiMessages(nextMessages);
+        }
+        return { intent: "mark_needs_review", action: "pending_confirmation", data: action.params, needs_clarification: false, clarification: null, reply };
+      }
+      // If action is null (no matched tasks), execute directly without confirmation
+      const toolCtx = buildToolContext(get);
+      const ids = (intentResult.params.matchedTaskIds as string[]) ?? [];
+      if (ids.length === 0) {
+        const reply = "没有找到符合条件的任务。";
+        if (src === "workbench") {
+          const nextMessages = [...get().aiMessages, { role: "user", content: text } as AiMessage, { role: "assistant", content: reply } as AiMessage].slice(-50);
+          set({ aiMessages: nextMessages });
+          persistAiMessages(nextMessages);
+        }
+        return { intent: "mark_needs_review", action: "no_match", data: {}, needs_clarification: false, clarification: null, reply };
+      }
+      const result = await executeTool("mark_needs_review", { taskIds: ids }, toolCtx);
+      if (src === "workbench") {
+        const nextMessages = [...get().aiMessages, { role: "user", content: text } as AiMessage, { role: "assistant", content: result.message } as AiMessage].slice(-50);
+        set({ aiMessages: nextMessages });
+        persistAiMessages(nextMessages);
+      }
+      return { intent: "mark_needs_review", action: "tool_executed", data: {}, needs_clarification: false, clarification: null, reply: result.message };
+    }
+
     // --- Step 4: Direct tool execution (non-delete, no confirmation needed) ---
     if (intentResult.intent === "create_task" && intentResult.confidence >= 0.8) {
       const toolCtx = buildToolContext(get);
@@ -828,6 +918,36 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
     if (intentResult.intent === "move_tasks_to_trash" && intentResult.needsClarification) {
       return { response: { intent: "move_tasks_to_trash", action: "clarify", data: {}, needs_clarification: true, clarification: intentResult.clarificationQuestion ?? "请说明要删除哪些任务。", reply: intentResult.clarificationQuestion ?? "请说明要删除哪些任务。" }, handled: true };
+    }
+
+    // Shift tasks date → pendingAction
+    if (intentResult.intent === "shift_tasks_date" && !intentResult.needsClarification) {
+      const action = buildPendingActionFromIntent(intentResult, get().tasks, "ai_workspace");
+      if (action) {
+        set({ pendingAction: action });
+        const previewText = action.affectedPreview.length > 0 ? `\n\n影响任务（前 ${action.affectedPreview.length} 个）：\n${action.affectedPreview.map((t: string) => `• ${t}`).join("\n")}` : "";
+        return { response: { intent: "shift_tasks_date", action: "pending_confirmation", data: action.params, needs_clarification: false, clarification: null, reply: `${action.summary}${previewText}\n\n请回复「确认」执行，或「取消」放弃。` }, handled: true };
+      }
+    }
+    if (intentResult.intent === "shift_tasks_date" && intentResult.needsClarification) {
+      return { response: { intent: "shift_tasks_date", action: "clarify", data: {}, needs_clarification: true, clarification: intentResult.clarificationQuestion ?? "请说明要顺延哪些任务。", reply: intentResult.clarificationQuestion ?? "请说明要顺延哪些任务。" }, handled: true };
+    }
+
+    // Mark needs review → direct or pending
+    if (intentResult.intent === "mark_needs_review" && !intentResult.needsClarification) {
+      const action = buildPendingActionFromIntent(intentResult, get().tasks, "ai_workspace");
+      if (action) {
+        set({ pendingAction: action });
+        const previewText = action.affectedPreview.length > 0 ? `\n\n影响任务（前 ${action.affectedPreview.length} 个）：\n${action.affectedPreview.map((t: string) => `• ${t}`).join("\n")}` : "";
+        return { response: { intent: "mark_needs_review", action: "pending_confirmation", data: action.params, needs_clarification: false, clarification: null, reply: `${action.summary}${previewText}\n\n请回复「确认」执行，或「取消」放弃。` }, handled: true };
+      }
+      const toolCtx = buildToolContext(get);
+      const ids = (intentResult.params.matchedTaskIds as string[]) ?? [];
+      if (ids.length === 0) {
+        return { response: { intent: "mark_needs_review", action: "no_match", data: {}, needs_clarification: false, clarification: null, reply: "没有找到符合条件的任务。" }, handled: true };
+      }
+      const result = await executeTool("mark_needs_review", { taskIds: ids }, toolCtx);
+      return { response: { intent: "mark_needs_review", action: "tool_executed", data: {}, needs_clarification: false, clarification: null, reply: result.message }, handled: true };
     }
 
     // Direct tool execution

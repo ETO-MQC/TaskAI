@@ -341,6 +341,28 @@
       min-width: 320px;
     }
   }
+  /* AI command card responsive height constraints */
+  [data-ui-region="ai-command"] {
+    overflow: hidden;
+  }
+  @media (max-height: 900px) {
+    [data-ui-region="ai-command"] > :last-child {
+      max-height: min(320px, 45vh);
+    }
+  }
+  @media (max-width: 1023px) {
+    [data-ui-region="ai-command"] {
+      max-height: 480px;
+    }
+    [data-ui-region="ai-command"] > :last-child {
+      max-height: min(260px, 38vh);
+    }
+  }
+  @media (max-height: 740px) {
+    [data-ui-region="ai-command"] > :last-child {
+      max-height: 160px;
+    }
+  }
 
   .glass-card {
     position: relative;
@@ -1097,6 +1119,9 @@
     .chart-legend {
       grid-template-columns: minmax(0, 1fr);
     }
+  }
+  .chart-card {
+    min-width: 0;
   }
   .timer-card-body {
     align-content: center;

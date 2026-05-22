@@ -168,7 +168,7 @@ export interface AiResponse {
 
 export interface PendingAction {
   id: string;
-  type: "batch_delete" | "batch_update" | "dangerous_operation";
+  type: "batch_delete" | "batch_update" | "dangerous_operation" | "shift_tasks_date" | "mark_needs_review";
   toolName?: string;
   params: Record<string, unknown>;
   summary: string;
