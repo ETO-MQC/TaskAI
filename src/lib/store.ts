@@ -21,7 +21,7 @@ import type {
   Urgency,
 } from "./types";
 import { filterVisibleConversationMessages, isInternalPlanningPrompt } from "./aiHistory";
-import { routeSmartFocusIntent, buildPendingActionFromIntent, isConfirmKeyword, isCancelKeyword, isGeneralChatIntent } from "./intentRouter";
+import { routeSmartFocusIntent, buildPendingActionFromIntent, isConfirmKeyword, isCancelKeyword, isGeneralChatIntent, type IntentResult } from "./intentRouter";
 import { executeTool, type ToolContext } from "./aiTools";
 
 type View = "workbench" | "tasks" | "timer" | "calendar" | "stats" | "settings" | "ai";
@@ -157,6 +157,28 @@ interface AppStore {
 const emptyTimer: TimerSnapshot = { active: false, elapsed_seconds: 0, paused: false };
 const aiWorkspaceStorageKey = "smartfocus_ai_workspace";
 const aiMessagesStorageKey = "smartfocus_ai_messages";
+
+let pendingCandidateSelection: {
+  intent: "move_tasks_to_trash" | "shift_tasks_date" | "mark_needs_review";
+  params: Record<string, unknown>;
+  taskIds: string[];
+  source: "workbench" | "ai_workspace";
+  createdAt: number;
+} | null = null;
+
+function parseCandidateSelection(text: string, count: number): number[] | null {
+  const normalized = text.trim();
+  if (!normalized || count <= 0) return null;
+  if (/^(全部|全选|都处理|都删|都顺延|所有)$/u.test(normalized)) {
+    return Array.from({ length: count }, (_, index) => index);
+  }
+  const map: Record<string, number> = { 第一个: 0, 第一: 0, 第二个: 1, 第二: 1, 第三个: 2, 第三: 2 };
+  if (normalized in map && map[normalized] < count) return [map[normalized]];
+  const match = normalized.match(/(?:只处理|处理|选择|选|第)?\s*(\d+)\s*(?:个|项)?/u);
+  if (!match) return null;
+  const index = Number(match[1]) - 1;
+  return index >= 0 && index < count ? [index] : null;
+}
 
 function readStoredJson<T>(key: string, fallback: T): T {
   try {
@@ -441,6 +463,17 @@ function buildToolContext(get: () => AppStore): ToolContext {
     stopTimer: async (taskId, note) => { await get().stopTimer(taskId, note); },
     load: async () => { await get().load(); },
     loadTrashedTasks: async () => { await get().loadTrashedTasks(); },
+  };
+}
+
+function buildIntentFromSelection(selection: NonNullable<typeof pendingCandidateSelection>, chosenIds: string[]): IntentResult {
+  return {
+    intent: selection.intent,
+    confidence: 0.95,
+    params: { ...selection.params, matchedTaskIds: chosenIds, resolverStatus: "matched" },
+    missingFields: [],
+    riskLevel: selection.intent === "move_tasks_to_trash" ? "high" : selection.intent === "shift_tasks_date" ? "medium" : "low",
+    needsClarification: false,
   };
 }
 
@@ -751,8 +784,35 @@ export const useAppStore = create<AppStore>((set, get) => ({
       return { intent: "general_chat", action: "cancel_pending", data: {}, needs_clarification: false, clarification: null, reply };
     }
 
+    if (pendingCandidateSelection && pendingCandidateSelection.source === src && Date.now() - pendingCandidateSelection.createdAt < 5 * 60 * 1000) {
+      const selectedIndexes = parseCandidateSelection(text, pendingCandidateSelection.taskIds.length);
+      if (selectedIndexes) {
+        const selection = pendingCandidateSelection;
+        pendingCandidateSelection = null;
+        const chosenIds = selectedIndexes.map((index) => selection.taskIds[index]).filter(Boolean);
+        const selectedIntent = buildIntentFromSelection(selection, chosenIds);
+        const action = buildPendingActionFromIntent(selectedIntent, get().tasks, src);
+        const reply = action
+          ? `${action.summary}\n\n影响任务（前 ${action.affectedPreview.length} 个）：\n${action.affectedPreview.map((title) => `• ${title}`).join("\n")}\n\n请回复「确认」执行，或「取消」放弃。`
+          : "没有找到符合条件的任务。";
+        if (action) set({ pendingAction: action });
+        if (src === "workbench") {
+          const nextMessages = [...get().aiMessages, { role: "user", content: text } as AiMessage, { role: "assistant", content: reply } as AiMessage].slice(-50);
+          set({ aiMessages: nextMessages });
+          persistAiMessages(nextMessages);
+        }
+        return { intent: selection.intent, action: action ? "pending_confirmation" : "no_match", data: action?.params ?? {}, needs_clarification: false, clarification: null, reply };
+      }
+    }
+
     // --- Step 2: Intent routing ---
     const intentResult = routeSmartFocusIntent(text, { tasks: get().tasks });
+    const routedAmbiguousTaskIds = intentResult.params.ambiguousTaskIds as string[] | undefined;
+    if (intentResult.needsClarification && routedAmbiguousTaskIds?.length && (
+      intentResult.intent === "move_tasks_to_trash" || intentResult.intent === "shift_tasks_date" || intentResult.intent === "mark_needs_review"
+    )) {
+      pendingCandidateSelection = { intent: intentResult.intent, params: intentResult.params, taskIds: routedAmbiguousTaskIds, source: src, createdAt: Date.now() };
+    }
 
     // --- Step 3: High-confidence tool intents ---
     if (intentResult.intent === "move_tasks_to_trash" && !intentResult.needsClarification) {
@@ -770,6 +830,17 @@ export const useAppStore = create<AppStore>((set, get) => ({
         }
         return { intent: "move_tasks_to_trash", action: "pending_confirmation", data: action.params, needs_clarification: false, clarification: null, reply };
       }
+      const reply = intentResult.clarificationQuestion ?? "没有找到符合条件的任务。";
+      const ambiguousTaskIds = intentResult.params.ambiguousTaskIds as string[] | undefined;
+      if (ambiguousTaskIds?.length) {
+        pendingCandidateSelection = { intent: "move_tasks_to_trash", params: intentResult.params, taskIds: ambiguousTaskIds, source: src, createdAt: Date.now() };
+      }
+      if (src === "workbench") {
+        const nextMessages = [...get().aiMessages, { role: "user", content: text } as AiMessage, { role: "assistant", content: reply } as AiMessage].slice(-50);
+        set({ aiMessages: nextMessages });
+        persistAiMessages(nextMessages);
+      }
+      return { intent: "move_tasks_to_trash", action: "no_match", data: {}, needs_clarification: false, clarification: null, reply };
     }
 
     // Needs clarification for delete intent
@@ -799,6 +870,17 @@ export const useAppStore = create<AppStore>((set, get) => ({
         }
         return { intent: "shift_tasks_date", action: "pending_confirmation", data: action.params, needs_clarification: false, clarification: null, reply };
       }
+      const reply = intentResult.clarificationQuestion ?? "没有找到符合条件的任务。";
+      const ambiguousTaskIds = intentResult.params.ambiguousTaskIds as string[] | undefined;
+      if (ambiguousTaskIds?.length) {
+        pendingCandidateSelection = { intent: "shift_tasks_date", params: intentResult.params, taskIds: ambiguousTaskIds, source: src, createdAt: Date.now() };
+      }
+      if (src === "workbench") {
+        const nextMessages = [...get().aiMessages, { role: "user", content: text } as AiMessage, { role: "assistant", content: reply } as AiMessage].slice(-50);
+        set({ aiMessages: nextMessages });
+        persistAiMessages(nextMessages);
+      }
+      return { intent: "shift_tasks_date", action: "no_match", data: {}, needs_clarification: false, clarification: null, reply };
     }
 
     // Shift needs clarification
@@ -905,7 +987,29 @@ export const useAppStore = create<AppStore>((set, get) => ({
       return { response: { intent: "general_chat", action: "cancel_pending", data: {}, needs_clarification: false, clarification: null, reply: "已取消当前待确认操作。" }, handled: true };
     }
 
+    if (pendingCandidateSelection && pendingCandidateSelection.source === "ai_workspace" && Date.now() - pendingCandidateSelection.createdAt < 5 * 60 * 1000) {
+      const selectedIndexes = parseCandidateSelection(text, pendingCandidateSelection.taskIds.length);
+      if (selectedIndexes) {
+        const selection = pendingCandidateSelection;
+        pendingCandidateSelection = null;
+        const chosenIds = selectedIndexes.map((index) => selection.taskIds[index]).filter(Boolean);
+        const selectedIntent = buildIntentFromSelection(selection, chosenIds);
+        const action = buildPendingActionFromIntent(selectedIntent, get().tasks, "ai_workspace");
+        const reply = action
+          ? `${action.summary}\n\n影响任务（前 ${action.affectedPreview.length} 个）：\n${action.affectedPreview.map((title) => `• ${title}`).join("\n")}\n\n请回复「确认」执行，或「取消」放弃。`
+          : "没有找到符合条件的任务。";
+        if (action) set({ pendingAction: action });
+        return { response: { intent: selection.intent, action: action ? "pending_confirmation" : "no_match", data: action?.params ?? {}, needs_clarification: false, clarification: null, reply }, handled: true };
+      }
+    }
+
     const intentResult = routeSmartFocusIntent(text, { tasks: get().tasks });
+    const routedAmbiguousTaskIds = intentResult.params.ambiguousTaskIds as string[] | undefined;
+    if (intentResult.needsClarification && routedAmbiguousTaskIds?.length && (
+      intentResult.intent === "move_tasks_to_trash" || intentResult.intent === "shift_tasks_date" || intentResult.intent === "mark_needs_review"
+    )) {
+      pendingCandidateSelection = { intent: intentResult.intent, params: intentResult.params, taskIds: routedAmbiguousTaskIds, source: "ai_workspace", createdAt: Date.now() };
+    }
 
     // Delete → pendingAction
     if (intentResult.intent === "move_tasks_to_trash" && !intentResult.needsClarification) {
@@ -915,6 +1019,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         const previewText = action.affectedPreview.length > 0 ? `\n\n影响任务（前 ${action.affectedPreview.length} 个）：\n${action.affectedPreview.map((t: string) => `• ${t}`).join("\n")}` : "";
         return { response: { intent: "move_tasks_to_trash", action: "pending_confirmation", data: action.params, needs_clarification: false, clarification: null, reply: `${action.summary}${previewText}\n\n请回复「确认」执行，或「取消」放弃。` }, handled: true };
       }
+      return { response: { intent: "move_tasks_to_trash", action: "no_match", data: {}, needs_clarification: false, clarification: null, reply: intentResult.clarificationQuestion ?? "没有找到符合条件的任务。" }, handled: true };
     }
     if (intentResult.intent === "move_tasks_to_trash" && intentResult.needsClarification) {
       return { response: { intent: "move_tasks_to_trash", action: "clarify", data: {}, needs_clarification: true, clarification: intentResult.clarificationQuestion ?? "请说明要删除哪些任务。", reply: intentResult.clarificationQuestion ?? "请说明要删除哪些任务。" }, handled: true };
@@ -928,6 +1033,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         const previewText = action.affectedPreview.length > 0 ? `\n\n影响任务（前 ${action.affectedPreview.length} 个）：\n${action.affectedPreview.map((t: string) => `• ${t}`).join("\n")}` : "";
         return { response: { intent: "shift_tasks_date", action: "pending_confirmation", data: action.params, needs_clarification: false, clarification: null, reply: `${action.summary}${previewText}\n\n请回复「确认」执行，或「取消」放弃。` }, handled: true };
       }
+      return { response: { intent: "shift_tasks_date", action: "no_match", data: {}, needs_clarification: false, clarification: null, reply: intentResult.clarificationQuestion ?? "没有找到符合条件的任务。" }, handled: true };
     }
     if (intentResult.intent === "shift_tasks_date" && intentResult.needsClarification) {
       return { response: { intent: "shift_tasks_date", action: "clarify", data: {}, needs_clarification: true, clarification: intentResult.clarificationQuestion ?? "请说明要顺延哪些任务。", reply: intentResult.clarificationQuestion ?? "请说明要顺延哪些任务。" }, handled: true };

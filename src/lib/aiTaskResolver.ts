@@ -1,0 +1,174 @@
+import type { Task } from "./types";
+import { filterTasksByDate, isInTodayView } from "./aiTools";
+
+export type TaskResolveScope =
+  | { mode: "global" }
+  | { mode: "today_view"; date: string }
+  | { mode: "planned_today"; date: string }
+  | { mode: "yesterday"; date: string }
+  | { mode: "before_today"; date: string };
+
+export type TaskResolveResult =
+  | { status: "matched"; query: string; candidates: Task[]; suggestions: Task[] }
+  | { status: "ambiguous"; query: string; candidates: Task[]; suggestions: Task[] }
+  | { status: "no_match"; query: string; candidates: Task[]; suggestions: Task[] };
+
+const GENERIC_TITLE_WORDS = new Set([
+  "任务",
+  "计划",
+  "待办",
+  "事项",
+  "一个任务",
+  "这个任务",
+  "今天",
+  "今日",
+  "明天",
+  "昨天",
+]);
+
+function stripOuterQuotes(input: string) {
+  return input.replace(/^[\s"'“”‘’「」『』《》]+|[\s"'“”‘’「」『』《》]+$/g, "");
+}
+
+export function normalizeTaskTitleQuery(input: string): string {
+  let text = stripOuterQuotes(input)
+    .replace(/[，。！？；、,.!?;]+$/g, "")
+    .replace(/^\s*(?:名称|名字|标题|题目)\s*(?:是|为|叫|等于|包含)?\s*/u, "")
+    .replace(/^\s*(?:叫|名叫)\s*/u, "")
+    .replace(/^\s*(?:这个|那个|该|此)\s*/u, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const leadingAction = /^(?:删除|删掉|移除|清除|推迟|顺延|往后推|往后延|延期|后移|把|将)\s*/u;
+  text = text.replace(leadingAction, "").trim();
+
+  const suffixes = [
+    /(?:这个|那个|该|此)?(?:任务|计划|待办|事项)$/u,
+    /(?:这个|那个|该|此)(?:任务|计划|待办|事项)?$/u,
+    /的(?:任务|计划|待办|事项)?$/u,
+    /这(?:个)?(?:任务|计划|待办|事项)?$/u,
+  ];
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const suffix of suffixes) {
+      const next = text.replace(suffix, "").trim();
+      if (next && next !== text) {
+        text = next;
+        changed = true;
+      }
+    }
+  }
+
+  return stripOuterQuotes(text);
+}
+
+export function extractTaskTitleQuery(input: string): string | null {
+  const text = input.trim();
+  const patterns = [
+    /(?:名称|名字|标题|题目)\s*(?:是|为|叫|等于|包含)\s*["“”'‘’「」『』《》]?(.+?)(?=["“”'‘’「」『』《》]?(?:，|。|,|\.|；|;|$|往后|推迟|顺延|延期|后移|改到))/u,
+    /(?:叫|名叫)\s*["“”'‘’「」『』《》]?(.+?)(?=["“”'‘’「」『』《》]?(?:的)?(?:任务|计划|待办|事项|，|。|,|\.|；|;|$))/u,
+    /(?:删除|删掉|移除|清除)\s*(?:今天|今日|明天|昨天)?(?:的)?\s*["“”'‘’「」『』《》]?(.+?)(?=["“”'‘’「」『』《》]?(?:的)?(?:任务|计划|待办|事项)?$)/u,
+    /(?:推迟|顺延|往后推|往后延|延期|后移)\s*["“”'‘’「」『』《》]?(.+?)(?=["“”'‘’「」『』《》]?(?:的)?(?:任务|计划|待办|事项)?$)/u,
+    /(?:把|将)\s*(?:今天|今日|明天|昨天)?(?:的)?(?:一个|某个)?\s*["“”'‘’「」『』《》]?(.+?)(?=["“”'‘’「」『』《》]?(?:往后|推迟|顺延|延期|后移|改到))/u,
+    /["“”'‘’「」『』《》]?(.+?)["“”'‘’「」『』《》]?\s*这个(?:任务|计划|待办|事项)?/u,
+    /["“”'‘’「」『』《》]?(.+?)["“”'‘’「」『』《》]?\s*的(?:任务|计划|待办|事项)/u,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    const raw = match?.[1]?.trim();
+    if (!raw) continue;
+    const normalized = normalizeTaskTitleQuery(raw);
+    if (normalized && !GENERIC_TITLE_WORDS.has(normalized)) return normalized;
+  }
+  return null;
+}
+
+function parseTags(task: Task): string[] {
+  try {
+    const parsed = JSON.parse(task.tags);
+    return Array.isArray(parsed) ? parsed.map((item) => `${item}`) : [];
+  } catch {
+    return task.tags
+      .split(/[,，、\s]+/u)
+      .map((tag) => tag.trim())
+      .filter(Boolean);
+  }
+}
+
+function scopeTasks(tasks: Task[], scope: TaskResolveScope): Task[] {
+  const active = tasks.filter((task) => task.status === "todo" && !task.trashed_at);
+  if (scope.mode === "global") return active;
+  if (scope.mode === "today_view") return active.filter((task) => isInTodayView(task, scope.date));
+  if (scope.mode === "planned_today") {
+    return active.filter((task) => task.planned_date?.slice(0, 10) === scope.date);
+  }
+  if (scope.mode === "yesterday") {
+    return filterTasksByDate(active, "planned_or_deadline", "eq", scope.date);
+  }
+  return filterTasksByDate(active, "planned_or_deadline", "lte", scope.date);
+}
+
+function isSpecificShortTitle(title: string) {
+  return title.length >= 2 && title.length <= 12 && !GENERIC_TITLE_WORDS.has(title);
+}
+
+function uniqueTasks(tasks: Task[]) {
+  const seen = new Set<string>();
+  return tasks.filter((task) => {
+    if (seen.has(task.id)) return false;
+    seen.add(task.id);
+    return true;
+  });
+}
+
+export function resolveTaskCandidates(
+  tasks: Task[],
+  rawQuery: string,
+  scope: TaskResolveScope = { mode: "global" },
+): TaskResolveResult {
+  const query = normalizeTaskTitleQuery(rawQuery);
+  const scoped = scopeTasks(tasks, scope);
+  if (!query) {
+    return { status: "no_match", query, candidates: [], suggestions: scoped.slice(0, 5) };
+  }
+
+  const exact = scoped.filter((task) => task.title === query);
+  if (exact.length > 0) {
+    return {
+      status: exact.length === 1 ? "matched" : "ambiguous",
+      query,
+      candidates: exact,
+      suggestions: exact.slice(0, 5),
+    };
+  }
+
+  const titleContains = scoped.filter((task) => task.title.includes(query));
+  const queryContainsTitle = scoped.filter((task) => isSpecificShortTitle(task.title) && query.includes(task.title));
+  const tagContains = scoped.filter((task) => parseTags(task).some((tag) => tag === query || tag.includes(query) || query.includes(tag)));
+  const candidates = uniqueTasks([...titleContains, ...queryContainsTitle, ...tagContains]);
+  const suggestions = uniqueTasks([
+    ...candidates,
+    ...scoped.filter((task) => task.title.includes(query.slice(0, 2)) || query.includes(task.title.slice(0, 2))),
+  ]).slice(0, 5);
+
+  if (candidates.length === 0) return { status: "no_match", query, candidates: [], suggestions };
+  if (candidates.length > 1) return { status: "ambiguous", query, candidates, suggestions: candidates.slice(0, 5) };
+  return { status: "matched", query, candidates, suggestions: candidates };
+}
+
+export function formatNoMatchMessage(query: string, suggestions: Task[] = []) {
+  const lines = [`没有找到名称为「${query}」的任务。`];
+  if (suggestions.length > 0) {
+    lines.push("", "你是不是想操作下面这些任务？", ...suggestions.map((task) => `- ${task.title}`));
+  }
+  return lines.join("\n");
+}
+
+export function formatAmbiguousMessage(query: string, candidates: Task[]) {
+  return [
+    `我找到了多个包含「${query}」的任务，请选择要操作哪一个：`,
+    ...candidates.slice(0, 10).map((task, index) => `${index + 1}. ${task.title}`),
+  ].join("\n");
+}

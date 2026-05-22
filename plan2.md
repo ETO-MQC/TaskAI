@@ -1895,3 +1895,40 @@ prompt 隔离继承：
 
 下一 Sprint 建议：
 - 可以继续进入 Sprint 20B.1，但建议先完成上述 Tauri 手工回归留痕，再开始下一轮功能开发。
+# Sprint 20C.3：AI 任务语义解析与候选任务匹配增强
+
+状态：已完成。
+
+实现范围：
+- 新增 `src/lib/aiTaskResolver.ts`，集中处理任务标题查询归一化、自然语言标题提取、候选任务解析和 no_match / ambiguous 提示。
+- 支持 `normalizeTaskTitleQuery`，可将“正常的任务”归一化为“正常”，将“复习的”归一化为“复习”，并清理“名称是 / 名字叫 / 标题为 / 这个任务 / 这个计划”等查询短语。
+- `resolveTaskCandidates` 支持 title 精确匹配、title includes、query includes title（仅短且非通用词）、tags includes；精确匹配存在时不混入模糊候选。
+- 删除与顺延意图统一走任务候选解析；用户未给日期但给出名称时，按全局未完成且未回收站任务搜索，不再强制追问日期范围。
+- 保留 today_view：用户说“今天/今日任务/今天名称为 XXX 的任务”默认在 today_view 中查找，包括无 planned_date 的未完成任务；只有“计划日期是今天 / planned_date 是今天”才限定 planned_date=today。
+- 修复 0 个任务时仍创建 pendingAction 的问题：空候选不会创建确认卡片，不再出现“将 0 个任务移动到回收站”。
+- 多候选时不随机选择，不创建 pendingAction，回复候选编号列表并等待用户进一步明确。
+- 删除操作继续生成 OperationPreview/pendingAction，确认后调用 `moveTasksToTrash` / `move_task_to_trash`，任务仍进入回收站。
+- 顺延/推迟/往后推/延期/后移/改到明天等自然语言会解析为 `shift_tasks_date`，确认后通过 tool executor 执行，只更新 `planned_date`。
+- Workbench 和 AI Workspace 继续共用 `routeSmartFocusIntent`、`buildPendingActionFromIntent`、`executePendingAction` 链路，行为一致。
+- 未修改 `plan.md`，未进入 Sprint 21，未新增 UI 大改或数据库迁移。
+
+验收结果：
+- `npm run build`：通过。
+- `cargo test`：通过。
+- `git diff --check`：通过。
+
+确认点：
+- 是否新增 aiTaskResolver：是。
+- 是否支持 normalizeTaskTitleQuery：是。
+- 是否支持 title 精确/模糊匹配：是。
+- 是否修复“正常的任务”误解析：是，归一化为“正常”。
+- 是否修复“复习的”误解析：是，归一化为“复习”。
+- 0 个任务是否不再创建 pendingAction：是。
+- 多候选是否会让用户选择：是。
+- 删除和顺延是否都走 OperationPreview：是，单候选进入 pendingAction 确认预览。
+- Workbench 和 AI Workspace 是否一致：是。
+
+剩余 TODO：
+- 可在真实 Tauri 窗口补一轮手工回归：删除名称是正常、删除今天名称是正常的任务、将今天名称为复习的任务往后推一天、多候选编号选择。
+
+---

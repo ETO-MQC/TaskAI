@@ -1,13 +1,13 @@
-/**
- * SmartFocus Intent Router — Sprint 20C
- * Deterministic frontend intent classification with date semantics.
- * Supplements (not replaces) the backend AI response intents.
- */
-
-import type { Task, PendingAction } from "./types";
+import type { PendingAction, Task } from "./types";
 import { filterTasksByDate, type RiskLevel } from "./aiTools";
-
-// ---------- Intent types ----------
+import {
+  extractTaskTitleQuery,
+  formatAmbiguousMessage,
+  formatNoMatchMessage,
+  normalizeTaskTitleQuery,
+  resolveTaskCandidates,
+  type TaskResolveScope,
+} from "./aiTaskResolver";
 
 export type SmartFocusIntent =
   | "chat"
@@ -34,7 +34,15 @@ export interface IntentResult {
   clarificationQuestion?: string;
 }
 
-// ---------- Date helpers ----------
+type DateMode = "planned_or_deadline" | "created_at" | "today_view" | "all";
+type DateOp = "eq" | "gte" | "lte";
+
+interface DateExpression {
+  date: string;
+  operator: DateOp;
+  label: string;
+  fieldHint: DateMode;
+}
 
 function localDateKey(value: Date = new Date()): string {
   const year = value.getFullYear();
@@ -49,473 +57,244 @@ function dateOffset(days: number): string {
   return localDateKey(d);
 }
 
-// ---------- Date expression extraction ----------
-
-interface DateExpression {
-  date: string;
-  operator: "eq" | "gte" | "lte";
-  label: string;
-  fieldHint: "planned_or_deadline" | "created_at" | "today_view";
-}
-
-function extractDateExpressions(text: string): DateExpression[] {
-  const expressions: DateExpression[] = [];
+function extractDateExpression(text: string): DateExpression | null {
   const today = localDateKey();
   const yesterday = dateOffset(-1);
   const tomorrow = dateOffset(1);
 
-  // Explicit created_at expressions: "昨天创建/添加/录入的任务"
-  if (/昨天\s*(创建|添加|录入|新建)/.test(text)) {
-    expressions.push({ date: yesterday, operator: "eq", label: "昨天创建", fieldHint: "created_at" });
-    return expressions;
+  if (/昨天\s*(创建|添加|录入|新建)/u.test(text)) {
+    return { date: yesterday, operator: "eq", label: "昨天创建", fieldHint: "created_at" };
   }
-  if (/今天\s*(创建|添加|录入|新建)/.test(text)) {
-    expressions.push({ date: today, operator: "eq", label: "今天创建", fieldHint: "created_at" });
-    return expressions;
+  if (/今天\s*(创建|添加|录入|新建)/u.test(text)) {
+    return { date: today, operator: "eq", label: "今天创建", fieldHint: "created_at" };
   }
-
-  // "昨天及以前" = planned_date <= yesterday
-  if (/昨天.*(及|以|之)前|昨天.*以前/.test(text)) {
-    expressions.push({ date: yesterday, operator: "lte", label: "昨天及以前", fieldHint: "planned_or_deadline" });
-    return expressions;
+  if (/(?:计划日期|planned_date)\s*(?:是|为|=|等于)\s*(?:今天|今日)/iu.test(text)) {
+    return { date: today, operator: "eq", label: "计划日期今天", fieldHint: "planned_or_deadline" };
   }
-
-  // "明天及以后" / "明天以后" / "从明天开始" = planned_date >= tomorrow
-  if (/明天.*(及|以|之)(后|往)|明天.*以后|从.*明天.*(起|开始)|明天.*往后/.test(text)) {
-    expressions.push({ date: tomorrow, operator: "gte", label: "明天及以后", fieldHint: "planned_or_deadline" });
-    return expressions;
+  if (/昨天.*(?:及以前|之前|以前)|(?:昨天|昨日)以前/u.test(text)) {
+    return { date: yesterday, operator: "lte", label: "昨天及以前", fieldHint: "planned_or_deadline" };
   }
-
-  // "今天及以后" / "从今天往后" = planned_date >= today
-  if (/今天.*(及|以|之)(后|往)|今天.*以后|从.*今天.*(起|开始)|今天.*往后/.test(text)) {
-    expressions.push({ date: today, operator: "gte", label: "今天及以后", fieldHint: "planned_or_deadline" });
-    return expressions;
+  if (/明天.*(?:及以后|以后|之后|往后)|从\s*明天\s*(?:起|开始)/u.test(text)) {
+    return { date: tomorrow, operator: "gte", label: "明天及以后", fieldHint: "planned_or_deadline" };
   }
-
-  // "后天及以后"
-  if (/后天.*(及|以|之)(后|往)|后天.*以后/.test(text)) {
-    expressions.push({ date: dateOffset(2), operator: "gte", label: "后天及以后", fieldHint: "planned_or_deadline" });
-    return expressions;
+  if (/今天.*(?:及以后|以后|之后|往后)|从\s*(?:今天|今日)\s*(?:起|开始)/u.test(text)) {
+    return { date: today, operator: "gte", label: "今天及以后", fieldHint: "planned_or_deadline" };
+  }
+  if (/后天.*(?:及以后|以后|之后)/u.test(text)) {
+    return { date: dateOffset(2), operator: "gte", label: "后天及以后", fieldHint: "planned_or_deadline" };
+  }
+  if (/昨天|昨日/u.test(text)) {
+    return { date: yesterday, operator: "eq", label: "昨天", fieldHint: "planned_or_deadline" };
+  }
+  if (/今天|今日/u.test(text)) {
+    return { date: today, operator: "eq", label: "今天", fieldHint: "today_view" };
+  }
+  if (/明天|明日/u.test(text)) {
+    return { date: tomorrow, operator: "eq", label: "明天", fieldHint: "planned_or_deadline" };
   }
 
-  // Explicit "计划日期是/为今天的" → planned_or_deadline, eq, today
-  if (/计划日期\s*(?:是|为|等于)\s*(?:今天|当日|今天的)/.test(text)) {
-    expressions.push({ date: today, operator: "eq", label: "计划日期为今天", fieldHint: "planned_or_deadline" });
-    return expressions;
-  }
-  // Simple date references: "昨天的任务" / "昨天任务"
-  if (/昨天/.test(text)) {
-    expressions.push({ date: yesterday, operator: "eq", label: "昨天", fieldHint: "planned_or_deadline" });
-    return expressions;
-  }
-  // "今天" without explicit "计划日期" → today_view semantics
-  if (/今天|今日/.test(text)) {
-    expressions.push({ date: today, operator: "eq", label: "今天", fieldHint: "today_view" });
-    return expressions;
-  }
-  if (/明天/.test(text)) {
-    expressions.push({ date: tomorrow, operator: "eq", label: "明天", fieldHint: "planned_or_deadline" });
-    return expressions;
-  }
-
-  // Explicit date: "5月20日" / "5月20号"
-  const explicitDate = text.match(/(\d{1,2})月(\d{1,2})[号日]/);
-  if (explicitDate) {
+  const explicit = text.match(/(\d{1,2})月(\d{1,2})[日号]/u);
+  if (explicit) {
     const year = new Date().getFullYear();
-    const month = String(Number(explicitDate[1])).padStart(2, "0");
-    const day = String(Number(explicitDate[2])).padStart(2, "0");
-    expressions.push({ date: `${year}-${month}-${day}`, operator: "eq", label: `${explicitDate[1]}月${explicitDate[2]}日`, fieldHint: "planned_or_deadline" });
-    return expressions;
+    return {
+      date: `${year}-${String(Number(explicit[1])).padStart(2, "0")}-${String(Number(explicit[2])).padStart(2, "0")}`,
+      operator: "eq",
+      label: `${explicit[1]}月${explicit[2]}日`,
+      fieldHint: "planned_or_deadline",
+    };
   }
-
-  return expressions;
-}
-
-// ---------- Title extraction ----------
-
-function extractTitleFilter(text: string): string | null {
-  // "名称为X" / "标题是X" / "名字是X" / "标题为X" / "名字叫X"
-  const namedMatch = text.match(/(?:名称|标题|名字)(?:为|是|叫|包含)\s*[""「『]?([^""」』\s,，。、]{1,30})[""」』]?/);
-  if (namedMatch) return namedMatch[1].trim();
-  // "叫X的计划" / "叫X的任务"
-  const calledMatch = text.match(/叫\s*[""「『]?([^""」』\s,，。、]{1,30})[""」』]?\s*(?:的|任务|计划|待办)/);
-  if (calledMatch) return calledMatch[1].trim();
   return null;
 }
 
-function applyTitleFilter(tasks: Task[], titleFilter: string): Task[] {
-  // Priority 1: exact match
-  const exact = tasks.filter((t) => t.title === titleFilter);
-  if (exact.length > 0) return exact;
-  // Priority 2: contains match
-  return tasks.filter((t) => t.title.includes(titleFilter));
+function scopeFromDateExpression(dateExpr: DateExpression | null): TaskResolveScope {
+  if (!dateExpr) return { mode: "global" };
+  if (dateExpr.fieldHint === "today_view") return { mode: "today_view", date: dateExpr.date };
+  if (dateExpr.label === "计划日期今天") return { mode: "planned_today", date: dateExpr.date };
+  if (dateExpr.operator === "lte") return { mode: "before_today", date: dateExpr.date };
+  if (dateExpr.label === "昨天") return { mode: "yesterday", date: dateExpr.date };
+  return { mode: "global" };
 }
 
-// ---------- Intent classification patterns ----------
+function activeTasks(tasks: Task[]) {
+  return tasks.filter((task) => task.status === "todo" && !task.trashed_at);
+}
 
-const DELETE_PATTERNS = /删除|清除|移除|删掉|清空|一键删除|批量删除/;
-const TASK_ENTITY_PATTERNS = /任务|计划|待办|安排|事项|东西|所有/;
-const CREATE_TASK_PATTERNS = /明天提醒我|帮我记|创建任务|记一下|帮我创建|新建任务|加一个任务|添加任务/;
-const REMINDER_PATTERNS = /提醒我|设个提醒|提醒一下|闹钟/;
-const TIMER_START_PATTERNS = /开始计时|启动计时|开始专注|番茄钟|专注一下|计时开始/;
-const TIMER_STOP_PATTERNS = /停止计时|结束计时|暂停计时|停止专注/;
-const PLANNING_PATTERNS = /复习计划|考试|大纲|每天学|学习计划|考研|考公|备考|课程学习|资料整理/;
-const SHIFT_PATTERNS = /顺延|往后推|延期|推迟|挪后|往后移|往后调|都往后/;
-const MARK_REVIEW_PATTERNS = /标记待整理|标记\s*待整理|放待整理|先放待整理|暂停.*待整理|待整理/;
-const ADAPTIVE_PATTERNS = /没完成|调整|重排|太满|太多|重新安排/;
-const GREETING_PATTERNS = /^(你好|您好|嗨|哈喽|在吗|早上好|下午好|晚上好|hi|hello|hey)[\s!！。,.，？?]*$/i;
+function matchByDate(tasks: Task[], dateExpr: DateExpression) {
+  return filterTasksByDate(tasks, dateExpr.fieldHint, dateExpr.operator, dateExpr.date).filter((task) => task.status === "todo");
+}
 
-// ---------- Main intent router ----------
-
-export function routeSmartFocusIntent(
-  input: string,
-  context: { tasks: Task[] },
-): IntentResult {
-  const text = input.trim();
-  if (!text) {
-    return { intent: "chat", confidence: 1, params: {}, missingFields: [], riskLevel: "low", needsClarification: false };
-  }
-
-  // 1. Greeting — highest priority, low risk
-  if (GREETING_PATTERNS.test(text)) {
-    return { intent: "chat", confidence: 0.95, params: {}, missingFields: [], riskLevel: "low", needsClarification: false };
-  }
-
-  const hasDelete = DELETE_PATTERNS.test(text);
-  const hasTaskEntity = TASK_ENTITY_PATTERNS.test(text);
-  const hasShift = SHIFT_PATTERNS.test(text);
-  const hasMarkReview = MARK_REVIEW_PATTERNS.test(text);
-  const dateExprs = extractDateExpressions(text);
-  const titleFilter = extractTitleFilter(text);
-
-  // 1b. Shift tasks date — "顺延" / "往后推N天" / "延期N天"
-  if (hasShift && hasTaskEntity) {
-    const shiftMatch = text.match(/(?:顺延|往后推|延期|推迟|挪后|往后移|往后调)\s*(?:了\s*)?(\d+)\s*天/);
-    const shiftDays = shiftMatch ? Number(shiftMatch[1]) : 1;
-    const dateExpr = dateExprs.length > 0 ? dateExprs[0] : null;
-    const params: Record<string, unknown> = { shiftDays };
-    if (dateExpr) {
-      params.dateMode = dateExpr.fieldHint;
-      params.dateOperator = dateExpr.operator;
-      params.targetDate = dateExpr.date;
-      params.dateLabel = dateExpr.label;
-    }
-    if (titleFilter) {
-      params.titleContains = titleFilter;
-    }
-    // Match tasks
-    let matched = context.tasks.filter((t) => t.status !== "archived" && !t.trashed_at);
-    if (dateExpr) {
-      matched = matched.filter((t) => {
-        const dates = [t.planned_date, t.deadline].filter(Boolean).map((d) => d!.slice(0, 10));
-        if (dates.length === 0) return false;
-        if (dateExpr.operator === "eq") return dates.some((d) => d === dateExpr.date);
-        if (dateExpr.operator === "gte") return dates.some((d) => d >= dateExpr.date);
-        if (dateExpr.operator === "lte") return dates.some((d) => d <= dateExpr.date);
-        return false;
-      });
-    }
-    if (titleFilter) {
-      matched = matched.filter((t) => {
-        const exact = matched.filter((tt) => tt.title === titleFilter);
-        if (exact.length > 0) return t.title === titleFilter;
-        return t.title.includes(titleFilter);
-      });
-    }
-    matched = matched.filter((t) => t.status === "todo");
-    params.matchedTaskIds = matched.map((t) => t.id);
-
-    // If no date expression, may need clarification
-    if (!dateExpr && !titleFilter) {
-      return {
-        intent: "shift_tasks_date",
-        confidence: 0.5,
-        params,
-        missingFields: ["scope"],
-        riskLevel: "medium",
-        needsClarification: true,
-        clarificationQuestion: "你是想顺延今天所有任务，还是只顺延某个复习计划？请说明范围。",
-      };
-    }
-    return {
-      intent: "shift_tasks_date",
-      confidence: 0.9,
-      params,
-      missingFields: [],
-      riskLevel: "medium",
-      needsClarification: false,
-    };
-  }
-
-  // 1c. Mark needs review — "标记待整理" / "先放待整理"
-  if (hasMarkReview) {
-    const dateExpr = dateExprs.length > 0 ? dateExprs[0] : null;
-    const params: Record<string, unknown> = {};
-    if (dateExpr) {
-      params.dateMode = dateExpr.fieldHint;
-      params.dateOperator = dateExpr.operator;
-      params.targetDate = dateExpr.date;
-      params.dateLabel = dateExpr.label;
-    }
-    if (titleFilter) {
-      params.titleContains = titleFilter;
-    }
-    let matched = context.tasks.filter((t) => t.status === "todo" && !t.trashed_at);
-    if (dateExpr) {
-      matched = matched.filter((t) => {
-        const dates = [t.planned_date, t.deadline].filter(Boolean).map((d) => d!.slice(0, 10));
-        if (dates.length === 0) return false;
-        if (dateExpr.operator === "eq") return dates.some((d) => d === dateExpr.date);
-        if (dateExpr.operator === "gte") return dates.some((d) => d >= dateExpr.date);
-        if (dateExpr.operator === "lte") return dates.some((d) => d <= dateExpr.date);
-        return false;
-      });
-    }
-    if (titleFilter) {
-      matched = matched.filter((t) => {
-        const exact = matched.filter((tt) => tt.title === titleFilter);
-        if (exact.length > 0) return t.title === titleFilter;
-        return t.title.includes(titleFilter);
-      });
-    }
-    params.matchedTaskIds = matched.map((t) => t.id);
-    return {
-      intent: "mark_needs_review",
-      confidence: 0.85,
-      params,
-      missingFields: [],
-      riskLevel: "low",
-      needsClarification: false,
-    };
-  }
-
-  // 2. Delete intents
-  if (hasDelete) {
-    if (!hasTaskEntity && dateExprs.length === 0) {
-      // Delete but unclear what — ask
-      return {
-        intent: "move_tasks_to_trash",
-        confidence: 0.4,
-        params: {},
-        missingFields: ["target"],
-        riskLevel: "high",
-        needsClarification: true,
-        clarificationQuestion: '请说明要删除哪些任务，比如"昨天的任务"或"所有未完成任务"。',
-      };
-    }
-
-    // Has date expression with lte — "昨天及以前" pattern
-    if (dateExprs.length > 0 && dateExprs[0].operator === "lte") {
-      const de = dateExprs[0];
-      const params: Record<string, unknown> = {
-        dateMode: de.fieldHint,
-        dateOperator: de.operator,
-        targetDate: de.date,
-        dateLabel: de.label,
-        reason: `delete_${de.label}`,
-      };
-      if (titleFilter) params.titleContains = titleFilter;
-      let matched = filterTasksByDate(context.tasks, de.fieldHint, de.operator, de.date);
-      if (titleFilter) {
-        matched = applyTitleFilter(matched, titleFilter);
-      }
-      params.matchedTaskIds = matched.map((t) => t.id);
-      return {
-        intent: "move_tasks_to_trash",
-        confidence: 0.92,
-        params,
-        missingFields: [],
-        riskLevel: "high",
-        needsClarification: false,
-      };
-    }
-
-    // Has date expression with gte — "明天以后" pattern
-    if (dateExprs.length > 0 && dateExprs[0].operator === "gte") {
-      const de = dateExprs[0];
-      const params: Record<string, unknown> = {
-        dateMode: de.fieldHint,
-        dateOperator: de.operator,
-        targetDate: de.date,
-        dateLabel: de.label,
-        reason: `delete_${de.label}`,
-      };
-      if (titleFilter) params.titleContains = titleFilter;
-      let matched = filterTasksByDate(context.tasks, de.fieldHint, de.operator, de.date);
-      if (titleFilter) {
-        matched = applyTitleFilter(matched, titleFilter);
-      }
-      params.matchedTaskIds = matched.map((t) => t.id);
-      return {
-        intent: "move_tasks_to_trash",
-        confidence: 0.92,
-        params,
-        missingFields: [],
-        riskLevel: "high",
-        needsClarification: false,
-      };
-    }
-
-    // Has date expression with eq
-    if (dateExprs.length > 0 && dateExprs[0].operator === "eq") {
-      const de = dateExprs[0];
-      const params: Record<string, unknown> = {
-        dateMode: de.fieldHint,
-        dateOperator: de.operator,
-        targetDate: de.date,
-        dateLabel: de.label,
-        reason: `delete_${de.label}`,
-      };
-      if (titleFilter) params.titleContains = titleFilter;
-      let matched = filterTasksByDate(context.tasks, de.fieldHint, de.operator, de.date);
-      if (titleFilter) {
-        matched = applyTitleFilter(matched, titleFilter);
-      }
-      params.matchedTaskIds = matched.map((t) => t.id);
-      return {
-        intent: "move_tasks_to_trash",
-        confidence: 0.9,
-        params,
-        missingFields: [],
-        riskLevel: "high",
-        needsClarification: false,
-      };
-    }
-
-    // "删除所有未完成任务"
-    if (/未完成/.test(text)) {
-      const matched = context.tasks.filter((t) => t.status === "todo" && !t.trashed_at);
-      return {
-        intent: "move_tasks_to_trash",
-        confidence: 0.95,
-        params: { dateMode: "all", reason: "delete_all_incomplete", matchedTaskIds: matched.map((t) => t.id) },
-        missingFields: [],
-        riskLevel: "high",
-        needsClarification: false,
-      };
-    }
-
-    // "删除所有任务"
-    if (/(所有|全部)\s*(任务|计划|待办)/.test(text)) {
-      const matched = context.tasks.filter((t) => t.status !== "archived" && !t.trashed_at);
-      return {
-        intent: "move_tasks_to_trash",
-        confidence: 0.95,
-        params: { dateMode: "all", reason: "delete_all", matchedTaskIds: matched.map((t) => t.id) },
-        missingFields: [],
-        riskLevel: "high",
-        needsClarification: false,
-      };
-    }
-
-    // Generic delete with task entity but no date — need clarification
-    if (hasTaskEntity && dateExprs.length === 0) {
-      return {
-        intent: "move_tasks_to_trash",
-        confidence: 0.5,
-        params: {},
-        missingFields: ["date"],
-        riskLevel: "high",
-        needsClarification: true,
-        clarificationQuestion: '请明确要删除哪些任务。比如"昨天的任务"、"昨天及以前的计划"、"明天以后的任务"或"所有未完成任务"。',
-      };
-    }
-
-    // Fallback: has delete + task entity
-    return {
-      intent: "move_tasks_to_trash",
-      confidence: 0.6,
-      params: { raw: text },
-      missingFields: [],
-      riskLevel: "high",
-      needsClarification: false,
-    };
-  }
-
-  // 3. Create task
-  if (CREATE_TASK_PATTERNS.test(text)) {
-    return {
-      intent: "create_task",
-      confidence: 0.85,
-      params: { raw: text },
-      missingFields: [],
-      riskLevel: "medium",
-      needsClarification: false,
-    };
-  }
-
-  // 4. Reminder
-  if (REMINDER_PATTERNS.test(text) && !hasDelete) {
-    return {
-      intent: "create_reminder",
-      confidence: 0.8,
-      params: { raw: text },
-      missingFields: [],
-      riskLevel: "medium",
-      needsClarification: false,
-    };
-  }
-
-  // 5. Timer start
-  if (TIMER_START_PATTERNS.test(text)) {
-    return {
-      intent: "start_timer",
-      confidence: 0.85,
-      params: { raw: text },
-      missingFields: [],
-      riskLevel: "low",
-      needsClarification: false,
-    };
-  }
-
-  // 6. Timer stop
-  if (TIMER_STOP_PATTERNS.test(text)) {
-    return {
-      intent: "stop_timer",
-      confidence: 0.85,
-      params: {},
-      missingFields: [],
-      riskLevel: "low",
-      needsClarification: false,
-    };
-  }
-
-  // 7. Planning
-  if (PLANNING_PATTERNS.test(text)) {
-    return {
-      intent: "planning",
-      confidence: 0.8,
-      params: { raw: text },
-      missingFields: [],
-      riskLevel: "low",
-      needsClarification: false,
-    };
-  }
-
-  // 8. Adaptive reschedule
-  if (ADAPTIVE_PATTERNS.test(text)) {
-    return {
-      intent: "adaptive_reschedule",
-      confidence: 0.8,
-      params: { raw: text },
-      missingFields: [],
-      riskLevel: "low",
-      needsClarification: false,
-    };
-  }
-
-  // 9. Low confidence — could be chat or unrecognized intent
+function makeNoMatchResult(intent: SmartFocusIntent, query: string, suggestions: Task[], riskLevel: RiskLevel): IntentResult {
   return {
-    intent: "unknown",
-    confidence: 0.3,
-    params: { raw: text },
+    intent,
+    confidence: 0.9,
+    params: { titleContains: query, resolverStatus: "no_match", matchedTaskIds: [] },
+    missingFields: ["target"],
+    riskLevel,
+    needsClarification: true,
+    clarificationQuestion: formatNoMatchMessage(query, suggestions),
+  };
+}
+
+function makeAmbiguousResult(intent: SmartFocusIntent, query: string, candidates: Task[], riskLevel: RiskLevel, params: Record<string, unknown>): IntentResult {
+  return {
+    intent,
+    confidence: 0.9,
+    params: { ...params, titleContains: query, resolverStatus: "ambiguous", ambiguousTaskIds: candidates.map((task) => task.id), matchedTaskIds: [] },
+    missingFields: ["target"],
+    riskLevel,
+    needsClarification: true,
+    clarificationQuestion: formatAmbiguousMessage(query, candidates),
+  };
+}
+
+function resolveTitleTarget(
+  intent: "move_tasks_to_trash" | "shift_tasks_date" | "mark_needs_review",
+  text: string,
+  tasks: Task[],
+  dateExpr: DateExpression | null,
+  baseParams: Record<string, unknown>,
+  riskLevel: RiskLevel,
+): IntentResult | null {
+  const rawQuery = extractTaskTitleQuery(text);
+  if (!rawQuery) return null;
+
+  const result = resolveTaskCandidates(tasks, rawQuery, scopeFromDateExpression(dateExpr));
+  const params: Record<string, unknown> = { ...baseParams, titleContains: result.query };
+  if (dateExpr) {
+    params.dateMode = dateExpr.fieldHint;
+    params.dateOperator = dateExpr.operator;
+    params.targetDate = dateExpr.date;
+    params.dateLabel = dateExpr.label;
+  } else {
+    params.dateMode = "all";
+  }
+
+  if (result.status === "no_match") return makeNoMatchResult(intent, result.query, result.suggestions, riskLevel);
+  if (result.status === "ambiguous") return makeAmbiguousResult(intent, result.query, result.candidates, riskLevel, params);
+
+  return {
+    intent,
+    confidence: 0.95,
+    params: { ...params, matchedTaskIds: result.candidates.map((task) => task.id), resolverStatus: "matched" },
     missingFields: [],
-    riskLevel: "low",
+    riskLevel,
     needsClarification: false,
   };
 }
 
-// ---------- PendingAction builder from intent ----------
+function extractShiftDays(text: string) {
+  if (/两天|2\s*天/u.test(text)) return 2;
+  if (/三天|3\s*天/u.test(text)) return 3;
+  const match = text.match(/(\d+)\s*天/u);
+  return match ? Math.max(1, Number(match[1])) : 1;
+}
+
+const DELETE_RE = /删除|删掉|移除|清除|清空|扔进回收站/u;
+const SHIFT_RE = /推迟|顺延|往后推|往后延|延期|后移|改到明天/u;
+const MARK_REVIEW_RE = /标记待整理|放待整理|待整理/u;
+const CREATE_RE = /创建任务|新建任务|加一个任务|添加任务|记一个/u;
+const REMINDER_RE = /提醒|闹钟/u;
+const TIMER_START_RE = /开始计时|启动计时|开始专注|番茄钟/u;
+const TIMER_STOP_RE = /停止计时|结束计时|暂停计时|停止专注/u;
+const PLANNING_RE = /复习计划|考试|大纲|学习计划|考研|考公|课程学习|资料整理/u;
+const ADAPTIVE_RE = /没完成|调整|重排|太满|太多|重新安排/u;
+const GREETING_RE = /^(你好|您好|嗨|在吗|早上好|下午好|晚上好|hi|hello|hey)[\s!！。.?？]*$/iu;
+
+export function routeSmartFocusIntent(input: string, context: { tasks: Task[] }): IntentResult {
+  const text = input.trim();
+  if (!text) return { intent: "chat", confidence: 1, params: {}, missingFields: [], riskLevel: "low", needsClarification: false };
+  if (GREETING_RE.test(text)) return { intent: "chat", confidence: 0.95, params: {}, missingFields: [], riskLevel: "low", needsClarification: false };
+
+  const dateExpr = extractDateExpression(text);
+
+  if (SHIFT_RE.test(text)) {
+    const shiftDays = extractShiftDays(text);
+    const byTitle = resolveTitleTarget("shift_tasks_date", text, context.tasks, dateExpr, { shiftDays }, "medium");
+    if (byTitle) return byTitle;
+    if (!dateExpr) {
+      return {
+        intent: "shift_tasks_date",
+        confidence: 0.55,
+        params: { shiftDays },
+        missingFields: ["target"],
+        riskLevel: "medium",
+        needsClarification: true,
+        clarificationQuestion: "请说明要顺延哪一个任务，或给出任务名称。",
+      };
+    }
+    const matched = matchByDate(context.tasks, dateExpr);
+    return {
+      intent: "shift_tasks_date",
+      confidence: 0.88,
+      params: { shiftDays, dateMode: dateExpr.fieldHint, dateOperator: dateExpr.operator, targetDate: dateExpr.date, dateLabel: dateExpr.label, matchedTaskIds: matched.map((task) => task.id) },
+      missingFields: [],
+      riskLevel: "medium",
+      needsClarification: false,
+    };
+  }
+
+  if (MARK_REVIEW_RE.test(text)) {
+    const byTitle = resolveTitleTarget("mark_needs_review", text, context.tasks, dateExpr, {}, "low");
+    if (byTitle) return byTitle;
+  }
+
+  if (DELETE_RE.test(text)) {
+    const byTitle = resolveTitleTarget("move_tasks_to_trash", text, context.tasks, dateExpr, { reason: "intent_router_delete" }, "high");
+    if (byTitle) return byTitle;
+
+    if (/未完成/u.test(text)) {
+      const matched = activeTasks(context.tasks);
+      return {
+        intent: "move_tasks_to_trash",
+        confidence: 0.95,
+        params: { dateMode: "all", reason: "delete_all_incomplete", matchedTaskIds: matched.map((task) => task.id) },
+        missingFields: [],
+        riskLevel: "high",
+        needsClarification: false,
+      };
+    }
+    if (/全部|所有/u.test(text)) {
+      const matched = activeTasks(context.tasks);
+      return {
+        intent: "move_tasks_to_trash",
+        confidence: 0.95,
+        params: { dateMode: "all", reason: "delete_all", matchedTaskIds: matched.map((task) => task.id) },
+        missingFields: [],
+        riskLevel: "high",
+        needsClarification: false,
+      };
+    }
+    if (dateExpr) {
+      const matched = matchByDate(context.tasks, dateExpr);
+      return {
+        intent: "move_tasks_to_trash",
+        confidence: 0.9,
+        params: { dateMode: dateExpr.fieldHint, dateOperator: dateExpr.operator, targetDate: dateExpr.date, dateLabel: dateExpr.label, reason: `delete_${dateExpr.label}`, matchedTaskIds: matched.map((task) => task.id) },
+        missingFields: [],
+        riskLevel: "high",
+        needsClarification: false,
+      };
+    }
+    return {
+      intent: "move_tasks_to_trash",
+      confidence: 0.5,
+      params: {},
+      missingFields: ["target"],
+      riskLevel: "high",
+      needsClarification: true,
+      clarificationQuestion: "请给出要删除的任务名称，或说明具体范围。",
+    };
+  }
+
+  if (CREATE_RE.test(text)) return { intent: "create_task", confidence: 0.85, params: { raw: text }, missingFields: [], riskLevel: "medium", needsClarification: false };
+  if (REMINDER_RE.test(text)) return { intent: "create_reminder", confidence: 0.8, params: { raw: text }, missingFields: [], riskLevel: "medium", needsClarification: false };
+  if (TIMER_START_RE.test(text)) return { intent: "start_timer", confidence: 0.85, params: { raw: text }, missingFields: [], riskLevel: "low", needsClarification: false };
+  if (TIMER_STOP_RE.test(text)) return { intent: "stop_timer", confidence: 0.85, params: {}, missingFields: [], riskLevel: "low", needsClarification: false };
+  if (PLANNING_RE.test(text)) return { intent: "planning", confidence: 0.8, params: { raw: text }, missingFields: [], riskLevel: "low", needsClarification: false };
+  if (ADAPTIVE_RE.test(text)) return { intent: "adaptive_reschedule", confidence: 0.8, params: { raw: text }, missingFields: [], riskLevel: "low", needsClarification: false };
+
+  return { intent: "unknown", confidence: 0.3, params: { raw: text }, missingFields: [], riskLevel: "low", needsClarification: false };
+}
 
 export function buildPendingActionFromIntent(
   intentResult: IntentResult,
@@ -524,23 +303,26 @@ export function buildPendingActionFromIntent(
 ): PendingAction | null {
   if (intentResult.needsClarification) return null;
 
-  const matchedIds = (intentResult.params.matchedTaskIds as string[]) ?? [];
-  const matchedTasks = tasks.filter((t) => matchedIds.includes(t.id));
-  const dateLabel = intentResult.params.dateLabel as string ?? "";
-  const titleFilter = intentResult.params.titleContains as string | undefined;
+  const matchedIds = ((intentResult.params.matchedTaskIds as string[]) ?? []).filter(Boolean);
+  if (matchedIds.length === 0) return null;
 
-  // --- shift_tasks_date ---
+  const matchedTasks = tasks.filter((task) => matchedIds.includes(task.id));
+  if (matchedTasks.length === 0) return null;
+
+  const dateLabel = (intentResult.params.dateLabel as string | undefined) ?? "";
+  const titleFilter = intentResult.params.titleContains as string | undefined;
+  const titleDesc = titleFilter ? `名称为「${normalizeTaskTitleQuery(titleFilter)}」` : dateLabel || "指定范围";
+
   if (intentResult.intent === "shift_tasks_date") {
-    const shiftDays = intentResult.params.shiftDays as number ?? 1;
-    const filterDesc = titleFilter ? `名称包含「${titleFilter}」` : dateLabel || "指定范围";
+    const shiftDays = (intentResult.params.shiftDays as number | undefined) ?? 1;
     return {
       id: crypto.randomUUID(),
       type: "shift_tasks_date",
       toolName: "shift_tasks_date",
       params: { ...intentResult.params, shiftDays },
-      summary: `将 ${filterDesc}的 ${matchedTasks.length} 个任务顺延 ${shiftDays} 天。`,
+      summary: `将${titleDesc}的 ${matchedTasks.length} 个任务顺延 ${shiftDays} 天。`,
       affectedCount: matchedTasks.length,
-      affectedPreview: matchedTasks.slice(0, 5).map((t) => t.title),
+      affectedPreview: matchedTasks.slice(0, 5).map((task) => task.title),
       taskIds: matchedIds,
       riskLevel: "medium",
       source,
@@ -549,17 +331,15 @@ export function buildPendingActionFromIntent(
     };
   }
 
-  // --- mark_needs_review ---
   if (intentResult.intent === "mark_needs_review") {
-    const filterDesc = titleFilter ? `名称包含「${titleFilter}」` : dateLabel || "指定任务";
     return {
       id: crypto.randomUUID(),
       type: "mark_needs_review",
       toolName: "mark_needs_review",
       params: intentResult.params,
-      summary: `将 ${filterDesc}的 ${matchedTasks.length} 个任务标记为待整理。`,
+      summary: `将${titleDesc}的 ${matchedTasks.length} 个任务标记为待整理。`,
       affectedCount: matchedTasks.length,
-      affectedPreview: matchedTasks.slice(0, 5).map((t) => t.title),
+      affectedPreview: matchedTasks.slice(0, 5).map((task) => task.title),
       taskIds: matchedIds,
       riskLevel: "low",
       source,
@@ -568,36 +348,18 @@ export function buildPendingActionFromIntent(
     };
   }
 
-  // --- move_tasks_to_trash ---
   if (intentResult.intent !== "move_tasks_to_trash") return null;
 
-  let summary: string;
-  const titleDesc = titleFilter ? `名称包含「${titleFilter}」且` : "";
-  if (intentResult.params.dateMode === "today_view") {
-    const filterDesc = titleFilter ? `名称为「${titleFilter}」的` : "";
-    summary = `将今日视图中${filterDesc} ${matchedTasks.length} 个任务移动到回收站，可恢复。`;
-  } else if (intentResult.params.dateMode === "created_at" && intentResult.params.dateOperator === "eq") {
-    summary = `将 ${titleDesc}${dateLabel}的 ${matchedTasks.length} 个任务移动到回收站，可恢复。`;
-  } else if (intentResult.params.dateOperator === "gte") {
-    summary = `将 ${titleDesc}${dateLabel}的 ${matchedTasks.length} 个任务移动到回收站，可恢复。`;
-  } else if (intentResult.params.reason === "delete_all_incomplete") {
-    summary = `将 ${matchedTasks.length} 个未完成任务移动到回收站，可恢复。`;
-  } else if (intentResult.params.reason === "delete_all") {
-    summary = `将全部 ${matchedTasks.length} 个任务移动到回收站，可恢复。这是高风险操作。`;
-  } else {
-    summary = `将 ${matchedTasks.length} 个任务移动到回收站，可恢复。`;
-  }
-
+  const summary = titleFilter
+    ? `将${titleDesc}的 ${matchedTasks.length} 个任务移动到回收站，可恢复。`
+    : `将 ${matchedTasks.length} 个任务移动到回收站，可恢复。`;
   return {
     id: crypto.randomUUID(),
     type: "batch_delete",
-    params: {
-      ...intentResult.params,
-      reason: intentResult.params.reason ?? "intent_router_delete",
-    },
+    params: { ...intentResult.params, reason: intentResult.params.reason ?? "intent_router_delete" },
     summary,
     affectedCount: matchedTasks.length,
-    affectedPreview: matchedTasks.slice(0, 5).map((t) => t.title),
+    affectedPreview: matchedTasks.slice(0, 5).map((task) => task.title),
     taskIds: matchedIds,
     riskLevel: "high",
     source,
@@ -606,10 +368,8 @@ export function buildPendingActionFromIntent(
   };
 }
 
-// ---------- Confirm/cancel detection ----------
-
-const CONFIRM_RE = /^(确认|是|执行|确认删除|继续|好|yes|ok|确定|执行吧|删吧|干吧|走|do|可以|对|没错|就这样|确认执行)$/;
-const CANCEL_RE = /^(取消|不要|算了|不了|不执行|取消操作|cancel|no|不|停止|别删|先不做)$/;
+const CONFIRM_RE = /^(确认|是|执行|确认删除|继续|好的|yes|ok|确定|执行吧|删吧|可以|对|没错|就这样|确认执行)$/iu;
+const CANCEL_RE = /^(取消|不要|算了|不了|不执行|取消操作|cancel|no|不|停止|别删|先不做)$/iu;
 
 export function isConfirmKeyword(text: string): boolean {
   return CONFIRM_RE.test(text.trim());
@@ -619,14 +379,11 @@ export function isCancelKeyword(text: string): boolean {
   return CANCEL_RE.test(text.trim());
 }
 
-// ---------- General chat detection ----------
-
 export function isGeneralChatIntent(text: string): boolean {
   const normalized = text.trim().toLowerCase();
   if (!normalized) return false;
-  if (/^(hi|hello|hey|你好|您好|嗨|哈喽|在吗|早上好|下午好|晚上好)[\s!！。,.，？?]*$/.test(normalized)) return true;
-  if (/^(谢谢|多谢|辛苦了|好的|好|ok|嗯|收到|明白)[\s!！。,.，？?]*$/.test(normalized)) return true;
-  if (/^(你是谁|你能做什么|怎么用|介绍一下|帮助|help)[\s!！。,.，？?]*$/.test(normalized)) return true;
-  const planningIntent = /计划|安排|任务|提醒|截止|考试|复习|学习|大纲|目录|资料|没完成|调整|顺延|重新安排|番茄|计时|创建|记录|删除|清除/.test(normalized);
+  if (/^(hi|hello|hey|你好|您好|嗨|在吗|早上好|下午好|晚上好)[\s!！。.?？]*$/iu.test(normalized)) return true;
+  if (/^(谢谢|多谢|辛苦了|好的|ok|收到|明白)[\s!！。.?？]*$/iu.test(normalized)) return true;
+  const planningIntent = /计划|安排|任务|提醒|截止|考试|复习|学习|大纲|资料|调整|顺延|重新安排|番茄|计时|创建|记录|删除|清除/u.test(normalized);
   return normalized.length <= 24 && !planningIntent;
 }
