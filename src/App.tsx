@@ -1280,6 +1280,120 @@ function WorkbenchView() {
   );
 }
 
+function OperationPreviewCard({
+  compact = false,
+  onConfirm,
+  onCancel,
+}: {
+  compact?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const pendingAction = useAppStore((s) => s.pendingAction);
+  if (!pendingAction) return null;
+
+  const typeLabel: Record<PendingAction["type"], string> = {
+    batch_delete: "移动到回收站",
+    shift_tasks_date: "顺延任务",
+    mark_needs_review: "标记待整理",
+    batch_update: "修改任务",
+    dangerous_operation: "危险操作",
+  };
+
+  const riskText: Record<PendingAction["type"], string> = {
+    batch_delete: "任务将移入回收站，可随时恢复。",
+    shift_tasks_date: `任务计划日期将顺延 ${((pendingAction.params.shiftDays as number) ?? 1)} 天。`,
+    mark_needs_review: "将为任务追加「待整理」标签。",
+    batch_update: "将批量修改任务属性。",
+    dangerous_operation: "此操作具有较高风险，请确认。",
+  };
+
+  return (
+    <div className={`op-preview-card glass-inset mr-auto space-y-2 rounded-xl border border-[var(--neon-amber)]/30 p-3 text-sm ${compact ? "max-w-[78%]" : "max-w-[82%]"}`}>
+      <div className="flex items-center gap-2">
+        <span className="text-[var(--neon-amber)]">待确认操作</span>
+        <span className="rounded-full border border-white/10 px-2 py-0.5 text-xs text-[var(--muted-foreground)]">
+          {typeLabel[pendingAction.type] ?? pendingAction.type}
+        </span>
+      </div>
+      <p className="leading-relaxed">{pendingAction.summary}</p>
+      {pendingAction.affectedCount > 0 && (
+        <p className="text-xs text-[var(--muted-foreground)]">
+          影响 {pendingAction.affectedCount} 个任务
+        </p>
+      )}
+      {pendingAction.affectedPreview.length > 0 && (
+        <ul className="text-xs text-[var(--muted-foreground)] space-y-0.5">
+          {pendingAction.affectedPreview.map((title, i) => (
+            <li key={i} className="flex items-center gap-1.5">
+              <span className="inline-block h-1 w-1 rounded-full bg-[var(--muted-foreground)]" />
+              {title}
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="text-xs text-[var(--muted-foreground)]">
+        {riskText[pendingAction.type] ?? "请确认是否执行此操作。"}
+      </p>
+      <div className="op-preview-actions flex flex-wrap gap-2 pt-1">
+        <button
+          className={`op-preview-btn-confirm rounded-lg px-3 py-1.5 text-xs font-semibold ${pendingAction.riskLevel === "high" ? "btn-glow op-btn-high-risk" : "btn-glow"}`}
+          type="button"
+          onClick={onConfirm}
+        >
+          确认执行
+        </button>
+        <button
+          className="op-preview-btn-cancel glass-inset rounded-lg px-3 py-1.5 text-xs"
+          type="button"
+          onClick={onCancel}
+        >
+          取消
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CandidateSelectionCard({
+  compact = false,
+  onSelected,
+}: {
+  compact?: boolean;
+  onSelected: (index: number, resultMsg: string) => void;
+}) {
+  const getPendingCandidates = useAppStore((s) => s.getPendingCandidates);
+  const selectCandidate = useAppStore((s) => s.selectCandidate);
+  const candidates = getPendingCandidates();
+  if (!candidates || candidates.taskTitles.length <= 1) return null;
+
+  return (
+    <div className={`candidate-selection-card glass-inset mr-auto space-y-2 rounded-xl p-3 text-sm ${compact ? "max-w-[78%]" : "max-w-[82%]"}`}>
+      <p className="text-xs text-[var(--muted-foreground)]">
+        请选择要操作的任务：
+      </p>
+      <div className="candidate-selection-list space-y-1">
+        {candidates.taskTitles.map((title, index) => (
+          <button
+            key={index}
+            className="candidate-selection-item glass-inset flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs transition-all hover:border-[var(--ring)] hover:shadow-[var(--shadow-glow-blue)]"
+            type="button"
+            onClick={async () => {
+              const resultMsg = await selectCandidate(index);
+              onSelected(index, resultMsg);
+            }}
+          >
+            <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-white/10 text-[10px] font-semibold text-[var(--neon-violet)]">
+              {index + 1}
+            </span>
+            <span className="min-w-0 flex-1 truncate">{title}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function AiPanel({
   embedded = false,
   draftPrompt,
@@ -1289,7 +1403,7 @@ function AiPanel({
   draftPrompt?: string;
   onResponse?: (response: unknown) => void;
 }) {
-  const { aiMessages, setAiOpen, sendAi, setAiMessages } = useAppStore();
+  const { aiMessages, setAiOpen, sendAi, setAiMessages, pendingAction, executePendingAction, setPendingAction } = useAppStore();
   const [input, setInput] = useState("");
   const [listening, setListening] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -1415,6 +1529,41 @@ function AiPanel({
           ))
         )}
       </div>
+      {pendingAction && (
+        <div className="shrink-0 pt-2">
+          <OperationPreviewCard
+            compact
+            onConfirm={async () => {
+              const summary = pendingAction.summary;
+              setPendingAction(null);
+              const nextUser = [...aiMessages, { role: "user", content: "确认" }].slice(-50) as typeof aiMessages;
+              setAiMessages(nextUser);
+              const result = await executePendingAction();
+              const resultMsg = result?.resultMsg ?? "已确认执行。";
+              const nextAll = [...nextUser, { role: "assistant", content: `${summary}\n\n${resultMsg}` }].slice(-50) as typeof aiMessages;
+              setAiMessages(nextAll);
+              showToast(resultMsg);
+            }}
+            onCancel={() => {
+              setPendingAction(null);
+              const next = [...aiMessages, { role: "assistant", content: "已取消当前待确认操作。" }].slice(-50) as typeof aiMessages;
+              setAiMessages(next);
+              showToast("已取消。");
+            }}
+          />
+        </div>
+      )}
+      {!pendingAction && (
+        <div className="shrink-0 pt-2">
+          <CandidateSelectionCard
+            compact
+            onSelected={(_index, resultMsg) => {
+              const next = [...aiMessages, { role: "assistant", content: resultMsg }].slice(-50) as typeof aiMessages;
+              setAiMessages(next);
+            }}
+          />
+        </div>
+      )}
       <form
         className="mt-auto mb-0 grid shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] gap-3 pt-4"
         onSubmit={(event) => {
@@ -1976,23 +2125,30 @@ function AiView() {
               />
             ))}
             {pendingAction && !loading && (
-              <div className="glass-inset mr-auto max-w-[82%] space-y-2 rounded-xl border border-[var(--neon-amber)]/30 p-3 text-sm">
-                <p className="text-[var(--neon-amber)]">⚠️ 待确认操作</p>
-                <p>{pendingAction.summary}</p>
-                {pendingAction.affectedCount > 0 && (
-                  <p className="text-xs text-[var(--muted-foreground)]">影响 {pendingAction.affectedCount} 个任务</p>
-                )}
-                {pendingAction.affectedPreview.length > 0 && (
-                  <ul className="text-xs text-[var(--muted-foreground)] space-y-0.5">
-                    {pendingAction.affectedPreview.map((title, i) => <li key={i}>• {title}</li>)}
-                  </ul>
-                )}
-                <p className="text-xs text-[var(--muted-foreground)]">将任务移动到回收站，可在回收站恢复。</p>
-                <div className="flex gap-2 pt-1">
-                  <button className="btn-glow rounded-lg px-3 py-1.5 text-xs font-semibold" type="button" onClick={() => { void executePendingAction(pendingAction); }}>确认执行</button>
-                  <button className="glass-inset rounded-lg px-3 py-1.5 text-xs" type="button" onClick={() => { setPendingAction(null); showToast("已取消。"); }}>取消</button>
-                </div>
-              </div>
+              <OperationPreviewCard
+                onConfirm={async () => {
+                  const summary = pendingAction.summary;
+                  setPendingAction(null);
+                  await appendVisibleAiMessage("user", "确认");
+                  // Use store's executePendingAction for all action types
+                  const storeResult = await useAppStore.getState().executePendingAction();
+                  const resultMsg = storeResult?.resultMsg ?? "已确认执行。";
+                  await appendVisibleAiMessage("assistant", resultMsg);
+                  showToast(resultMsg);
+                }}
+                onCancel={async () => {
+                  setPendingAction(null);
+                  await appendVisibleAiMessage("assistant", "已取消当前待确认操作。");
+                  showToast("已取消。");
+                }}
+              />
+            )}
+            {!pendingAction && !loading && (
+              <CandidateSelectionCard
+                onSelected={async (_index, resultMsg) => {
+                  await appendVisibleAiMessage("assistant", resultMsg);
+                }}
+              />
             )}
             {thinkingLabel && (
               <div className="chat-bubble chat-bubble-ai glass-inset mr-auto inline-flex items-center gap-2 rounded-xl text-sm leading-6">

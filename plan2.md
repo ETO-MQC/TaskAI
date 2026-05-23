@@ -411,11 +411,94 @@ Phase 2 目标是在一期稳定基础上继续增强产品深度：
 
 ## 3. 当前执行 Sprint
 
-当前执行：Hotfix Sprint 20C.2 AI 日期语义补强、日历/统计布局收口、Workbench AI 响应式修复
+当前执行：Hotfix Sprint 20C.4：AI 操作预览卡片按钮化
 
 状态：已完成
 
 ## 4. Phase 2 Sprint 列表
+
+### Hotfix Sprint 20C.4：AI 操作预览卡片按钮化
+
+状态：已完成。
+
+实现范围：
+
+一、OperationPreviewCard 组件：
+- 新增 `OperationPreviewCard` React 组件，在 AI 对话消息流中渲染待确认操作的预览卡片。
+- 展示操作类型（移动到回收站 / 顺延任务 / 标记待整理 / 修改任务）、影响任务数量、前 5 个任务预览、风险提示。
+- 两个按钮：确认执行、取消。
+- 高风险操作（batch_delete）的确认按钮使用偏红警示渐变样式（`op-btn-high-risk`），低强调取消按钮。
+- 支持 `compact` 模式（Workbench 小卡片空间紧凑）。
+
+二、确认按钮直接执行：
+- 点击"确认执行"直接调用 `store.executePendingAction()`，不把"确认"作为文本再发给模型。
+- 使用 `pendingAction.taskIds` 中已保存的任务 ID，不重新解析任务。
+- 执行后清空 `pendingAction`，刷新 tasks / calendar / trash。
+- 聊天区追加结果消息。
+
+三、取消按钮：
+- 点击"取消"清空 `pendingAction`，聊天区追加"已取消当前待确认操作。"。
+
+四、文字确认保留：
+- 用户仍可输入"确认"、"是"、"执行"、"继续"、"取消"、"不要"、"算了"等关键词执行确认/取消。
+- 按钮只是更好的交互方式，不替代文字确认。
+
+五、Workbench 和 AI Workspace 双入口支持：
+- AiPanel（Workbench 小卡片）使用 `compact` 模式渲染 `OperationPreviewCard`。
+- AiView（AI Workspace）使用完整模式渲染 `OperationPreviewCard`。
+- 两者共用 `executePendingAction`、`setPendingAction`。
+
+六、多候选选择按钮化（增强项）：
+- 新增 `CandidateSelectionCard` 组件，当找到多个候选任务时，显示可点击的选择按钮。
+- 每个候选显示编号和任务标题，点击直接调用 `store.selectCandidate(index)`。
+- 选择后自动生成 `pendingAction` 并显示 `OperationPreviewCard`。
+- 通过 `pendingCandidatesVersion` 状态跟踪候选变化，确保 UI 响应式更新。
+- AiPanel 和 AiView 均支持候选选择按钮。
+
+七、CSS 样式：
+- 新增 `.op-preview-card`、`.op-preview-actions`、`.op-btn-high-risk`、`.op-preview-btn-cancel` 样式。
+- 新增 `.candidate-selection-card`、`.candidate-selection-list`、`.candidate-selection-item` 样式。
+- 使用当前深色玻璃主题，不使用白底，不破坏消息气泡布局。
+- 小屏下按钮可换行（`flex-wrap`），480px 以下缩小间距和内边距。
+
+验收结果：
+- `npm run build`：通过。
+- `cargo test`：通过（3 测试均通过）。
+- `git diff --check`：通过。
+- `plan.md`：未修改。
+
+是否新增 OperationPreviewCard：
+- 是。在 `src/App.tsx` 中新增 `OperationPreviewCard` 组件。
+
+删除确认是否可以点按钮：
+- 是。点击"确认执行"直接调用 `store.executePendingAction()`，任务进入回收站。
+
+顺延确认是否可以点按钮：
+- 是。`shift_tasks_date` 类型同样通过 `OperationPreviewCard` 的确认按钮执行。
+
+是否保留文字确认：
+- 是。"确认"、"是"、"执行"、"取消"、"不要"等关键词仍然有效。
+
+Workbench 和 AI Workspace 是否都支持：
+- 是。AiPanel 使用 compact 模式，AiView 使用完整模式。
+
+点击确认是否直接执行 toolExecutor：
+- 是。调用 `store.executePendingAction()`，内部根据 `action.type` 调用对应的 `executeTool`。
+
+点击取消是否清空 pendingAction：
+- 是。调用 `setPendingAction(null)`。
+
+剩余 TODO：
+- 在真实 Tauri 窗口中验证：输入"删除名称是正常"→ 显示预览卡片 → 点击确认执行 → 任务进入回收站。
+- 在真实 Tauri 窗口中验证：输入"删除名称是正常"→ 点击取消 → 不删除任务。
+- 在真实 Tauri 窗口中验证：输入"将今天的一个任务，名称为复习的，往后推迟一天"→ 显示顺延预览卡片 → 点击确认 → planned_date 顺延。
+- 在真实 Tauri 窗口中验证：多候选时显示选择按钮，点击后生成 pendingAction。
+- 验证 Workbench 小卡片和 AI Workspace 均正常显示预览卡片。
+
+下一 Sprint 建议：
+- Sprint 20C.4 验收后，可以继续进入 Sprint 21（测试、打包与发布验收）或继续增强 AI Tool Orchestrator 的边界覆盖。
+
+---
 
 ### Hotfix Sprint 20C.2：AI 日期语义补强、日历/统计布局收口、Workbench AI 响应式修复
 

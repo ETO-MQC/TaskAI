@@ -128,6 +128,9 @@ interface AppStore {
   deleteTaskPermanently: (id: string) => Promise<void>;
   setPendingAction: (action: PendingAction | null) => void;
   executePendingAction: () => Promise<{ successCount: number; failCount: number; resultMsg: string } | null>;
+  getPendingCandidates: () => { taskTitles: string[]; intent: string } | null;
+  selectCandidate: (index: number) => Promise<string>;
+  pendingCandidatesVersion: number;
   submitAiMessage: (input: string, source: "workbench" | "ai_workspace") => Promise<void>;
   selectTask: (id: string | null) => void;
   startFocus: (task: Task, mode?: TimerMode) => Promise<void>;
@@ -655,6 +658,31 @@ export const useAppStore = create<AppStore>((set, get) => ({
     await get().loadTrashedTasks();
   },
   setPendingAction: (pendingAction) => set({ pendingAction }),
+  pendingCandidatesVersion: 0,
+  getPendingCandidates: () => {
+    if (!pendingCandidateSelection) return null;
+    const tasks = get().tasks;
+    const taskTitles = pendingCandidateSelection.taskIds.map((id) => {
+      const task = tasks.find((t) => t.id === id);
+      return task?.title ?? id;
+    });
+    return { taskTitles, intent: pendingCandidateSelection.intent };
+  },
+  selectCandidate: async (index) => {
+    const sel = pendingCandidateSelection;
+    if (!sel || index < 0 || index >= sel.taskIds.length) {
+      return "选择无效，请重新选择。";
+    }
+    const chosenIds = [sel.taskIds[index]];
+    const selectedIntent = buildIntentFromSelection(sel, chosenIds);
+    const action = buildPendingActionFromIntent(selectedIntent, get().tasks, sel.source);
+    pendingCandidateSelection = null;
+    if (!action) {
+      return "没有找到符合条件的任务。";
+    }
+    set({ pendingAction: action });
+    return `${action.summary}\n\n影响任务（前 ${action.affectedPreview.length} 个）：\n${action.affectedPreview.map((t) => `• ${t}`).join("\n")}`;
+  },
   executePendingAction: async () => {
     const action = get().pendingAction;
     if (!action) return null;
@@ -789,6 +817,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       if (selectedIndexes) {
         const selection = pendingCandidateSelection;
         pendingCandidateSelection = null;
+      set((s) => ({ pendingCandidatesVersion: s.pendingCandidatesVersion + 1 }));
         const chosenIds = selectedIndexes.map((index) => selection.taskIds[index]).filter(Boolean);
         const selectedIntent = buildIntentFromSelection(selection, chosenIds);
         const action = buildPendingActionFromIntent(selectedIntent, get().tasks, src);
@@ -812,6 +841,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       intentResult.intent === "move_tasks_to_trash" || intentResult.intent === "shift_tasks_date" || intentResult.intent === "mark_needs_review"
     )) {
       pendingCandidateSelection = { intent: intentResult.intent, params: intentResult.params, taskIds: routedAmbiguousTaskIds, source: src, createdAt: Date.now() };
+      set((s) => ({ pendingCandidatesVersion: s.pendingCandidatesVersion + 1 }));
     }
 
     // --- Step 3: High-confidence tool intents ---
@@ -834,6 +864,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       const ambiguousTaskIds = intentResult.params.ambiguousTaskIds as string[] | undefined;
       if (ambiguousTaskIds?.length) {
         pendingCandidateSelection = { intent: "move_tasks_to_trash", params: intentResult.params, taskIds: ambiguousTaskIds, source: src, createdAt: Date.now() };
+        set((s) => ({ pendingCandidatesVersion: s.pendingCandidatesVersion + 1 }));
       }
       if (src === "workbench") {
         const nextMessages = [...get().aiMessages, { role: "user", content: text } as AiMessage, { role: "assistant", content: reply } as AiMessage].slice(-50);
@@ -874,6 +905,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       const ambiguousTaskIds = intentResult.params.ambiguousTaskIds as string[] | undefined;
       if (ambiguousTaskIds?.length) {
         pendingCandidateSelection = { intent: "shift_tasks_date", params: intentResult.params, taskIds: ambiguousTaskIds, source: src, createdAt: Date.now() };
+        set((s) => ({ pendingCandidatesVersion: s.pendingCandidatesVersion + 1 }));
       }
       if (src === "workbench") {
         const nextMessages = [...get().aiMessages, { role: "user", content: text } as AiMessage, { role: "assistant", content: reply } as AiMessage].slice(-50);
@@ -992,6 +1024,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       if (selectedIndexes) {
         const selection = pendingCandidateSelection;
         pendingCandidateSelection = null;
+      set((s) => ({ pendingCandidatesVersion: s.pendingCandidatesVersion + 1 }));
         const chosenIds = selectedIndexes.map((index) => selection.taskIds[index]).filter(Boolean);
         const selectedIntent = buildIntentFromSelection(selection, chosenIds);
         const action = buildPendingActionFromIntent(selectedIntent, get().tasks, "ai_workspace");
@@ -1009,6 +1042,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       intentResult.intent === "move_tasks_to_trash" || intentResult.intent === "shift_tasks_date" || intentResult.intent === "mark_needs_review"
     )) {
       pendingCandidateSelection = { intent: intentResult.intent, params: intentResult.params, taskIds: routedAmbiguousTaskIds, source: "ai_workspace", createdAt: Date.now() };
+      set((s) => ({ pendingCandidatesVersion: s.pendingCandidatesVersion + 1 }));
     }
 
     // Delete → pendingAction
