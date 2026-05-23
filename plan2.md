@@ -411,11 +411,42 @@ Phase 2 目标是在一期稳定基础上继续增强产品深度：
 
 ## 3. 当前执行 Sprint
 
-当前执行：Hotfix Sprint 20C.4：AI 操作预览卡片按钮化
+当前执行：Hotfix Sprint 20C.5：AI 工具链回归验收与防退化检查
 
 状态：已完成
 
 ## 4. Phase 2 Sprint 列表
+
+### Hotfix Sprint 20C.5：AI 工具链回归验收与防退化检查
+
+状态：已完成。
+
+实现范围：
+- 不开发新功能，仅做代码级回归审计。
+- 逐条追踪 Sprint 20C.3 和 20C.4 的 AI 工具执行链路，覆盖 intentRouter → aiTaskResolver → buildPendingActionFromIntent → store.sendAi / orchestrateAiInput → OperationPreviewCard / CandidateSelectionCard → executePendingAction → executeTool。
+
+审计结果（12 条全部通过）：
+
+1. 删除名称是正常：`extractTitleQuery` 提取"正常"，`normalizeTaskTitleQuery` 去前缀/后缀，`resolveTaskCandidates` 精确匹配 title === "正常"，`buildPendingActionFromIntent` 生成 pendingAction。✓
+2. 删除今天名称是正常的任务：`extractDateExpression` 返回 `today_view`，`scopeFromDateExpression` 返回 `{ mode: "today_view" }`，`resolveTaskCandidates` 先按 `isInTodayView` 筛选再匹配 title。✓
+3. 将今天名称为复习的任务往后推一天：SHIFT_RE 匹配，`extractTitleQuery` 提取"复习"（归一化自"复习的"），`extractShiftDays` 返回 1，单候选生成 shift_tasks_date pendingAction，多候选走 CandidateSelectionCard。✓
+4. 0 个任务不生成确认卡片：`buildPendingActionFromIntent` 在 `matchedIds.length === 0` 时返回 null，sendAi/orchestrateAiInput 返回 no_match。✓
+5. 多候选不随机选择：intentRouter 返回 needsClarification + ambiguousTaskIds，store 设置 `pendingCandidateSelection` 并递增 `pendingCandidatesVersion`，UI 渲染 CandidateSelectionCard。✓
+6. OperationPreviewCard 确认直接执行 toolExecutor：onConfirm 回调调用 `useAppStore.getState().executePendingAction()`，不发文本给模型。✓
+7. OperationPreviewCard 取消清空 pendingAction：onCancel 回调调用 `setPendingAction(null)`。✓
+8. 文字确认/取消仍可用：sendAi 和 orchestrateAiInput 的 isConfirmKeyword/isCancelKeyword 路径未被移除。✓
+9. Workbench 和 AI Workspace 表现一致：AiPanel（compact）和 AiView（full）均使用 OperationPreviewCard + CandidateSelectionCard，均调用 store.executePendingAction / setPendingAction。✓
+10. 删除进入回收站：executePendingAction 的 batch_delete 分支调用 `api("move_task_to_trash")`，不调用 `delete_task` 或 `delete_task_permanently`。✓
+11. 顺延只修改 planned_date：`shiftTasksDateTool` 只调用 `ctx.updateTask({ id, planned_date: newDate })`，不修改 quadrant / deadline / urgency / importance。✓
+12. 执行后刷新：batch_delete 调用 `get().load()`，shift/mark 通过 executeTool 内部调用 `ctx.load()`。✓
+
+修复内容：
+- `store.ts` 的 `selectCandidate` 方法中 `pendingCandidateSelection = null` 缺少 `pendingCandidatesVersion` 递增（replace_all 因缩进不同未匹配到 4-space 版本）。已补上。不影响功能（`set({ pendingAction })` 已触发重渲染），仅为一致性修复。
+
+是否可以进入 Sprint 20D：
+- 是。Sprint 20C.3 / 20C.4 / 20C.5 的 AI 工具链稳定，无功能性退化，可继续进入下一阶段。
+
+---
 
 ### Hotfix Sprint 20C.4：AI 操作预览卡片按钮化
 

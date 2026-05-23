@@ -677,6 +677,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const selectedIntent = buildIntentFromSelection(sel, chosenIds);
     const action = buildPendingActionFromIntent(selectedIntent, get().tasks, sel.source);
     pendingCandidateSelection = null;
+    set((s) => ({ pendingCandidatesVersion: s.pendingCandidatesVersion + 1 }));
     if (!action) {
       return "没有找到符合条件的任务。";
     }
