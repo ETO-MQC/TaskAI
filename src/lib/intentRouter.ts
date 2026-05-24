@@ -1,11 +1,14 @@
-import type { PendingAction, Task } from "./types";
+import type { PendingAction, Task, StudyProject } from "./types";
 import { filterTasksByDate, type RiskLevel } from "./aiTools";
 import {
   extractTaskTitleQuery,
   formatAmbiguousMessage,
   formatNoMatchMessage,
+  extractPlanQuery,
   normalizeTaskTitleQuery,
   resolveTaskCandidates,
+  resolveStudyProject,
+  resolveTasksByProject,
   type TaskResolveScope,
 } from "./aiTaskResolver";
 
@@ -200,7 +203,7 @@ const PLANNING_RE = /复习计划|考试|大纲|学习计划|考研|考公|课�
 const ADAPTIVE_RE = /没完成|调整|重排|太满|太多|重新安排/u;
 const GREETING_RE = /^(你好|您好|嗨|在吗|早上好|下午好|晚上好|hi|hello|hey)[\s!！。.?？]*$/iu;
 
-export function routeSmartFocusIntent(input: string, context: { tasks: Task[] }): IntentResult {
+export function routeSmartFocusIntent(input: string, context: { tasks: Task[]; studyProjects?: StudyProject[] }): IntentResult {
   const text = input.trim();
   if (!text) return { intent: "chat", confidence: 1, params: {}, missingFields: [], riskLevel: "low", needsClarification: false };
   if (GREETING_RE.test(text)) return { intent: "chat", confidence: 0.95, params: {}, missingFields: [], riskLevel: "low", needsClarification: false };
@@ -209,6 +212,48 @@ export function routeSmartFocusIntent(input: string, context: { tasks: Task[] })
 
   if (SHIFT_RE.test(text)) {
     const shiftDays = extractShiftDays(text);
+    // Try study project matching first
+    const projects = context.studyProjects ?? [];
+    if (projects.length > 0) {
+      const planQuery = extractPlanQuery(text);
+      if (planQuery) {
+        const projResult = resolveStudyProject(planQuery, projects);
+        if (projResult.status === "matched") {
+          const projectTasks = resolveTasksByProject(context.tasks, projResult.project.id);
+          if (projectTasks.length > 0) {
+            return {
+              intent: "shift_tasks_date",
+              confidence: 0.95,
+              params: { shiftDays, studyProjectId: projResult.project.id, studyProjectName: projResult.project.name, matchedTaskIds: projectTasks.map((t) => t.id) },
+              missingFields: [],
+              riskLevel: "medium",
+              needsClarification: false,
+            };
+          }
+          return {
+            intent: "shift_tasks_date",
+            confidence: 0.9,
+            params: { shiftDays, studyProjectId: projResult.project.id, studyProjectName: projResult.project.name },
+            missingFields: ["target"],
+            riskLevel: "medium",
+            needsClarification: true,
+            clarificationQuestion: `学习项目「${projResult.project.name}」下没有未完成的可顺延任务。`,
+          };
+        }
+        if (projResult.status === "ambiguous") {
+          return {
+            intent: "shift_tasks_date",
+            confidence: 0.85,
+            params: { shiftDays, ambiguousProjectIds: projResult.candidates.map((p) => p.id) },
+            missingFields: ["target"],
+            riskLevel: "medium",
+            needsClarification: true,
+            clarificationQuestion: `找到多个匹配的学习项目：\n${projResult.candidates.map((p, i) => `${i + 1}. ${p.name}`).join("\n")}\n请指定要操作哪个项目。`,
+          };
+        }
+      }
+    }
+    // Fallback to existing title-based matching
     const byTitle = resolveTitleTarget("shift_tasks_date", text, context.tasks, dateExpr, { shiftDays }, "medium");
     if (byTitle) return byTitle;
     if (!dateExpr) {

@@ -73,6 +73,38 @@ Workbench 和 AI Workspace 是否表现一致：
 
 ---
 
+### Sprint 20D.1：学习项目 / 计划组回归验收与链路加固
+
+状态：已完成。
+
+回归验收记录：
+- 数据库旧任务兼容：`tasks.study_project_id` 为 nullable；旧任务 `study_project_id = null` 可正常 list、显示、更新、删除到回收站和恢复。`list_tasks` 继续默认过滤 `status = archived` 与 `trashed_at IS NOT NULL`。
+- AI 计划创建/绑定项目：Plan Canvas 应用任务时会从 `goal.title / subject / exam_type / deadline / daily_available_minutes` 提取学习项目信息；用户可创建项目、绑定已有项目，或明确不绑定项目。不绑定时新任务 `study_project_id` 保持 `null`。
+- 重复项目防护：前端应用计划时会先提示同名/同科目候选；多个候选要求用户输入编号，不随机选择。Rust/Tauri 与 fallback API 的 `create_study_project` 也增加同名 active 项目复用，避免重复创建同名项目。
+- 任务卡 badge：有 `study_project_id` 且能匹配项目的任务显示学习项目 badge；普通任务不显示。badge 保持在标签行内，不改变拖拽 handle、完成、计时、删除和移动菜单入口。
+- 学习项目弹窗：任务页可打开学习项目弹窗，列出项目名称、科目、类型、考试日期、每日时间、任务数、完成数、进度百分比和状态；归档项目不会进入默认列表。
+- 项目进度统计：Rust 与 fallback 的项目统计均排除 `status = archived` 和 `trashed_at IS NOT NULL` 的任务；未绑定普通任务不会计入任何项目进度。
+- 项目级顺延：`把发展经济学复习计划往后推一天` 优先走 studyProjects 匹配，只选中该 `study_project_id` 下未完成、未回收站、且有 `planned_date` 的任务；确认后只更新 `planned_date`，不修改 `deadline`、`quadrant`、`urgency`、`importance`。
+- 普通任务不受影响：`删除名称是正常`、`删除今天名称是正常的任务`、`把正常这个任务往后推一天` 仍按普通任务候选处理，不进入项目匹配；0 个任务不生成确认卡，多候选不随机选。
+- AI 工具链：Workbench 和 AI Workspace 继续共用 `routeSmartFocusIntent`、`buildPendingActionFromIntent`、`executePendingAction`；确认按钮和文字确认/取消都走 toolExecutor / store 执行链。
+- 四象限和回收站：四象限拖拽仍只写 `urgency / importance`，不直接写 `quadrant`；普通任务删除仍进入回收站，恢复链路保持可用。
+
+小修范围：
+- `src/App.tsx`：加固 AI 计划应用时的学习项目元信息提取、候选绑定/不绑定流程、AI 计划标签补齐和任务卡项目 badge。
+- `src/lib/aiTaskResolver.ts` / `src/lib/intentRouter.ts`：项目级顺延优先匹配学习项目，并限制为未完成、未回收站、有 `planned_date` 的项目任务。
+- `src/lib/api.ts` / `src-tauri/src/main.rs`：创建学习项目时复用同名 active 项目，降低重复创建风险。
+
+构建与测试：
+- `npm run build`：通过。
+- `cargo test`：通过。
+- `git diff --check`：通过。
+- `plan.md`：未修改。
+
+是否可以进入 Sprint 20E：
+- 可以。建议进入前在真实 Tauri 窗口补一轮手工冒烟：学习项目绑定、项目级顺延确认、普通任务删除/恢复、四象限拖拽。
+
+---
+
 ### Hotfix Sprint 20B.8：统一 AI 执行中枢、确认执行闭环与任务回收站
 
 状态：已完成核心功能；`cargo test` 被 `smartfocus.exe` 占用阻塞，需关闭 SmartFocus 后重试。
@@ -411,11 +443,107 @@ Phase 2 目标是在一期稳定基础上继续增强产品深度：
 
 ## 3. 当前执行 Sprint
 
-当前执行：Hotfix Sprint 20C.5：AI 工具链回归验收与防退化检查
+当前执行：Sprint 20D：学习项目 / 计划组 v1
 
 状态：已完成
 
 ## 4. Phase 2 Sprint 列表
+
+### Sprint 20D：学习项目 / 计划组 v1
+
+状态：已完成。
+
+实现范围：
+
+一、数据库：
+- 新增 SQLx migration `20260523100000_add_study_projects.sql`。
+- 新增 `study_projects` 表：id, name, subject, exam_type, exam_date, daily_minutes, status (active/paused/completed/archived), description, source, created_at, updated_at。
+- tasks 表新增 `study_project_id TEXT NULL` 字段和索引。
+- migration 可在旧库和空库上运行，不修改旧 migration，不删表，不重建表。
+
+二、Rust / Tauri 命令（8 个新增）：
+- `create_study_project`：创建学习项目。
+- `list_study_projects`：返回非 archived 项目。
+- `update_study_project`：更新项目字段。
+- `archive_study_project`：归档项目，不删除任务。
+- `link_tasks_to_study_project`：批量设置 tasks.study_project_id。
+- `unlink_task_from_study_project`：清除单个任务的 study_project_id。
+- `list_tasks_by_study_project`：返回项目下未回收站任务。
+- `list_study_projects_with_stats`：返回项目列表及任务总数/已完成数。
+- Task struct 新增 `study_project_id: Option<String>`。
+- TaskInput / TaskPatch 新增 `study_project_id`。
+- create_task INSERT 和 update_task UPDATE 已包含 study_project_id。
+
+三、前端 types / API / store：
+- `types.ts` 新增 `StudyProject`、`StudyProjectInput`、`StudyProjectPatch`、`StudyProjectWithStats`、`StudyProjectStatus`。
+- `Task` 接口新增 `study_project_id`。
+- `TaskInput` 新增 `study_project_id`。
+- `api.ts` 新增 fallback 实现的 8 个 study project 命令。
+- `normalizeTask` 包含 `study_project_id`。
+- Zustand store 新增 `studyProjects`、`studyProjectsLoading`、`studyProjectsError`、`loadStudyProjects`、`createStudyProject`、`updateStudyProject`、`archiveStudyProject`、`linkTasksToStudyProject`。
+- `load()` 时自动调用 `loadStudyProjects()`。
+
+四、AI 任务解析器升级：
+- `aiTaskResolver.ts` 新增 `resolveStudyProject` 函数：按名称精确匹配 → 名称包含 → 科目匹配 → 考试类型匹配 → 短名包含。
+- 新增 `resolveTasksByProject` 按 study_project_id 筛选任务。
+- 新增 `extractPlanQuery` 从用户输入提取计划查询词。
+- `intentRouter.ts` 的 `routeSmartFocusIntent` 新增 `studyProjects` 上下文参数。
+- SHIFT_RE（顺延）处理时优先尝试 study project 匹配，匹配成功则按 project 范围筛选任务。
+- 匹配优先级：study_project.name 精确 → name 包含 → subject → exam_type → 回退到 title/tags。
+- 多候选项目时提示用户选择。
+
+五、计划组级顺延：
+- 用户说"把发展经济学复习计划往后推一天"→ intentRouter 匹配 study project → 找到该项目下未完成、未回收站、有 planned_date 的任务 → 生成 pendingAction → OperationPreviewCard 确认 → 批量 updateTask({ planned_date: +1天 })。
+- 不改 deadline、quadrant、urgency、importance。
+- 无任务时提示"没有可调整任务"。
+
+六、任务卡片项目 badge：
+- TaskRow 新增 study project badge，显示 BookOpen 图标 + 项目名称。
+- 使用 neon-violet 色调，小巧不撑高卡片。
+- 无项目任务不显示。
+- 不影响拖拽和移动菜单。
+
+七、学习项目弹窗 UI：
+- 任务页筛选行新增"学习项目"按钮（回收站左侧）。
+- 点击打开居中深色玻璃弹窗，展示项目列表。
+- 每个项目显示：名称、科目、类型、考试日期、每日时间、状态标签、任务总数/已完成数、进度条百分比。
+- 支持归档操作（二次确认）。
+- 空状态提示"还没有学习项目"。
+
+八、AI 计划应用时创建/绑定 Study Project：
+- Plan Canvas 应用任务前检测 preview 中是否有 subject/exam_type/exam_date/daily_minutes/goal 信息。
+- 有信息时弹窗提示：检测到相似项目则建议绑定，否则建议创建新项目。
+- 创建项目后，新任务写入 study_project_id。
+- tags 保留学习项目标签如"学习项目:发展经济学期末复习"。
+- 用户取消则不创建项目、不创建任务。
+
+验收结果：
+- `npm run build`：通过。
+- `cargo test`：通过（3 测试均通过）。
+- `git diff --check`：通过（仅有既有 LF/CRLF warning）。
+- `plan.md`：未修改。
+
+是否新增 study_projects 表：是。
+是否新增 tasks.study_project_id：是。
+是否新增 Rust/Tauri 命令：是，8 个。
+是否新增前端 types/API/store：是。
+AI 是否能按项目匹配顺延：是。
+任务卡片是否显示项目 badge：是。
+学习项目弹窗是否可用：是。
+是否影响普通任务：否，study_project_id 可选。
+是否直接写 quadrant：否。
+
+剩余 TODO：
+- 在真实 Tauri 窗口中手动验证：创建学习项目 → 绑定任务 → 任务卡片显示 badge → 学习项目弹窗可见。
+- 在真实 Tauri 窗口中验证："把发展经济学复习计划往后推一天" → 匹配 study project → OperationPreviewCard → 确认 → planned_date 顺延。
+- 在真实 Tauri 窗口中验证："删除名称是正常" 不误匹配学习项目。
+- 在真实 Tauri 窗口中验证：普通任务创建、删除、拖拽、计时不受影响。
+- 回收站任务不计入学习项目进度。
+
+下一 Sprint 建议：
+- Sprint 20D 验收后，可以进入 Sprint 21（测试、打包与发布验收）或继续增强学习项目生命周期管理。
+
+---
 
 ### Hotfix Sprint 20C.5：AI 工具链回归验收与防退化检查
 

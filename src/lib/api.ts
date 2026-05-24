@@ -16,6 +16,10 @@ import type {
   AiConversationDetail,
   AiConversationMessage,
   AiPlanSnapshot,
+  StudyProject,
+  StudyProjectInput,
+  StudyProjectPatch,
+  StudyProjectWithStats,
 } from "./types";
 import { filterVisibleConversationMessages, isInternalPlanningPrompt } from "./aiHistory";
 import { calculateQuadrant } from "./domain";
@@ -44,6 +48,7 @@ const materialKey = "smartfocus.materials";
 const aiConversationKey = "smartfocus.ai_conversations";
 const aiMessageKey = "smartfocus.ai_messages_v2";
 const aiPlanSnapshotKey = "smartfocus.ai_plan_snapshots";
+const studyProjectKey = "smartfocus.study_projects";
 
 const defaultShortcutSettings = {
   toggle_ai: "Ctrl+Shift+A",
@@ -264,6 +269,7 @@ function normalizeTask(input: TaskInput): Task {
     updated_at: now(),
     trashed_at: null,
     trash_reason: null,
+    study_project_id: input.study_project_id ?? null,
   };
 }
 
@@ -639,6 +645,90 @@ class FallbackApi {
     return nextRecord;
   }
 
+  async create_study_project(input: StudyProjectInput): Promise<StudyProject> {
+    const normalizedName = input.name.trim().toLowerCase();
+    const existing = readJson<StudyProject[]>(studyProjectKey, []).find((project) =>
+      project.status !== "archived" && project.name.trim().toLowerCase() === normalizedName,
+    );
+    if (existing) return existing;
+    const stamp = now();
+    const project: StudyProject = {
+      id: crypto.randomUUID(),
+      name: input.name.trim(),
+      subject: input.subject ?? null,
+      exam_type: input.exam_type ?? null,
+      exam_date: input.exam_date ?? null,
+      daily_minutes: input.daily_minutes ?? null,
+      status: "active",
+      description: input.description ?? null,
+      source: input.source ?? null,
+      created_at: stamp,
+      updated_at: stamp,
+    };
+    writeJson(studyProjectKey, [project, ...readJson<StudyProject[]>(studyProjectKey, [])]);
+    return project;
+  }
+
+  async list_study_projects(): Promise<StudyProject[]> {
+    return readJson<StudyProject[]>(studyProjectKey, []).filter((p) => p.status !== "archived");
+  }
+
+  async update_study_project(patch: StudyProjectPatch): Promise<StudyProject> {
+    const projects = readJson<StudyProject[]>(studyProjectKey, []);
+    const existing = projects.find((p) => p.id === patch.id);
+    if (!existing) throw new Error("Study project not found");
+    const updated: StudyProject = {
+      ...existing,
+      name: patch.name ?? existing.name,
+      subject: patch.subject ?? existing.subject,
+      exam_type: patch.exam_type ?? existing.exam_type,
+      exam_date: patch.exam_date ?? existing.exam_date,
+      daily_minutes: patch.daily_minutes ?? existing.daily_minutes,
+      status: patch.status ?? existing.status,
+      description: patch.description ?? existing.description,
+      updated_at: now(),
+    };
+    writeJson(studyProjectKey, projects.map((p) => (p.id === patch.id ? updated : p)));
+    return updated;
+  }
+
+  async archive_study_project(id: string): Promise<StudyProject> {
+    const projects = readJson<StudyProject[]>(studyProjectKey, []);
+    const existing = projects.find((p) => p.id === id);
+    if (!existing) throw new Error("Study project not found");
+    const updated: StudyProject = { ...existing, status: "archived", updated_at: now() };
+    writeJson(studyProjectKey, projects.map((p) => (p.id === id ? updated : p)));
+    return updated;
+  }
+
+  async link_tasks_to_study_project(input: { project_id: string; task_ids: string[] }): Promise<void> {
+    const tasks = readJson<Task[]>(taskKey, []);
+    const idSet = new Set(input.task_ids);
+    writeJson(taskKey, tasks.map((t) => idSet.has(t.id) ? { ...t, study_project_id: input.project_id, updated_at: now() } : t));
+  }
+
+  async unlink_task_from_study_project(task_id: string): Promise<void> {
+    const tasks = readJson<Task[]>(taskKey, []);
+    writeJson(taskKey, tasks.map((t) => t.id === task_id ? { ...t, study_project_id: null, updated_at: now() } : t));
+  }
+
+  async list_tasks_by_study_project(project_id: string): Promise<Task[]> {
+    return readJson<Task[]>(taskKey, []).filter((t) => t.study_project_id === project_id && t.status !== "archived" && !t.trashed_at);
+  }
+
+  async list_study_projects_with_stats(): Promise<StudyProjectWithStats[]> {
+    const projects = await this.list_study_projects();
+    const tasks = readJson<Task[]>(taskKey, []);
+    return projects.map((project) => {
+      const projectTasks = tasks.filter((t) => t.study_project_id === project.id && t.status !== "archived" && !t.trashed_at);
+      return {
+        ...project,
+        task_count: projectTasks.length,
+        completed_count: projectTasks.filter((t) => t.status === "done").length,
+      };
+    });
+  }
+
   async save_setting(key: string, value: string) {
     const settings = readJson<Record<string, string>>(settingsKey, {});
     writeJson(settingsKey, { ...settings, [key]: value });
@@ -924,6 +1014,12 @@ export async function api<T>(cmd: string, args?: Record<string, unknown>): Promi
   if (cmd === "move_tasks_to_trash") return fn.call(fallback, args.ids, args.reason);
   if (cmd === "restore_task_from_trash") return fn.call(fallback, args.id);
   if (cmd === "delete_task_permanently") return fn.call(fallback, args.id);
+  if (cmd === "create_study_project") return fn.call(fallback, args.input);
+  if (cmd === "update_study_project") return fn.call(fallback, args.patch);
+  if (cmd === "archive_study_project") return fn.call(fallback, args.id);
+  if (cmd === "link_tasks_to_study_project") return fn.call(fallback, args.input ?? { project_id: args.project_id, task_ids: args.task_ids });
+  if (cmd === "unlink_task_from_study_project") return fn.call(fallback, args.task_id);
+  if (cmd === "list_tasks_by_study_project") return fn.call(fallback, args.project_id);
   const firstArg = Object.values(args)[0];
   return fn.call(fallback, firstArg);
 }

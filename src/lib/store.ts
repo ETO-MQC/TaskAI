@@ -19,6 +19,10 @@ import type {
   TimerRecord,
   TimerSnapshot,
   Urgency,
+  StudyProject,
+  StudyProjectInput,
+  StudyProjectPatch,
+  StudyProjectWithStats,
 } from "./types";
 import { filterVisibleConversationMessages, isInternalPlanningPrompt } from "./aiHistory";
 import { routeSmartFocusIntent, buildPendingActionFromIntent, isConfirmKeyword, isCancelKeyword, isGeneralChatIntent, type IntentResult } from "./intentRouter";
@@ -59,6 +63,7 @@ interface TaskDraft {
   planned_date: string;
   estimated_duration: string;
   tags: string;
+  study_project_id?: string;
 }
 
 export type TaskUpdatePatch = Omit<Partial<Task>, "tags"> & { id: string; tags?: string[] | string };
@@ -77,6 +82,9 @@ interface AppStore {
   materials: Material[];
   materialsLoading: boolean;
   materialsError: string | null;
+  studyProjects: StudyProjectWithStats[];
+  studyProjectsLoading: boolean;
+  studyProjectsError: string | null;
   stats: DashboardStats | null;
   aiMessages: AiMessage[];
   conversations: AiConversation[];
@@ -127,6 +135,11 @@ interface AppStore {
   restoreTaskFromTrash: (id: string) => Promise<void>;
   deleteTaskPermanently: (id: string) => Promise<void>;
   setPendingAction: (action: PendingAction | null) => void;
+  loadStudyProjects: () => Promise<StudyProjectWithStats[]>;
+  createStudyProject: (input: StudyProjectInput) => Promise<StudyProject>;
+  updateStudyProject: (patch: StudyProjectPatch) => Promise<void>;
+  archiveStudyProject: (id: string) => Promise<void>;
+  linkTasksToStudyProject: (projectId: string, taskIds: string[]) => Promise<void>;
   executePendingAction: () => Promise<{ successCount: number; failCount: number; resultMsg: string } | null>;
   getPendingCandidates: () => { taskTitles: string[]; intent: string } | null;
   selectCandidate: (index: number) => Promise<string>;
@@ -245,6 +258,7 @@ function draftToInput(draft: TaskDraft): TaskInput {
       .split(",")
       .map((tag) => tag.trim())
       .filter(Boolean),
+    study_project_id: draft.study_project_id || null,
   };
 }
 
@@ -494,6 +508,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
   materials: [],
   materialsLoading: false,
   materialsError: null,
+  studyProjects: [],
+  studyProjectsLoading: false,
+  studyProjectsError: null,
   stats: null,
   aiMessages: readStoredJson<AiMessage[]>(aiMessagesStorageKey, [])
     .filter((message) => !isInternalPlanningPrompt(message.content))
@@ -533,6 +550,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     document.documentElement.classList.toggle("dark", normalizedTheme === "dark");
     set({ tasks, timer, records, reminders, materials, stats, theme: normalizedTheme });
     await get().loadConversations();
+    get().loadStudyProjects().catch(() => {});
   },
   createTask: async (draft) => {
     const task = await api<Task>("create_task", { input: draftToInput(draft) });
@@ -658,6 +676,35 @@ export const useAppStore = create<AppStore>((set, get) => ({
     await get().loadTrashedTasks();
   },
   setPendingAction: (pendingAction) => set({ pendingAction }),
+  loadStudyProjects: async () => {
+    set({ studyProjectsLoading: true, studyProjectsError: null });
+    try {
+      const studyProjects = await api<StudyProjectWithStats[]>("list_study_projects_with_stats");
+      set({ studyProjects, studyProjectsLoading: false });
+      return studyProjects;
+    } catch (error) {
+      const err = error instanceof Error ? error.message : "学习项目加载失败";
+      set({ studyProjectsLoading: false, studyProjectsError: err });
+      return [];
+    }
+  },
+  createStudyProject: async (input) => {
+    const project = await api<StudyProject>("create_study_project", { input });
+    await get().loadStudyProjects();
+    return project;
+  },
+  updateStudyProject: async (patch) => {
+    await api<StudyProject>("update_study_project", { patch });
+    await get().loadStudyProjects();
+  },
+  archiveStudyProject: async (id) => {
+    await api<StudyProject>("archive_study_project", { id });
+    await get().loadStudyProjects();
+  },
+  linkTasksToStudyProject: async (projectId, taskIds) => {
+    await api<void>("link_tasks_to_study_project", { input: { project_id: projectId, task_ids: taskIds } });
+    await get().load();
+  },
   pendingCandidatesVersion: 0,
   getPendingCandidates: () => {
     if (!pendingCandidateSelection) return null;
@@ -836,7 +883,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
 
     // --- Step 2: Intent routing ---
-    const intentResult = routeSmartFocusIntent(text, { tasks: get().tasks });
+    const intentResult = routeSmartFocusIntent(text, { tasks: get().tasks, studyProjects: get().studyProjects });
     const routedAmbiguousTaskIds = intentResult.params.ambiguousTaskIds as string[] | undefined;
     if (intentResult.needsClarification && routedAmbiguousTaskIds?.length && (
       intentResult.intent === "move_tasks_to_trash" || intentResult.intent === "shift_tasks_date" || intentResult.intent === "mark_needs_review"
@@ -1037,7 +1084,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       }
     }
 
-    const intentResult = routeSmartFocusIntent(text, { tasks: get().tasks });
+    const intentResult = routeSmartFocusIntent(text, { tasks: get().tasks, studyProjects: get().studyProjects });
     const routedAmbiguousTaskIds = intentResult.params.ambiguousTaskIds as string[] | undefined;
     if (intentResult.needsClarification && routedAmbiguousTaskIds?.length && (
       intentResult.intent === "move_tasks_to_trash" || intentResult.intent === "shift_tasks_date" || intentResult.intent === "mark_needs_review"

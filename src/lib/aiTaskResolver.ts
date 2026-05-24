@@ -1,4 +1,4 @@
-import type { Task } from "./types";
+import type { Task, StudyProject } from "./types";
 import { filterTasksByDate, isInTodayView } from "./aiTools";
 
 export type TaskResolveScope =
@@ -171,4 +171,67 @@ export function formatAmbiguousMessage(query: string, candidates: Task[]) {
     `我找到了多个包含「${query}」的任务，请选择要操作哪一个：`,
     ...candidates.slice(0, 10).map((task, index) => `${index + 1}. ${task.title}`),
   ].join("\n");
+}
+
+export type StudyProjectResolveResult =
+  | { status: "matched"; project: StudyProject }
+  | { status: "ambiguous"; candidates: StudyProject[] }
+  | { status: "no_match" };
+
+export function extractPlanQuery(input: string): string | null {
+  const text = input.trim();
+  const patterns = [
+    /(?:把|将|对)\s*(.+?)(?:复习计划|学习计划|考试计划|备考计划|计划)\s*(?:往后|推迟|顺延|延期|后移|暂停|恢复|归档)/u,
+    /(?:.+?)(?:复习计划|学习计划|考试计划|备考计划|计划)/u,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    const raw = match?.[1]?.trim();
+    if (raw && raw.length >= 2) return raw;
+  }
+  // Fallback: check if the text itself is a study project name
+  if (/复习计划|学习计划|考试计划|备考计划|计划/.test(text)) {
+    return text.replace(/(?:把|将|对)\s*/u, "").replace(/(?:往后|推迟|顺延|延期|后移|暂停|恢复|归档).*/u, "").trim();
+  }
+  return null;
+}
+
+export function resolveStudyProject(
+  query: string,
+  projects: StudyProject[],
+): StudyProjectResolveResult {
+  if (!projects.length) return { status: "no_match" };
+  const normalized = normalizeTaskTitleQuery(query);
+  if (!normalized) return { status: "no_match" };
+
+  // 1. Exact name match
+  const exact = projects.filter((p) => p.name === normalized || p.name === query);
+  if (exact.length === 1) return { status: "matched", project: exact[0] };
+  if (exact.length > 1) return { status: "ambiguous", candidates: exact };
+
+  // 2. Name contains query
+  const nameContains = projects.filter((p) => p.name.includes(normalized));
+  if (nameContains.length === 1) return { status: "matched", project: nameContains[0] };
+  if (nameContains.length > 1) return { status: "ambiguous", candidates: nameContains };
+
+  // 3. Subject match
+  const subjectMatch = projects.filter((p) => p.subject && (p.subject.includes(normalized) || normalized.includes(p.subject)));
+  if (subjectMatch.length === 1) return { status: "matched", project: subjectMatch[0] };
+  if (subjectMatch.length > 1) return { status: "ambiguous", candidates: subjectMatch };
+
+  // 4. Exam type match
+  const examMatch = projects.filter((p) => p.exam_type && (p.exam_type.includes(normalized) || normalized.includes(p.exam_type)));
+  if (examMatch.length === 1) return { status: "matched", project: examMatch[0] };
+  if (examMatch.length > 1) return { status: "ambiguous", candidates: examMatch };
+
+  // 5. Query contains project name (for short project names)
+  const queryContains = projects.filter((p) => p.name.length >= 2 && normalized.includes(p.name));
+  if (queryContains.length === 1) return { status: "matched", project: queryContains[0] };
+  if (queryContains.length > 1) return { status: "ambiguous", candidates: queryContains };
+
+  return { status: "no_match" };
+}
+
+export function resolveTasksByProject(tasks: Task[], projectId: string): Task[] {
+  return tasks.filter((t) => t.study_project_id === projectId && t.status === "todo" && !t.trashed_at && !!t.planned_date);
 }

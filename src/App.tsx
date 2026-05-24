@@ -23,6 +23,9 @@ import {
   Square,
   Trash2,
   Trophy,
+  BookOpen,
+  FolderOpen,
+  GraduationCap,
 } from "lucide-react";
 import {
   Area,
@@ -41,7 +44,7 @@ import dayjs from "dayjs";
 import isBetween from "dayjs/plugin/isBetween";
 import { api } from "./lib/api";
 import { TaskUpdatePatch, useAppStore, type AiWorkspaceEntry } from "./lib/store";
-import type { AiConversationMessage, Importance, Material, PendingAction, Priority, Reminder, Task, TimerMode, TimerSnapshot, Urgency } from "./lib/types";
+import type { AiConversationMessage, Importance, Material, PendingAction, Priority, Reminder, Task, TimerMode, TimerSnapshot, Urgency, StudyProjectInput, StudyProjectWithStats } from "./lib/types";
 import {
   formatMinutes,
   formatSeconds,
@@ -625,6 +628,58 @@ function learningPlanSourceTag(preview: LearningPlanPreview | null) {
   const goal = typeof preview?.goal === "object" && preview.goal ? preview.goal : null;
   const title = goal?.title || (typeof preview?.goal === "string" ? preview.goal : "") || preview?.summary || "learning-plan";
   return `ai_learning_plan:${title.trim().toLowerCase().replace(/\s+/g, "_").slice(0, 80)}`;
+}
+
+function learningPlanProjectMeta(preview: LearningPlanPreview | null) {
+  const goal = typeof preview?.goal === "object" && preview.goal ? preview.goal : null;
+  const goalText = typeof preview?.goal === "string" ? preview.goal.trim() : "";
+  const subject = (goal?.subject || preview?.summary?.match(/(?:科目|subject)[:：]\s*([^,，。]+)/i)?.[1] || "").trim();
+  const examType = (goal?.exam_type || preview?.exam_type || "").trim();
+  const examDate = (goal?.deadline || "").trim();
+  const dailyMinutes = typeof goal?.daily_available_minutes === "number" ? goal.daily_available_minutes : null;
+  const name = (goal?.title || goalText || [subject, examType || "学习计划"].filter(Boolean).join(" ") || preview?.summary || "学习计划").trim();
+  return {
+    name,
+    subject: subject || null,
+    examType: examType || null,
+    examDate: examDate || null,
+    dailyMinutes,
+    description: goalText || preview?.summary || null,
+    hasProjectInfo: Boolean(goal || subject || examType || examDate || dailyMinutes),
+  };
+}
+
+function normalizeProjectKey(value?: string | null) {
+  return (value ?? "").trim().toLowerCase().replace(/\s+/g, "");
+}
+
+function findSimilarStudyProjects(projects: StudyProjectWithStats[], meta: ReturnType<typeof learningPlanProjectMeta>) {
+  const nameKey = normalizeProjectKey(meta.name);
+  const subjectKey = normalizeProjectKey(meta.subject);
+  const examTypeKey = normalizeProjectKey(meta.examType);
+  return projects.filter((project) => {
+    if (project.status === "archived") return false;
+    const projectName = normalizeProjectKey(project.name);
+    const projectSubject = normalizeProjectKey(project.subject);
+    const projectExamType = normalizeProjectKey(project.exam_type);
+    if (projectName && nameKey && (projectName === nameKey || projectName.includes(nameKey) || nameKey.includes(projectName))) return true;
+    if (projectSubject && subjectKey && projectSubject === subjectKey && (!examTypeKey || projectExamType === examTypeKey)) return true;
+    return false;
+  });
+}
+
+function mergeTags(...groups: Array<string | null | undefined>) {
+  const seen = new Set<string>();
+  const tags: string[] = [];
+  for (const group of groups) {
+    for (const raw of (group ?? "").split(/[,，、\s]+/u)) {
+      const tag = raw.trim();
+      if (!tag || seen.has(tag)) continue;
+      seen.add(tag);
+      tags.push(tag);
+    }
+  }
+  return tags.join(", ");
 }
 
 function taskDuplicateMatch(existing: Task, draft: ReturnType<typeof previewTaskDraft>, sourceTag: string) {
@@ -1638,6 +1693,7 @@ function AiView() {
     conversations, activeConversationId, loadConversations, createConversation, openConversation,
     renameConversation, deleteConversation, appendAiMessage, saveCurrentPlanSnapshot,
     pendingAction, setPendingAction, moveTasksToTrash, loadTrashedTasks, load: storeLoad, orchestrateAiInput,
+    createStudyProject, studyProjects,
   } = useAppStore();
   const preferredSkill = aiPreferredSkill as PlanningSkillId | null;
   const [materialSearch, setMaterialSearch] = useState("");
@@ -1977,47 +2033,99 @@ function AiView() {
   const applySelectedTasks = async () => {
     if (selectedTasks.length === 0) return;
     if (!window.confirm(`确认将 ${selectedTasks.length} 个勾选任务应用到任务列表吗？只会写入现有字段，不会直接写入 quadrant。`)) return;
+
+    // Detect study project info from preview
+    const parsed = isAdaptiveReschedulePreview(preview.parsed) ? null : preview.parsed;
+    const projectMeta = learningPlanProjectMeta(parsed);
+    const planName = projectMeta.name;
+    const hasStudyProjectInfo = projectMeta.hasProjectInfo;
+    let targetStudyProjectId: string | null = null;
+
+    if (hasStudyProjectInfo) {
+      const similarProjects = findSimilarStudyProjects(studyProjects, projectMeta);
+      if (similarProjects.length === 1) {
+        const bindExisting = window.confirm(
+          `检测到相似学习项目「${similarProjects[0].name}」，是否绑定到该项目？\n\n确定 = 绑定已有项目\n取消 = 不绑定项目`,
+        );
+        if (bindExisting) targetStudyProjectId = similarProjects[0].id;
+      } else if (similarProjects.length > 1) {
+        const choice = window.prompt(
+          [
+            "检测到多个相似学习项目，请输入编号绑定，或输入 0 不绑定：",
+            ...similarProjects.map((project, index) => `${index + 1}. ${project.name}${project.subject ? ` / ${project.subject}` : ""}`),
+          ].join("\n"),
+          "0",
+        );
+        const index = Number(choice) - 1;
+        if (Number.isInteger(index) && similarProjects[index]) targetStudyProjectId = similarProjects[index].id;
+      } else if (window.confirm(`是否为这次计划创建学习项目？\n\n确定 = 创建「${planName}」\n取消 = 不绑定项目`)) {
+        try {
+          const project = await createStudyProject({
+            name: planName,
+            subject: projectMeta.subject,
+            exam_type: projectMeta.examType,
+            exam_date: projectMeta.examDate,
+            daily_minutes: projectMeta.dailyMinutes,
+            description: projectMeta.description,
+            source: "ai_plan",
+          });
+          targetStudyProjectId = project.id;
+        } catch (error) {
+          console.warn("创建学习项目失败", error);
+        }
+      }
+    }
+
     const results: Array<{ title: string; status: "success" | "skipped_duplicate" | "failed"; message: string }> = [];
     const sourceTag = learningPlanSourceTag(preview.parsed);
     for (const task of selectedTasks) {
       const draft = previewTaskDraft(task);
       const duplicate = allTasks.find((existing) => taskDuplicateMatch(existing, draft, sourceTag));
       try {
-        if (duplicate && !window.confirm(`“${draft.title}” 可能已存在，仍要强制创建吗？`)) {
+        if (duplicate && !window.confirm(`"${draft.title}" 可能已存在，仍要强制创建吗？`)) {
           results.push({ title: draft.title, status: "skipped_duplicate", message: "检测到可能重复，已跳过" });
           continue;
         }
-        await createTask({ ...draft, tags: [draft.tags, sourceTag].filter(Boolean).join(", ") });
+        const tags = mergeTags(
+          draft.tags,
+          "AI计划",
+          sourceTag,
+          targetStudyProjectId ? `学习项目:${planName || ""}` : "",
+          projectMeta.subject ? `科目:${projectMeta.subject}` : "",
+          projectMeta.examType,
+        );
+        await createTask({ ...draft, tags, study_project_id: targetStudyProjectId ?? undefined });
         results.push({ title: draft.title, status: "success", message: "应用成功" });
       } catch (error) {
         results.push({ title: draft.title, status: "failed", message: error instanceof Error ? error.message : "创建失败" });
       }
     }
     setApplyResults(results);
+    const projectMsg = targetStudyProjectId ? `已绑定学习项目。` : "";
     await appendVisibleAiMessage(
       "assistant",
-      `应用结果：成功 ${results.filter((item) => item.status === "success").length} 项，跳过 ${results.filter((item) => item.status === "skipped_duplicate").length} 项，失败 ${results.filter((item) => item.status === "failed").length} 项。`,
+      `应用结果：成功 ${results.filter((item) => item.status === "success").length} 项，跳过 ${results.filter((item) => item.status === "skipped_duplicate").length} 项，失败 ${results.filter((item) => item.status === "failed").length} 项。${projectMsg}`,
     );
     await saveCurrentPlanSnapshot();
   };
 
   const applySelectedRescheduleSuggestions = async () => {
     if (!isAdaptiveReschedulePreview(preview.parsed) || selectedRescheduleSuggestions.length === 0) return;
-    if (!window.confirm(`???? ${selectedRescheduleSuggestions.length} ????????????? planned_date?estimated_duration ??? tags?`)) return;
+    if (!window.confirm(`确认对 ${selectedRescheduleSuggestions.length} 条调整建议执行应用？只会修改 planned_date、estimated_duration 和 tags。`)) return;
     const results: Array<{ title: string; status: "applied" | "skipped" | "failed"; message: string }> = [];
     for (const suggestion of selectedRescheduleSuggestions) {
       const task = allTasks.find((item) => item.id === suggestion.task_id);
       if (!task) {
-        results.push({ title: suggestion.task_title, status: "failed", message: "???????" });
+        results.push({ title: suggestion.task_title, status: "failed", message: "找不到关联任务" });
         continue;
       }
       try {
         if (suggestion.type === "keep") {
-          results.push({ title: suggestion.task_title, status: "skipped", message: "?????" });
+          results.push({ title: suggestion.task_title, status: "skipped", message: "保持不变" });
           continue;
         }
         if (suggestion.type === "split_task") {
-          results.push({ title: suggestion.task_title, status: "skipped", message: "这次处理失败了，请再试一次。" });
+          results.push({ title: suggestion.task_title, status: "skipped", message: "拆分任务暂不支持自动应用" });
           continue;
         }
         const patch: TaskUpdatePatch = { id: task.id };
@@ -2025,20 +2133,20 @@ function AiView() {
         if (suggestion.type === "estimate_duration" && suggestion.suggested_estimated_duration != null) patch.estimated_duration = suggestion.suggested_estimated_duration;
         if (suggestion.type === "mark_needs_review") patch.tags = [...new Set([...parseTags(task), ...suggestion.add_tags])];
         if (Object.keys(patch).length === 1) {
-          results.push({ title: suggestion.task_title, status: "skipped", message: "??????????" });
+          results.push({ title: suggestion.task_title, status: "skipped", message: "无可修改字段" });
           continue;
         }
         await useAppStore.getState().updateTask(patch);
-        results.push({ title: suggestion.task_title, status: "applied", message: "???" });
+        results.push({ title: suggestion.task_title, status: "applied", message: "已应用" });
       } catch (error) {
-        results.push({ title: suggestion.task_title, status: "failed", message: error instanceof Error ? error.message : "????" });
+        results.push({ title: suggestion.task_title, status: "failed", message: error instanceof Error ? error.message : "应用失败" });
       }
     }
     await useAppStore.getState().load();
     setRescheduleApplyResults(results);
     await appendVisibleAiMessage(
       "assistant",
-      `????????applied ${results.filter((item) => item.status === "applied").length}?skipped ${results.filter((item) => item.status === "skipped").length}?failed ${results.filter((item) => item.status === "failed").length}?`,
+      `调整应用结果：已应用 ${results.filter((item) => item.status === "applied").length}，跳过 ${results.filter((item) => item.status === "skipped").length}，失败 ${results.filter((item) => item.status === "failed").length}。`,
     );
     await saveCurrentPlanSnapshot();
   };
@@ -2108,7 +2216,7 @@ function AiView() {
           <div ref={listRef} className="thin-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
             {entries.length === 0 && (
               <div className="glass-inset max-w-2xl p-5 text-sm leading-7">
-                告诉我你想记录、规划或调整什么。例如：“下周三之前交发展经济学作业，周二晚上提醒我写提纲”，或者“我两周后期末考试，每天学两小时，帮我安排复习”。
+                告诉我你想记录、规划或调整什么。例如："下周三之前交发展经济学作业，周二晚上提醒我写提纲"，或者"我两周后期末考试，每天学两小时，帮我安排复习"。
               </div>
             )}
             {entries.slice(-40).map((entry) => entry.kind === "message" ? (
@@ -2800,7 +2908,7 @@ function PlanCanvasBody({ preview, tasks, selectedTaskIndexes, setSelectedTaskIn
         <button className="btn-glow rounded-xl px-4 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50" type="button" disabled={selectedTasks.length === 0} onClick={applySelectedTasks}>应用为任务</button>
         <button className="glass-inset px-4 py-2 text-sm" type="button" onClick={() => navigator.clipboard.writeText(preview.raw || JSON.stringify(preview.parsed ?? {}, null, 2))}>复制 JSON</button>
         <button className="glass-inset px-4 py-2 text-sm opacity-60" type="button" disabled>应用为日程</button>
-        <p className="text-xs text-[var(--muted-foreground)] sm:col-span-2">当前只预览并可应用为任务；尚无独立事件表，因此“应用为日程”继续禁用。quadrant 仍由 Rust 根据 urgency + importance 计算。</p>
+        <p className="text-xs text-[var(--muted-foreground)] sm:col-span-2">当前只预览并可应用为任务；尚无独立事件表，因此"应用为日程"继续禁用。quadrant 仍由 Rust 根据 urgency + importance 计算。</p>
         {applyResults.length > 0 && (
           <div className="sm:col-span-2 space-y-2">
             <p className="text-xs text-[var(--muted-foreground)]">
@@ -2861,6 +2969,84 @@ function ReminderDock() {
     </aside>
   );
 }
+function StudyProjectsDialog({ onClose }: { onClose: () => void }) {
+  const { studyProjects, studyProjectsLoading, studyProjectsError, loadStudyProjects, archiveStudyProject } = useAppStore();
+  const [confirmArchiveId, setConfirmArchiveId] = useState<string | null>(null);
+  const [viewProjectId, setViewProjectId] = useState<string | null>(null);
+
+  useEffect(() => { void loadStudyProjects(); }, [loadStudyProjects]);
+
+  const activeProjects = studyProjects.filter((p) => p.status !== "archived");
+
+  return (
+    <div className="ai-history-backdrop" role="presentation" onMouseDown={onClose}>
+      <section className="ai-history-dialog glass-card" role="dialog" aria-modal="true" aria-label="学习项目" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-4">
+          <div>
+            <h3 className="text-lg font-semibold">学习项目</h3>
+            <p className="mt-1 text-sm text-[var(--muted-foreground)]">管理你的学习计划和项目。</p>
+          </div>
+          <div className="flex gap-2">
+            <button className="glass-inset px-3 py-2 text-sm" type="button" onClick={() => void loadStudyProjects()}>刷新</button>
+            <button className="glass-inset px-3 py-2 text-sm" type="button" onClick={onClose}>关闭</button>
+          </div>
+        </div>
+
+        <div className="thin-scrollbar mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+          {studyProjectsLoading && <p className="text-sm text-[var(--muted-foreground)]">加载中...</p>}
+          {studyProjectsError && <p className="text-sm text-red-400">{studyProjectsError}</p>}
+          {!studyProjectsLoading && activeProjects.length === 0 && (
+            <p className="py-8 text-center text-sm text-[var(--muted-foreground)]">还没有学习项目。在 AI 工作区创建学习计划时会自动生成。</p>
+          )}
+          {activeProjects.map((project) => {
+            const progress = project.task_count > 0 ? Math.round((project.completed_count / project.task_count) * 100) : 0;
+            return (
+              <div key={project.id} className="glass-inset p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <BookOpen size={16} className="shrink-0 text-[var(--neon-violet)]" />
+                      <h4 className="truncate font-semibold">{project.name}</h4>
+                      <span className={`rounded-full px-2 py-0.5 text-xs ${project.status === "active" ? "bg-green-500/15 text-green-300" : project.status === "paused" ? "bg-yellow-500/15 text-yellow-300" : "bg-blue-500/15 text-blue-300"}`}>
+                        {project.status === "active" ? "进行中" : project.status === "paused" ? "已暂停" : "已完成"}
+                      </span>
+                    </div>
+                    <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--muted-foreground)]">
+                      {project.subject && <span>科目：{project.subject}</span>}
+                      {project.exam_type && <span>类型：{project.exam_type}</span>}
+                      {project.exam_date && <span>考试日期：{project.exam_date}</span>}
+                      {project.daily_minutes && <span>每日 {project.daily_minutes} 分钟</span>}
+                    </div>
+                    <div className="mt-2 flex items-center gap-3 text-xs">
+                      <span className="text-[var(--muted-foreground)]">
+                        任务 {project.completed_count}/{project.task_count}
+                      </span>
+                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/10">
+                        <div className="h-full rounded-full bg-[var(--neon-violet)] transition-all" style={{ width: `${progress}%` }} />
+                      </div>
+                      <span className="tabular-nums text-[var(--muted-foreground)]">{progress}%</span>
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 gap-1">
+                    {confirmArchiveId === project.id ? (
+                      <div className="flex items-center gap-1">
+                        <button className="glass-inset px-2 py-1 text-xs text-red-300" type="button" onClick={() => { void archiveStudyProject(project.id); setConfirmArchiveId(null); showToast("已归档"); }}>确认</button>
+                        <button className="glass-inset px-2 py-1 text-xs" type="button" onClick={() => setConfirmArchiveId(null)}>取消</button>
+                      </div>
+                    ) : (
+                      <button className="glass-inset px-2 py-1 text-xs" type="button" title="归档" onClick={() => setConfirmArchiveId(project.id)}>归档</button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function TasksView() {
   const { tasks, selectedTaskId, selectTask, updateTask } = useAppStore();
   const [dateFilter, setDateFilter] = useState<TaskDateFilter>("today");
@@ -2869,6 +3055,7 @@ function TasksView() {
   const [batchDate, setBatchDate] = useState(defaultTaskDate);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [trashDialogOpen, setTrashDialogOpen] = useState(false);
+  const [studyProjectsOpen, setStudyProjectsOpen] = useState(false);
   const selected = tasks.find((task) => task.id === selectedTaskId) ?? tasks[0] ?? null;
   const visibleTasks = tasks.filter((task) => isTaskVisibleForDateFilter(task, dateFilter, customDate));
   const selectedTasks = tasks.filter((task) => selectedIds.includes(task.id));
@@ -2877,7 +3064,7 @@ function TasksView() {
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
   const confirmBatch = async (label: string, run: (task: Task) => Promise<void>) => {
     if (selectedCount === 0) return;
-    if (!window.confirm(`确认对 ${selectedCount} 个任务执行“${label}”？`)) return;
+    if (!window.confirm(`确认对 ${selectedCount} 个任务执行"${label}"？`)) return;
     for (const task of selectedTasks) {
       await run(task);
     }
@@ -2907,7 +3094,10 @@ function TasksView() {
           {dateFilter === "custom" && (
             <input className="field py-1.5" type="date" value={customDate} onChange={(event) => setCustomDate(event.target.value)} />
           )}
-          <button type="button" className="glass-inset ml-auto rounded-xl px-3 py-1.5 text-xs" onClick={() => setTrashDialogOpen(true)}>
+          <button type="button" className="glass-inset ml-auto rounded-xl px-3 py-1.5 text-xs" onClick={() => setStudyProjectsOpen(true)}>
+            学习项目
+          </button>
+          <button type="button" className="glass-inset rounded-xl px-3 py-1.5 text-xs" onClick={() => setTrashDialogOpen(true)}>
             回收站
           </button>
           <button type="button" className="btn-glow rounded-xl px-3 py-1.5 text-xs font-semibold" onClick={() => setCreateDialogOpen(true)}>
@@ -2950,6 +3140,10 @@ function TasksView() {
       <TaskDetail task={selected} />
       {trashDialogOpen && createPortal(
         <TrashDialog onClose={() => setTrashDialogOpen(false)} />,
+        document.body,
+      )}
+      {studyProjectsOpen && createPortal(
+        <StudyProjectsDialog onClose={() => setStudyProjectsOpen(false)} />,
         document.body,
       )}
     </section>
@@ -3102,7 +3296,8 @@ function QuadrantColumn({
 }
 
 function TaskRow({ task, selected, onToggleSelected, onSelect }: { task: Task; selected: boolean; onToggleSelected: () => void; onSelect: () => void }) {
-  const { updateTask, deleteTask, startFocus } = useAppStore();
+  const { updateTask, deleteTask, startFocus, studyProjects } = useAppStore();
+  const projectName = task.study_project_id ? studyProjects.find((p) => p.id === task.study_project_id)?.name : null;
   const done = task.status === "done";
   const overdue = taskOverdueLabel(task);
   const tags = parseTags(task);
@@ -3284,10 +3479,16 @@ function TaskRow({ task, selected, onToggleSelected, onSelect }: { task: Task; s
           </select>
         </div>
       </div>
-      {(overdue || isNeedsReviewTask(task) || tags.length > 0) && (
+      {(overdue || isNeedsReviewTask(task) || projectName || tags.length > 0) && (
         <div className="mt-2 flex flex-wrap gap-1.5 text-xs">
           {overdue && <span className="rounded-full bg-red-500/15 px-2 py-0.5 text-red-300">{overdue}</span>}
           {isNeedsReviewTask(task) && <span className="rounded-full bg-[var(--neon-amber)]/15 px-2 py-0.5 text-[var(--neon-amber)]">待整理</span>}
+          {projectName && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-[var(--neon-violet)]/15 px-2 py-0.5 text-[var(--neon-violet)]">
+              <BookOpen size={11} />
+              {projectName}
+            </span>
+          )}
           {tags.filter((tag) => !needsReviewTags.includes(tag)).slice(0, 3).map((tag) => (
             <span key={tag} className="rounded-full border border-[var(--glass-inset-border)] px-2 py-0.5 text-[var(--muted-foreground)]">
               {tag}

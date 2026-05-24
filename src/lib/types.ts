@@ -26,6 +26,7 @@ export interface Task {
   updated_at: string;
   trashed_at?: string | null;
   trash_reason?: string | null;
+  study_project_id?: string | null;
 }
 
 export interface TaskInput {
@@ -41,6 +42,7 @@ export interface TaskInput {
   planned_date?: string | null;
   tags?: string[];
   sort_order?: number;
+  study_project_id?: string | null;
 }
 
 export interface TimerSnapshot {
@@ -192,4 +194,46 @@ export interface DashboardStats {
   quadrant_counts: Array<{ quadrant: number; count: number }>;
   trend: Array<{ day: string; minutes: number }>;
   ring_segments: Array<{ label: string; minutes: number; color: string }>;
+}
+
+export type StudyProjectStatus = "active" | "paused" | "completed" | "archived";
+
+export interface StudyProject {
+  id: string;
+  name: string;
+  subject?: string | null;
+  exam_type?: string | null;
+  exam_date?: string | null;
+  daily_minutes?: number | null;
+  status: StudyProjectStatus;
+  description?: string | null;
+  source?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface StudyProjectInput {
+  name: string;
+  subject?: string | null;
+  exam_type?: string | null;
+  exam_date?: string | null;
+  daily_minutes?: number | null;
+  description?: string | null;
+  source?: string | null;
+}
+
+export interface StudyProjectPatch {
+  id: string;
+  name?: string | null;
+  subject?: string | null;
+  exam_type?: string | null;
+  exam_date?: string | null;
+  daily_minutes?: number | null;
+  status?: StudyProjectStatus | null;
+  description?: string | null;
+}
+
+export interface StudyProjectWithStats extends StudyProject {
+  task_count: number;
+  completed_count: number;
 }

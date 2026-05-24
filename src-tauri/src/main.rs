@@ -248,6 +248,7 @@ struct Task {
     updated_at: String,
     trashed_at: Option<String>,
     trash_reason: Option<String>,
+    study_project_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, FromRow)]
@@ -298,6 +299,7 @@ struct TaskInput {
     planned_date: Option<String>,
     tags: Option<Vec<String>>,
     sort_order: Option<i64>,
+    study_project_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -315,6 +317,7 @@ struct TaskPatch {
     planned_date: Option<String>,
     tags: Option<Vec<String>>,
     sort_order: Option<i64>,
+    study_project_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -396,6 +399,58 @@ struct MaterialPatch {
     tags: Option<Vec<String>>,
     note: Option<String>,
     status: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, FromRow)]
+struct StudyProject {
+    id: String,
+    name: String,
+    subject: Option<String>,
+    exam_type: Option<String>,
+    exam_date: Option<String>,
+    daily_minutes: Option<i64>,
+    status: String,
+    description: Option<String>,
+    source: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct StudyProjectInput {
+    name: String,
+    subject: Option<String>,
+    exam_type: Option<String>,
+    exam_date: Option<String>,
+    daily_minutes: Option<i64>,
+    description: Option<String>,
+    source: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StudyProjectPatch {
+    id: String,
+    name: Option<String>,
+    subject: Option<String>,
+    exam_type: Option<String>,
+    exam_date: Option<String>,
+    daily_minutes: Option<i64>,
+    status: Option<String>,
+    description: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LinkTasksInput {
+    project_id: String,
+    task_ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct StudyProjectWithStats {
+    #[serde(flatten)]
+    project: StudyProject,
+    task_count: i64,
+    completed_count: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -972,8 +1027,8 @@ async fn create_task_in_db(db: &SqlitePool, input: TaskInput) -> Result<Task, St
         r#"INSERT INTO tasks
         (id, title, description, priority, urgency, importance, quadrant, status, deadline,
          estimated_duration, actual_total_duration, parent_id, planned_date, tags, sort_order,
-         created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)"#,
+         created_at, updated_at, study_project_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)"#,
     )
     .bind(&id)
     .bind(input.title.trim())
@@ -991,6 +1046,7 @@ async fn create_task_in_db(db: &SqlitePool, input: TaskInput) -> Result<Task, St
     .bind(input.sort_order.unwrap_or(0))
     .bind(&now)
     .bind(&now)
+    .bind(input.study_project_id)
     .execute(db)
     .await
     .map_err(|e| e.to_string())?;
@@ -1020,11 +1076,19 @@ async fn update_task(state: State<'_, AppState>, patch: TaskPatch) -> Result<Tas
     };
     let now = now_iso();
 
+    // study_project_id: if patch contains Some, use it; if patch contains None, keep existing.
+    // We use a special sentinel: if the field is explicitly set to Some("") we clear it (set NULL).
+    let study_project_id = match &patch.study_project_id {
+        Some(val) if val.is_empty() => None,
+        Some(val) => Some(val.clone()),
+        None => existing.study_project_id,
+    };
+
     sqlx::query(
         r#"UPDATE tasks SET
         title = ?, description = ?, priority = ?, urgency = ?, importance = ?, quadrant = ?,
         status = ?, deadline = ?, estimated_duration = ?, parent_id = ?, planned_date = ?,
-        tags = ?, sort_order = ?, updated_at = ?
+        tags = ?, sort_order = ?, updated_at = ?, study_project_id = ?
         WHERE id = ?"#,
     )
     .bind(title)
@@ -1041,6 +1105,7 @@ async fn update_task(state: State<'_, AppState>, patch: TaskPatch) -> Result<Tas
     .bind(tags)
     .bind(patch.sort_order.unwrap_or(existing.sort_order))
     .bind(now)
+    .bind(study_project_id)
     .bind(&patch.id)
     .execute(&state.db)
     .await
@@ -1237,6 +1302,178 @@ async fn list_tasks(state: State<'_, AppState>) -> Result<Vec<Task>, String> {
     .fetch_all(&state.db)
     .await
     .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn create_study_project(state: State<'_, AppState>, input: StudyProjectInput) -> Result<StudyProject, String> {
+    let now = now_iso();
+    let id = Uuid::new_v4().to_string();
+    if let Some(existing) = sqlx::query_as::<_, StudyProject>(
+        "SELECT * FROM study_projects WHERE status != 'archived' AND lower(trim(name)) = lower(trim(?)) LIMIT 1",
+    )
+    .bind(input.name.trim())
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| e.to_string())? {
+        return Ok(existing);
+    }
+    sqlx::query(
+        r#"INSERT INTO study_projects (id, name, subject, exam_type, exam_date, daily_minutes, status, description, source, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)"#,
+    )
+    .bind(&id)
+    .bind(input.name.trim())
+    .bind(input.subject)
+    .bind(input.exam_type)
+    .bind(input.exam_date)
+    .bind(input.daily_minutes)
+    .bind(input.description)
+    .bind(input.source)
+    .bind(&now)
+    .bind(&now)
+    .execute(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    sqlx::query_as::<_, StudyProject>("SELECT * FROM study_projects WHERE id = ?")
+        .bind(&id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn list_study_projects(state: State<'_, AppState>) -> Result<Vec<StudyProject>, String> {
+    sqlx::query_as::<_, StudyProject>(
+        "SELECT * FROM study_projects WHERE status != 'archived' ORDER BY created_at DESC",
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn update_study_project(state: State<'_, AppState>, patch: StudyProjectPatch) -> Result<StudyProject, String> {
+    let existing = sqlx::query_as::<_, StudyProject>("SELECT * FROM study_projects WHERE id = ?")
+        .bind(&patch.id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let name = patch.name.unwrap_or(existing.name);
+    let subject = patch.subject.or(existing.subject);
+    let exam_type = patch.exam_type.or(existing.exam_type);
+    let exam_date = patch.exam_date.or(existing.exam_date);
+    let daily_minutes = patch.daily_minutes.or(existing.daily_minutes);
+    let status = patch.status.unwrap_or(existing.status);
+    let description = patch.description.or(existing.description);
+    let now = now_iso();
+
+    sqlx::query(
+        r#"UPDATE study_projects SET name = ?, subject = ?, exam_type = ?, exam_date = ?, daily_minutes = ?,
+        status = ?, description = ?, updated_at = ? WHERE id = ?"#,
+    )
+    .bind(name)
+    .bind(subject)
+    .bind(exam_type)
+    .bind(exam_date)
+    .bind(daily_minutes)
+    .bind(status)
+    .bind(description)
+    .bind(now)
+    .bind(&patch.id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    sqlx::query_as::<_, StudyProject>("SELECT * FROM study_projects WHERE id = ?")
+        .bind(&patch.id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn archive_study_project(state: State<'_, AppState>, id: String) -> Result<StudyProject, String> {
+    let now = now_iso();
+    sqlx::query("UPDATE study_projects SET status = 'archived', updated_at = ? WHERE id = ?")
+        .bind(&now)
+        .bind(&id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    sqlx::query_as::<_, StudyProject>("SELECT * FROM study_projects WHERE id = ?")
+        .bind(&id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn link_tasks_to_study_project(state: State<'_, AppState>, input: LinkTasksInput) -> Result<(), String> {
+    let now = now_iso();
+    for task_id in &input.task_ids {
+        sqlx::query("UPDATE tasks SET study_project_id = ?, updated_at = ? WHERE id = ?")
+            .bind(&input.project_id)
+            .bind(&now)
+            .bind(task_id)
+            .execute(&state.db)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn unlink_task_from_study_project(state: State<'_, AppState>, task_id: String) -> Result<(), String> {
+    let now = now_iso();
+    sqlx::query("UPDATE tasks SET study_project_id = NULL, updated_at = ? WHERE id = ?")
+        .bind(&now)
+        .bind(&task_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn list_tasks_by_study_project(state: State<'_, AppState>, project_id: String) -> Result<Vec<Task>, String> {
+    sqlx::query_as::<_, Task>(
+        "SELECT * FROM tasks WHERE study_project_id = ? AND status != 'archived' AND trashed_at IS NULL ORDER BY planned_date ASC, sort_order ASC",
+    )
+    .bind(project_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn list_study_projects_with_stats(state: State<'_, AppState>) -> Result<Vec<StudyProjectWithStats>, String> {
+    let projects = sqlx::query_as::<_, StudyProject>(
+        "SELECT * FROM study_projects WHERE status != 'archived' ORDER BY created_at DESC",
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let mut result = Vec::new();
+    for project in projects {
+        let counts = sqlx::query_as::<_, (i64, Option<i64>)>(
+            "SELECT COUNT(*), SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) FROM tasks WHERE study_project_id = ? AND status != 'archived' AND trashed_at IS NULL",
+        )
+        .bind(&project.id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        result.push(StudyProjectWithStats {
+            project,
+            task_count: counts.0,
+            completed_count: counts.1.unwrap_or(0),
+        });
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -1854,6 +2091,7 @@ fn task_input_from_ai_data(data: &Value) -> Result<TaskInput, String> {
         planned_date: value_string(data, &["planned_date"]),
         tags: string_array(data, "tags"),
         sort_order: data.get("sort_order").and_then(Value::as_i64),
+        study_project_id: None,
     })
 }
 
@@ -2589,6 +2827,14 @@ fn main() {
             save_ai_plan_snapshot,
             get_ai_plan_snapshot,
             list_tasks,
+            create_study_project,
+            list_study_projects,
+            update_study_project,
+            archive_study_project,
+            link_tasks_to_study_project,
+            unlink_task_from_study_project,
+            list_tasks_by_study_project,
+            list_study_projects_with_stats,
             start_timer,
             stop_timer,
             reset_timer,
