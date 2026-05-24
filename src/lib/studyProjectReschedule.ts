@@ -81,7 +81,7 @@ function buildDailyLoad(tasks: Task[], overrides = new Map<string, string | null
     const row = byDate.get(date) ?? { date, minutes: 0, taskCount: 0 };
     row.minutes += task.estimated_duration ?? 0;
     row.taskCount += 1;
-    row.overloaded = dailyMinutes ? row.minutes > dailyMinutes : false;
+    row.overloaded = dailyMinutes != null && dailyMinutes > 0 ? row.minutes > dailyMinutes : false;
     byDate.set(date, row);
   }
   return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
@@ -98,6 +98,8 @@ export function buildStudyProjectContext(
   if (!project) return null;
 
   const allProjectTasks = tasks.filter((task) => task.study_project_id === projectId);
+  const archivedProjectTasks = allProjectTasks.filter((task) => task.status === "archived");
+  const trashedProjectTasks = allProjectTasks.filter((task) => task.status !== "archived" && !!task.trashed_at);
   const activeProjectTasks = allProjectTasks.filter((task) => task.status !== "archived" && !task.trashed_at);
   const completed = activeProjectTasks.filter((task) => task.status === "done");
   const incomplete = activeProjectTasks.filter((task) => task.status !== "done");
@@ -108,9 +110,12 @@ export function buildStudyProjectContext(
   const currentDailyLoad = buildDailyLoad(plannedIncomplete, new Map(), dailyMinutes);
   const recentStart = addDays(now, -6);
   const projectTaskIds = new Set(activeProjectTasks.map((task) => task.id));
-  const recentRecords = records.filter((record) => record.task_id && projectTaskIds.has(record.task_id) && dateKey(record.started_at)! >= recentStart);
+  const recentRecords = records.filter((record) => {
+    const started = dateKey(record.started_at);
+    return !!record.task_id && projectTaskIds.has(record.task_id) && !!started && started >= recentStart;
+  });
   const todayTasks = plannedIncomplete.filter((task) => dateKey(task.planned_date) === now);
-  const todayCompleted = todayTasks.filter((task) => task.status === "done").length;
+  const todayCompleted = activeProjectTasks.filter((task) => task.status === "done" && dateKey(task.planned_date) === now).length;
   const warnings = noPlanned.length > 0
     ? [`${noPlanned.length} 个未完成任务没有 planned_date，本次不会自动改日期。`]
     : [];
@@ -125,7 +130,7 @@ export function buildStudyProjectContext(
       today: todayTasks.length,
       upcoming: plannedIncomplete.filter((task) => dateKey(task.planned_date)! > now).length,
       noPlannedDate: noPlanned.length,
-      trashedExcluded: allProjectTasks.length - activeProjectTasks.length,
+      trashedExcluded: trashedProjectTasks.length,
     },
     schedule: {
       firstPlannedDate: plannedDates[0] ?? null,
@@ -146,6 +151,8 @@ export function buildStudyProjectContext(
     skipped: [
       ...completed.map((task) => ({ id: task.id, title: task.title, reason: "已完成任务不参与重排" })),
       ...noPlanned.map((task) => ({ id: task.id, title: task.title, reason: "缺少 planned_date" })),
+      ...archivedProjectTasks.map((task) => ({ id: task.id, title: task.title, reason: "archived 任务不参与重排" })),
+      ...trashedProjectTasks.map((task) => ({ id: task.id, title: task.title, reason: "回收站任务不参与重排" })),
     ],
     warnings,
   };
@@ -187,7 +194,12 @@ export function buildProjectReschedulePreview(options: {
     const end = examDate ?? addDays(start, Math.max(0, targetTasks.length - 1));
     let cursor = start;
     let used = 0;
-    for (const task of [...targetTasks].sort((a, b) => dateKey(a.planned_date)!.localeCompare(dateKey(b.planned_date)!))) {
+    for (const task of [...targetTasks].sort((a, b) => {
+      const dateCompare = dateKey(a.planned_date)!.localeCompare(dateKey(b.planned_date)!);
+      if (dateCompare !== 0) return dateCompare;
+      if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order;
+      return a.created_at.localeCompare(b.created_at);
+    })) {
       const minutes = minutesForTask(task, warnings);
       if (minutes > dailyMinutes) {
         warnings.push(`任务「${task.title}」估时 ${minutes} 分钟超过每日上限 ${dailyMinutes} 分钟，本轮不拆分任务。`);

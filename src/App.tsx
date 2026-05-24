@@ -70,6 +70,11 @@ import {
   type PlanningSkillId,
 } from "./lib/aiPlanning";
 import { safeConversationSummary, safeConversationTitle } from "./lib/aiHistory";
+import {
+  buildStudyProjectDashboard,
+  filterStudyProjectDashboardTasks,
+  type StudyProjectTaskFilter,
+} from "./lib/studyProjectDashboard";
 
 dayjs.extend(isBetween);
 
@@ -1351,6 +1356,7 @@ function OperationPreviewCard({
     batch_delete: "移动到回收站",
     shift_tasks_date: "顺延任务",
     mark_needs_review: "标记待整理",
+    project_reschedule: "学习项目重排",
     batch_update: "修改任务",
     dangerous_operation: "危险操作",
   };
@@ -1359,6 +1365,7 @@ function OperationPreviewCard({
     batch_delete: "任务将移入回收站，可随时恢复。",
     shift_tasks_date: `任务计划日期将顺延 ${((pendingAction.params.shiftDays as number) ?? 1)} 天。`,
     mark_needs_review: "将为任务追加「待整理」标签。",
+    project_reschedule: "将只更新该学习项目内符合条件任务的计划日期。",
     batch_update: "将批量修改任务属性。",
     dangerous_operation: "此操作具有较高风险，请确认。",
   };
@@ -1605,7 +1612,6 @@ function AiPanel({
             compact
             onConfirm={async () => {
               const summary = pendingAction.summary;
-              setPendingAction(null);
               const nextUser = [...aiMessages, { role: "user", content: "确认" }].slice(-50) as typeof aiMessages;
               setAiMessages(nextUser);
               const result = await executePendingAction();
@@ -2251,7 +2257,6 @@ function AiView() {
               <OperationPreviewCard
                 onConfirm={async () => {
                   const summary = pendingAction.summary;
-                  setPendingAction(null);
                   await appendVisibleAiMessage("user", "确认");
                   // Use store's executePendingAction for all action types
                   const storeResult = await useAppStore.getState().executePendingAction();
@@ -2984,7 +2989,7 @@ function ReminderDock() {
     </aside>
   );
 }
-function StudyProjectsDialog({ onClose }: { onClose: () => void }) {
+function StudyProjectsDialogLegacy({ onClose }: { onClose: () => void }) {
   const { studyProjects, studyProjectsLoading, studyProjectsError, loadStudyProjects, archiveStudyProject, setView, setAiWorkspaceInput } = useAppStore();
   const [confirmArchiveId, setConfirmArchiveId] = useState<string | null>(null);
   const [viewProjectId, setViewProjectId] = useState<string | null>(null);
@@ -3068,6 +3073,425 @@ function StudyProjectsDialog({ onClose }: { onClose: () => void }) {
             );
           })}
         </div>
+      </section>
+    </div>
+  );
+}
+
+function studyProjectStatusLabel(status: StudyProjectWithStats["status"]) {
+  if (status === "active") return "进行中";
+  if (status === "paused") return "已暂停";
+  if (status === "completed") return "已完成";
+  return "已归档";
+}
+
+function studyProjectStatusClass(status: StudyProjectWithStats["status"]) {
+  if (status === "active") return "bg-green-500/15 text-green-300";
+  if (status === "paused") return "bg-yellow-500/15 text-yellow-300";
+  if (status === "completed") return "bg-blue-500/15 text-blue-300";
+  return "bg-white/10 text-[var(--muted-foreground)]";
+}
+
+function StudyProjectChip({ label, value, danger = false }: { label: string; value: ReactNode; danger?: boolean }) {
+  return (
+    <span className={`inline-flex min-w-0 max-w-full items-center gap-1 rounded-full border px-2.5 py-1 text-xs ${danger ? "border-red-400/30 bg-red-500/15 text-red-200" : "border-[var(--glass-inset-border)] bg-white/5 text-[var(--muted-foreground)]"}`}>
+      <span className="shrink-0 opacity-70">{label}</span>
+      <span className="min-w-0 truncate font-medium text-[var(--foreground)]">{value}</span>
+    </span>
+  );
+}
+
+function StudyProjectStat({ label, value }: { label: string; value: number | string }) {
+  return (
+    <div className="glass-inset min-w-0 p-3">
+      <div className="truncate text-xs text-[var(--muted-foreground)]">{label}</div>
+      <div className="mt-1 truncate font-mono text-xl font-semibold tabular-nums">{value}</div>
+    </div>
+  );
+}
+
+function StudyProjectTaskLine({
+  task,
+  onComplete,
+  onFocus,
+  onView,
+}: {
+  task: Task;
+  onComplete?: () => void;
+  onFocus?: () => void;
+  onView?: () => void;
+}) {
+  const tags = parseTags(task).slice(0, 3);
+  return (
+    <div className="glass-inset min-w-0 p-3 text-sm">
+      <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <PriorityDot quadrant={task.quadrant} />
+            <strong className={task.status === "done" ? "task-done min-w-0 truncate" : "min-w-0 truncate"}>{task.title}</strong>
+          </div>
+          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-[var(--muted-foreground)]">
+            <span>{task.planned_date ? `计划 ${task.planned_date.slice(0, 10)}` : "无计划日期"}</span>
+            <span>{task.deadline ? `截止 ${dayjs(task.deadline).format("MM-DD HH:mm")}` : "无截止"}</span>
+            <span>{task.estimated_duration ? formatMinutes(task.estimated_duration) : "未估时"}</span>
+            <span>Q{task.quadrant} / {task.urgency === "urgent" ? "紧急" : "不紧急"} / {task.importance === "important" ? "重要" : "不重要"}</span>
+            <span>{task.status}</span>
+          </div>
+          {tags.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5 text-xs">
+              {tags.map((tag) => (
+                <span key={tag} className="rounded-full border border-[var(--glass-inset-border)] px-2 py-0.5 text-[var(--muted-foreground)]">
+                  {tag}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+        {(onComplete || onFocus || onView) && (
+          <div className="flex shrink-0 flex-wrap justify-end gap-1">
+            {onComplete && task.status !== "done" && (
+              <button className="glass-inset px-2 py-1 text-xs" type="button" onClick={onComplete}>完成</button>
+            )}
+            {onFocus && task.status !== "done" && (
+              <button className="glass-inset px-2 py-1 text-xs" type="button" onClick={onFocus}>计时</button>
+            )}
+            {onView && (
+              <button className="glass-inset px-2 py-1 text-xs" type="button" onClick={onView}>查看</button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function StudyProjectDetailView({
+  project,
+  onBack,
+  onClose,
+}: {
+  project: StudyProjectWithStats;
+  onBack: () => void;
+  onClose: () => void;
+}) {
+  const { tasks, updateTask, startFocus, selectTask, setView, setAiWorkspaceInput } = useAppStore();
+  const [taskFilter, setTaskFilter] = useState<StudyProjectTaskFilter>("all");
+  const [expandedDates, setExpandedDates] = useState<string[]>([]);
+  const dashboard = useMemo(() => buildStudyProjectDashboard(project, tasks), [project, tasks]);
+  const filteredTasks = useMemo(() => filterStudyProjectDashboardTasks(dashboard, taskFilter), [dashboard, taskFilter]);
+  const progressText = dashboard.stats.total > 0
+    ? `已完成 ${dashboard.stats.completed} / ${dashboard.stats.total} 项，${dashboard.stats.progressPercent}%`
+    : "暂无项目任务";
+  const aiPrompt = `请根据「${project.name}」当前进度、逾期任务、未来 7 天安排和每日可用时间，调整后续学习计划。`;
+  const openAiWithPrompt = (prompt = aiPrompt) => {
+    setAiWorkspaceInput(prompt);
+    setView("ai");
+    onClose();
+  };
+  const viewTask = (task: Task) => {
+    selectTask(task.id);
+    setView("tasks");
+    onClose();
+  };
+  const toggleDate = (date: string) => {
+    setExpandedDates((current) => current.includes(date) ? current.filter((item) => item !== date) : [...current, date]);
+  };
+
+  return (
+    <>
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-4">
+        <div className="min-w-0">
+          <button className="mb-2 text-xs text-[var(--muted-foreground)] hover:text-[var(--neon-blue)]" type="button" onClick={onBack}>返回项目列表</button>
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <BookOpen size={18} className="shrink-0 text-[var(--neon-violet)]" />
+            <h3 className="min-w-0 max-w-full truncate text-lg font-semibold">{project.name}</h3>
+            <span className={`rounded-full px-2 py-0.5 text-xs ${studyProjectStatusClass(project.status)}`}>{studyProjectStatusLabel(project.status)}</span>
+          </div>
+          <div className="mt-2 flex min-w-0 flex-wrap gap-2">
+            <StudyProjectChip label="科目" value={project.subject || "未设置"} />
+            <StudyProjectChip label="类型" value={project.exam_type || "未设置"} />
+            <StudyProjectChip label="考试" value={project.exam_date ? project.exam_date.slice(0, 10) : "未设置"} />
+            <StudyProjectChip label="剩余" value={dashboard.remainingDays == null ? "未设置" : `${dashboard.remainingDays} 天`} danger={dashboard.remainingDays != null && dashboard.remainingDays < 7} />
+            <StudyProjectChip label="每日" value={project.daily_minutes ? `${project.daily_minutes} 分钟` : "未设置"} />
+          </div>
+          {project.description && (
+            <p className="mt-2 line-clamp-2 max-w-3xl break-words text-xs leading-5 text-[var(--muted-foreground)]">{project.description}</p>
+          )}
+        </div>
+        <div className="flex shrink-0 flex-wrap gap-2">
+          <button className="btn-glow rounded-xl px-3 py-2 text-sm font-semibold" type="button" onClick={() => openAiWithPrompt()}>
+            让 AI 调整计划
+          </button>
+          <button className="glass-inset px-3 py-2 text-sm" type="button" onClick={onClose}>关闭</button>
+        </div>
+      </div>
+
+      <div className="thin-scrollbar mt-4 min-h-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto pr-1">
+        <section className="grid grid-cols-[repeat(auto-fit,minmax(118px,1fr))] gap-2">
+          <StudyProjectStat label="总任务" value={dashboard.stats.total} />
+          <StudyProjectStat label="已完成" value={dashboard.stats.completed} />
+          <StudyProjectStat label="未完成" value={dashboard.stats.incomplete} />
+          <StudyProjectStat label="逾期" value={dashboard.stats.overdue} />
+          <StudyProjectStat label="今日" value={dashboard.stats.today} />
+          <StudyProjectStat label="无日期" value={dashboard.stats.noPlannedDate} />
+          <StudyProjectStat label="进度" value={`${dashboard.stats.progressPercent}%`} />
+        </section>
+
+        <section className="glass-inset p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+            <span className="font-semibold">项目进度</span>
+            <span className="text-[var(--muted-foreground)]">{progressText}</span>
+          </div>
+          <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/10">
+            <div className="h-full rounded-full bg-[var(--neon-violet)] transition-all" style={{ width: `${dashboard.stats.progressPercent}%` }} />
+          </div>
+          {dashboard.stats.total === 0 && <p className="mt-2 text-xs text-[var(--muted-foreground)]">该项目还没有绑定任务。</p>}
+        </section>
+
+        <section className="glass-inset p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h4 className="font-semibold">项目风险提示</h4>
+            <button className="glass-inset px-3 py-1.5 text-xs" type="button" onClick={() => openAiWithPrompt()}>让 AI 调整计划</button>
+          </div>
+          <div className="grid gap-2">
+            {dashboard.risks.map((risk) => (
+              <div key={risk.message} className={`rounded-xl border px-3 py-2 text-sm ${risk.level === "danger" ? "border-red-400/30 bg-red-500/10 text-red-100" : risk.level === "warning" ? "border-yellow-400/30 bg-yellow-500/10 text-yellow-100" : "border-emerald-400/25 bg-emerald-500/10 text-emerald-100"}`}>
+                {risk.message}
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          <div className="glass-inset min-w-0 p-4">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <h4 className="font-semibold">今日项目任务</h4>
+              <span className="rounded-full border border-[var(--glass-inset-border)] px-2 py-0.5 text-xs text-[var(--muted-foreground)]">{dashboard.todayTasks.length} 项</span>
+            </div>
+            <div className="space-y-2">
+              {dashboard.todayTasks.length === 0 ? (
+                <p className="text-sm text-[var(--muted-foreground)]">今天暂无该项目未完成任务。</p>
+              ) : dashboard.todayTasks.map((task) => (
+                <StudyProjectTaskLine
+                  key={task.id}
+                  task={task}
+                  onComplete={() => void updateTask({ id: task.id, status: "done" })}
+                  onFocus={() => void startFocus(task)}
+                  onView={() => viewTask(task)}
+                />
+              ))}
+            </div>
+          </div>
+
+          <div className="glass-inset min-w-0 p-4">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <h4 className="font-semibold">未来 7 天安排</h4>
+              <span className="rounded-full border border-[var(--glass-inset-border)] px-2 py-0.5 text-xs text-[var(--muted-foreground)]">{dashboard.upcomingGroups.reduce((sum, group) => sum + group.taskCount, 0)} 项</span>
+            </div>
+            <div className="space-y-3">
+              {dashboard.upcomingGroups.length === 0 ? (
+                <p className="text-sm text-[var(--muted-foreground)]">未来 7 天暂无项目任务安排。</p>
+              ) : dashboard.upcomingGroups.map((group) => {
+                const expanded = expandedDates.includes(group.date);
+                const visibleTasks = expanded ? group.tasks : group.tasks.slice(0, 3);
+                return (
+                  <div key={group.date} className="rounded-xl border border-[var(--glass-inset-border)] p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                      <span className="font-medium">{group.label} <span className="text-xs text-[var(--muted-foreground)]">{group.date}</span></span>
+                      <span className={group.overloaded ? "text-xs text-red-300" : "text-xs text-[var(--muted-foreground)]"}>{group.taskCount} 项 / {formatMinutes(group.totalMinutes)}</span>
+                    </div>
+                    <div className="mt-2 space-y-1.5">
+                      {visibleTasks.map((task) => (
+                        <button key={task.id} className="block w-full truncate rounded-lg bg-white/5 px-2 py-1.5 text-left text-xs hover:bg-white/10" type="button" onClick={() => viewTask(task)}>
+                          {task.title}
+                        </button>
+                      ))}
+                    </div>
+                    {group.tasks.length > 3 && (
+                      <button className="mt-2 text-xs text-[var(--neon-blue)]" type="button" onClick={() => toggleDate(group.date)}>
+                        {expanded ? "收起" : `查看全部 ${group.tasks.length} 项`}
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </section>
+
+        <section className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          <div className="glass-inset min-w-0 p-4">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <h4 className="font-semibold">逾期任务</h4>
+              <button className="glass-inset px-3 py-1.5 text-xs" type="button" onClick={() => openAiWithPrompt(`我有一些「${project.name}」的逾期任务，帮我调整后续计划。`)}>
+                让 AI 调整逾期任务
+              </button>
+            </div>
+            {dashboard.overdueTasks.length > 0 && <p className="mb-2 text-xs text-red-200">该项目有 {dashboard.overdueTasks.length} 个逾期任务，建议调整后续计划。</p>}
+            <div className="space-y-2">
+              {dashboard.overdueTasks.length === 0 ? (
+                <p className="text-sm text-[var(--muted-foreground)]">暂无逾期任务。</p>
+              ) : dashboard.overdueTasks.slice(0, 5).map((task) => (
+                <StudyProjectTaskLine key={task.id} task={task} onView={() => viewTask(task)} />
+              ))}
+            </div>
+          </div>
+
+          <div className="glass-inset min-w-0 p-4">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <h4 className="font-semibold">无计划日期任务</h4>
+              <button className="glass-inset px-3 py-1.5 text-xs" type="button" onClick={() => openAiWithPrompt(`请帮我安排「${project.name}」中尚未排入日历的任务。`)}>
+                让 AI 安排这些任务
+              </button>
+            </div>
+            {dashboard.noPlannedDateTasks.length > 0 && <p className="mb-2 text-xs text-yellow-100">这些任务暂未排入日历，可能影响项目进度。</p>}
+            <div className="space-y-2">
+              {dashboard.noPlannedDateTasks.length === 0 ? (
+                <p className="text-sm text-[var(--muted-foreground)]">暂无无计划日期任务。</p>
+              ) : dashboard.noPlannedDateTasks.slice(0, 5).map((task) => (
+                <StudyProjectTaskLine key={task.id} task={task} onView={() => viewTask(task)} />
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="glass-inset p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h4 className="font-semibold">项目任务列表</h4>
+            <div className="flex flex-wrap gap-1 text-xs">
+              {[
+                ["all", "全部"],
+                ["incomplete", "未完成"],
+                ["completed", "已完成"],
+                ["overdue", "逾期"],
+                ["no_date", "无日期"],
+              ].map(([value, label]) => (
+                <button
+                  key={value}
+                  className={`rounded-lg px-2.5 py-1.5 ${taskFilter === value ? "btn-glow" : "glass-inset text-[var(--muted-foreground)]"}`}
+                  type="button"
+                  onClick={() => setTaskFilter(value as StudyProjectTaskFilter)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="thin-scrollbar max-h-[360px] space-y-2 overflow-y-auto pr-1">
+            {filteredTasks.length === 0 ? (
+              <p className="py-4 text-sm text-[var(--muted-foreground)]">当前筛选下没有任务。</p>
+            ) : filteredTasks.map((task) => (
+              <StudyProjectTaskLine key={task.id} task={task} onView={() => viewTask(task)} />
+            ))}
+          </div>
+        </section>
+      </div>
+    </>
+  );
+}
+
+function StudyProjectsDialog({ onClose }: { onClose: () => void }) {
+  const { studyProjects, studyProjectsLoading, studyProjectsError, loadStudyProjects, archiveStudyProject, setView, setAiWorkspaceInput } = useAppStore();
+  const [confirmArchiveId, setConfirmArchiveId] = useState<string | null>(null);
+  const [viewProjectId, setViewProjectId] = useState<string | null>(null);
+
+  useEffect(() => { void loadStudyProjects(); }, [loadStudyProjects]);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const activeProjects = studyProjects.filter((p) => p.status !== "archived");
+  const selectedProject = activeProjects.find((project) => project.id === viewProjectId) ?? null;
+
+  return (
+    <div className="ai-history-backdrop" role="presentation" onMouseDown={onClose}>
+      <section className="study-project-dialog ai-history-dialog glass-card" role="dialog" aria-modal="true" aria-label="学习项目" onMouseDown={(event) => event.stopPropagation()}>
+        {selectedProject ? (
+          <StudyProjectDetailView project={selectedProject} onBack={() => setViewProjectId(null)} onClose={onClose} />
+        ) : (
+          <>
+            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-4">
+              <div>
+                <h3 className="text-lg font-semibold">学习项目</h3>
+                <p className="mt-1 text-sm text-[var(--muted-foreground)]">管理你的学习计划和项目。</p>
+              </div>
+              <div className="flex gap-2">
+                <button className="glass-inset px-3 py-2 text-sm" type="button" onClick={() => void loadStudyProjects()}>刷新</button>
+                <button className="glass-inset px-3 py-2 text-sm" type="button" onClick={onClose}>关闭</button>
+              </div>
+            </div>
+
+            <div className="thin-scrollbar mt-4 min-h-0 flex-1 space-y-3 overflow-x-hidden overflow-y-auto pr-1">
+              {studyProjectsLoading && <p className="text-sm text-[var(--muted-foreground)]">加载中...</p>}
+              {studyProjectsError && <p className="text-sm text-red-400">{studyProjectsError}</p>}
+              {!studyProjectsLoading && activeProjects.length === 0 && (
+                <p className="py-8 text-center text-sm text-[var(--muted-foreground)]">还没有学习项目。在 AI 工作区创建学习计划时会自动生成。</p>
+              )}
+              {activeProjects.map((project) => {
+                const progress = project.task_count > 0 ? Math.round((project.completed_count / project.task_count) * 100) : 0;
+                return (
+                  <div key={project.id} className="glass-inset p-4">
+                    <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex min-w-0 flex-wrap items-center gap-2">
+                          <BookOpen size={16} className="shrink-0 text-[var(--neon-violet)]" />
+                          <h4 className="min-w-0 truncate font-semibold">{project.name}</h4>
+                          <span className={`rounded-full px-2 py-0.5 text-xs ${studyProjectStatusClass(project.status)}`}>
+                            {studyProjectStatusLabel(project.status)}
+                          </span>
+                        </div>
+                        <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--muted-foreground)]">
+                          {project.subject && <span>科目：{project.subject}</span>}
+                          {project.exam_type && <span>类型：{project.exam_type}</span>}
+                          {project.exam_date && <span>考试日期：{project.exam_date.slice(0, 10)}</span>}
+                          {project.daily_minutes && <span>每日 {project.daily_minutes} 分钟</span>}
+                        </div>
+                        <div className="mt-2 flex items-center gap-3 text-xs">
+                          <span className="text-[var(--muted-foreground)]">
+                            任务 {project.completed_count}/{project.task_count}
+                          </span>
+                          <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-white/10">
+                            <div className="h-full rounded-full bg-[var(--neon-violet)] transition-all" style={{ width: `${progress}%` }} />
+                          </div>
+                          <span className="tabular-nums text-[var(--muted-foreground)]">{progress}%</span>
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 flex-wrap gap-1">
+                        <button className="btn-glow rounded-xl px-3 py-1.5 text-xs font-semibold" type="button" onClick={() => setViewProjectId(project.id)}>
+                          查看详情
+                        </button>
+                        <button
+                          className="glass-inset px-2 py-1 text-xs"
+                          type="button"
+                          onClick={() => {
+                            setAiWorkspaceInput(`请根据「${project.name}」当前进度、逾期任务、未来 7 天安排和每日可用时间，调整后续学习计划。`);
+                            setView("ai");
+                            onClose();
+                          }}
+                        >
+                          调整计划
+                        </button>
+                        {confirmArchiveId === project.id ? (
+                          <div className="flex items-center gap-1">
+                            <button className="glass-inset px-2 py-1 text-xs text-red-300" type="button" onClick={() => { void archiveStudyProject(project.id); setConfirmArchiveId(null); showToast("已归档"); }}>确认</button>
+                            <button className="glass-inset px-2 py-1 text-xs" type="button" onClick={() => setConfirmArchiveId(null)}>取消</button>
+                          </div>
+                        ) : (
+                          <button className="glass-inset px-2 py-1 text-xs" type="button" title="归档" onClick={() => setConfirmArchiveId(project.id)}>归档</button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
       </section>
     </div>
   );

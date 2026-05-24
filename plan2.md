@@ -1,4 +1,42 @@
 # SmartFocus Phase 2 开发计划
+### Sprint 20E.1：学习项目级智能重排回归验收与防误伤加固
+
+状态：已完成。
+
+回归验收记录：
+- Project Reschedule Context：统计已限定在目标 `study_project_id` 内；`total / completed / incomplete / overdue / today / upcoming` 均排除回收站任务和 archived 任务；`noPlannedDate`、`examDate`、`remainingDays`、`dailyMinutes` 可正确读取。
+- `focusMinutesLast7Days` 仅来自真实 `timer_records`；没有 timer data 时保持 0，并通过 `hasTimerData = false` 标识，不伪造专注分钟。
+- `shift_project`：只选择目标项目下未完成、未回收站、未 archived、且有 `planned_date` 的任务；只更新 `planned_date`，不修改 `deadline / urgency / importance / quadrant`。
+- `missed_today`：匹配具体学习项目后，只顺延该项目今天及以后未完成、有 `planned_date` 的任务；已完成任务、无排期任务、回收站任务不参与；超过 `exam_date` 会进入 warnings。
+- `pause_project`：`两天` 可解析为 `pauseDays = 2`，仅顺延暂停窗口内及之后的目标项目可重排任务；超过 `exam_date` 会 warning。
+- `compress / redistribute`：可使用用户输入的每日上限，例如 40 分钟；按原计划日期、`sort_order`、创建时间稳定排序；缺失估时按 45 分钟并 warning；不拆分单个任务，不修改标题、deadline、quadrant。
+- 已完成任务：从 `eligibleTasks` 中排除，并在 skipped 中展示。
+- 回收站任务：从统计、预览、执行中排除，并在 skipped 中展示。
+- archived 任务：从统计、预览、执行中排除，并在 skipped 中展示。
+- 防误伤普通任务：普通任务“正常”的顺延/删除仍走普通任务解析和回收站链路，不进入项目重排。
+- 防误伤其他项目：预览生成和确认执行均按 `study_project_id` 二次校验，其他学习项目任务不会被更新。
+- OperationPreviewCard：项目级卡片显示项目名称、策略、影响任务数量、old_date → new_date、跳过数量、warnings、确认执行和取消按钮。
+- 确认按钮：修复了按钮确认先清空 `pendingAction` 导致不执行的问题；现在点击确认直接执行 store `executePendingAction`，使用预览中保存的 task id 和 `new_planned_date`，不重新发给模型。
+- 取消按钮：仍只清空 `pendingAction` 并显示已取消，不修改任务。
+- Workbench 和 AI Workspace：继续共用 `intentRouter -> buildPendingActionFromIntent -> executePendingAction` 链路，文字确认/取消与按钮确认/取消均可用。
+
+小修范围：
+- `src/lib/studyProjectReschedule.ts`：补齐 archived / 回收站 skipped 明细；修正 `missedToday` 的今日完成判断；timer 记录日期做空值保护；每日负载 over limit 判断改为显式 dailyMinutes；压缩重排同日任务按 `sort_order / created_at` 稳定排序。
+- `src/lib/store.ts`：项目重排确认执行前增加二次防误伤校验，任务必须仍属于目标项目、未完成、未 archived、未回收站且仍有 `planned_date` 才会更新。
+- `src/App.tsx`：修复 OperationPreviewCard 点击确认先清空 pendingAction 的问题；补充项目重排类型与风险提示文案。
+
+构建与测试：
+- `npm run build`：通过；仅有 Vite chunk size / ineffective dynamic import 警告。
+- `cargo test`：通过，3 个测试全部通过。
+- `git diff --check`：通过；仅有 LF/CRLF warning，无 whitespace error。
+- `plan.md`：未修改。
+
+剩余 TODO：
+- 真实 Tauri 窗口手工冒烟仍建议用户补测：创建学习项目、创建 3 个任务、完成 1 个、移入回收站 1 个、保留 1 个未完成有 `planned_date` 的任务，再执行项目顺延，确认只有该未完成未回收任务被调整。
+
+是否可以进入 Sprint 20F：
+- 可以。建议进入 20F 前先完成上述真实窗口手工冒烟。
+
 ### Sprint 20E：学习项目级执行反馈与智能重排 v1
 
 状态：已完成。
@@ -2212,3 +2250,45 @@ prompt 隔离继承：
 - 可在真实 Tauri 窗口补一轮手工回归：删除名称是正常、删除今天名称是正常的任务、将今天名称为复习的任务往后推一天、多候选编号选择。
 
 ---
+# SmartFocus Phase 2 Sprint 20F：学习项目详情页 / 项目仪表盘 v1
+
+状态：已完成。
+
+实现范围：
+- 新增 `src/lib/studyProjectDashboard.ts`，集中提供学习项目详情页所需的纯前端 dashboard selector / helper。
+- 在 `StudyProjectsDialog` 中新增“查看详情”入口，采用弹窗内列表 / 详情页切换方案，保留返回按钮、刷新、归档和 AI 调整入口。
+- 新增项目详情顶部信息区：项目名、科目、类型、状态、考试日期、剩余天数、每日计划时间和项目描述摘要。
+- 新增项目统计卡片：总任务、已完成、未完成、逾期、今日、无日期、完成进度。
+- 新增项目进度条，按 `completed / total` 显示真实完成比例；`total = 0` 时显示空状态。
+- 新增今日项目任务、未来 7 天安排、逾期任务、无计划日期任务、项目风险提示和底部项目任务列表。
+- 项目任务列表支持全部、未完成、已完成、逾期、无日期筛选。
+- “让 AI 调整计划”“让 AI 调整逾期任务”“让 AI 安排这些任务”均只打开 AI Workspace 并预填 prompt，不自动执行，不绕过 OperationPreviewCard。
+
+验收记录：
+- 是否新增项目详情视图：是，已在 `StudyProjectsDialog` 内部切换显示详情页。
+- 是否新增项目 dashboard helper：是，新增 `src/lib/studyProjectDashboard.ts`。
+- 项目统计是否正确：是，统计仅基于 `study_project_id = currentProject.id` 的任务。
+- 是否排除回收站任务：是，helper 过滤 `trashed_at`。
+- 是否排除 archived：是，helper 过滤 `status === "archived"`。
+- 是否排除其他项目任务：是，helper 仅匹配当前 `project.id`。
+- 今日项目任务是否显示：是，显示当前项目今天未完成任务，并支持完成、计时和查看任务。
+- 未来 7 天安排是否显示：是，按日期分组显示任务数量、预计总时长和前 3 条任务，可展开查看全部。
+- 逾期任务是否显示：是，显示风险提示和前 5 条逾期任务。
+- 无日期任务是否显示：是，显示数量提示和前 5 条无计划日期任务。
+- AI 调整入口是否可用：是，进入 AI Workspace 并预填项目调整请求，不直接修改任务。
+- 是否无横向滚动：已通过响应式 `minmax(0,1fr)`、`min-width:0` 和弹窗 `overflow-x:hidden` 约束处理。
+- 是否影响普通任务：否，普通任务没有 `study_project_id` 时不会进入项目详情统计。
+- 是否影响 AI 工具链：否，未修改 AI Tool Orchestrator、OperationPreviewCard 或 Workbench / AI Workspace 执行链。
+- 是否仍不直接写 quadrant：是，本轮未写入 `quadrant`。
+
+构建与测试：
+- `npm run build`：通过；仅保留 Vite chunk size / ineffective dynamic import 警告。
+- `cargo test`：通过，3 个测试通过。
+- `git diff --check`：通过，仅有既有 LF/CRLF warning，无 whitespace error。
+- `plan.md`：未修改。
+
+剩余 TODO：
+- 建议在真实 Tauri 窗口中做一轮手工冒烟：打开学习项目弹窗、进入详情页、验证项目 A / 项目 B 任务隔离、AI 预填入口、768px 到 1366px 宽度无横向滚动。
+
+是否可以进入下一阶段：
+- 可以继续后续阶段，但本轮未进入 Sprint 21。

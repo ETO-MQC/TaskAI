@@ -788,8 +788,21 @@ export const useAppStore = create<AppStore>((set, get) => ({
       }
       let successCount = 0;
       let failCount = 0;
+      const currentTasks = get().tasks;
       for (const item of preview.affectedPreview) {
         if (!item.new_planned_date) {
+          failCount++;
+          continue;
+        }
+        const current = currentTasks.find((task) => task.id === item.id);
+        if (
+          !current
+          || current.study_project_id !== preview.projectId
+          || current.status === "done"
+          || current.status === "archived"
+          || !!current.trashed_at
+          || !current.planned_date
+        ) {
           failCount++;
           continue;
         }

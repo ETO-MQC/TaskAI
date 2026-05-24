@@ -1464,3 +1464,22 @@
     bottom: 16px;
   }
 }
+
+.study-project-dialog {
+  width: min(980px, calc(100vw - 48px));
+  height: min(780px, calc(100vh - 80px));
+  overflow-x: hidden;
+}
+
+.study-project-dialog,
+.study-project-dialog * {
+  min-width: 0;
+}
+
+@media (max-width: 767px) {
+  .study-project-dialog {
+    width: 100%;
+    height: min(90vh, 780px);
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  }
+}
