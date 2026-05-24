@@ -722,7 +722,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
     const chosenIds = [sel.taskIds[index]];
     const selectedIntent = buildIntentFromSelection(sel, chosenIds);
-    const action = buildPendingActionFromIntent(selectedIntent, get().tasks, sel.source);
+    const action = buildPendingActionFromIntent(selectedIntent, get().tasks, sel.source, get().studyProjects, get().records);
     pendingCandidateSelection = null;
     set((s) => ({ pendingCandidatesVersion: s.pendingCandidatesVersion + 1 }));
     if (!action) {
@@ -779,6 +779,31 @@ export const useAppStore = create<AppStore>((set, get) => ({
       const toolCtx = buildToolContext(get);
       const result = await executeTool("mark_needs_review", { taskIds: ids }, toolCtx);
       return { successCount: result.affectedCount ?? 0, failCount: ids.length - (result.affectedCount ?? 0), resultMsg: result.message };
+    }
+
+    if (action.type === "project_reschedule") {
+      const preview = action.projectReschedule;
+      if (!preview) {
+        return { successCount: 0, failCount: 0, resultMsg: "项目重排预览已失效，请重新生成。" };
+      }
+      let successCount = 0;
+      let failCount = 0;
+      for (const item of preview.affectedPreview) {
+        if (!item.new_planned_date) {
+          failCount++;
+          continue;
+        }
+        try {
+          await api<Task>("update_task", { patch: { id: item.id, planned_date: item.new_planned_date } });
+          successCount++;
+        } catch {
+          failCount++;
+        }
+      }
+      await get().load();
+      await get().loadStudyProjects();
+      const resultMsg = `已调整「${preview.projectName}」中的 ${successCount} 个任务，${preview.skipped.length} 个任务被跳过${failCount > 0 ? `，${failCount} 个任务失败` : ""}。`;
+      return { successCount, failCount, resultMsg };
     }
 
     if (action.type === "batch_update") {
@@ -868,7 +893,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set((s) => ({ pendingCandidatesVersion: s.pendingCandidatesVersion + 1 }));
         const chosenIds = selectedIndexes.map((index) => selection.taskIds[index]).filter(Boolean);
         const selectedIntent = buildIntentFromSelection(selection, chosenIds);
-        const action = buildPendingActionFromIntent(selectedIntent, get().tasks, src);
+        const action = buildPendingActionFromIntent(selectedIntent, get().tasks, src, get().studyProjects, get().records);
         const reply = action
           ? `${action.summary}\n\n影响任务（前 ${action.affectedPreview.length} 个）：\n${action.affectedPreview.map((title) => `• ${title}`).join("\n")}\n\n请回复「确认」执行，或「取消」放弃。`
           : "没有找到符合条件的任务。";
@@ -892,9 +917,32 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set((s) => ({ pendingCandidatesVersion: s.pendingCandidatesVersion + 1 }));
     }
 
+    if (intentResult.intent === "project_reschedule" && !intentResult.needsClarification) {
+      const action = buildPendingActionFromIntent(intentResult, get().tasks, src, get().studyProjects, get().records);
+      const reply = action
+        ? `${action.summary}\n\n影响任务（前 ${action.projectReschedule?.affectedPreview.slice(0, 5).length ?? 0} 个）：\n${action.affectedPreview.map((item) => `- ${item}`).join("\n")}\n\n请回复「确认」执行，或「取消」放弃。`
+        : intentResult.clarificationQuestion ?? "该学习项目下没有可重排的未完成已排期任务。";
+      if (action) set({ pendingAction: action });
+      if (src === "workbench") {
+        const nextMessages = [...get().aiMessages, { role: "user", content: text } as AiMessage, { role: "assistant", content: reply } as AiMessage].slice(-50);
+        set({ aiMessages: nextMessages });
+        persistAiMessages(nextMessages);
+      }
+      return { intent: "project_reschedule", action: action ? "pending_confirmation" : "no_match", data: action?.params ?? {}, needs_clarification: false, clarification: null, reply };
+    }
+    if (intentResult.intent === "project_reschedule" && intentResult.needsClarification) {
+      const reply = intentResult.clarificationQuestion ?? "请指定要调整的学习项目。";
+      if (src === "workbench") {
+        const nextMessages = [...get().aiMessages, { role: "user", content: text } as AiMessage, { role: "assistant", content: reply } as AiMessage].slice(-50);
+        set({ aiMessages: nextMessages });
+        persistAiMessages(nextMessages);
+      }
+      return { intent: "project_reschedule", action: "clarify", data: intentResult.params, needs_clarification: true, clarification: reply, reply };
+    }
+
     // --- Step 3: High-confidence tool intents ---
     if (intentResult.intent === "move_tasks_to_trash" && !intentResult.needsClarification) {
-      const action = buildPendingActionFromIntent(intentResult, get().tasks, src);
+      const action = buildPendingActionFromIntent(intentResult, get().tasks, src, get().studyProjects, get().records);
       if (action) {
         set({ pendingAction: action });
         const previewText = action.affectedPreview.length > 0
@@ -935,7 +983,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
     // Shift tasks date
     if (intentResult.intent === "shift_tasks_date" && !intentResult.needsClarification) {
-      const action = buildPendingActionFromIntent(intentResult, get().tasks, src);
+      const action = buildPendingActionFromIntent(intentResult, get().tasks, src, get().studyProjects, get().records);
       if (action) {
         set({ pendingAction: action });
         const previewText = action.affectedPreview.length > 0
@@ -976,7 +1024,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
     // Mark needs review
     if (intentResult.intent === "mark_needs_review" && !intentResult.needsClarification) {
-      const action = buildPendingActionFromIntent(intentResult, get().tasks, src);
+      const action = buildPendingActionFromIntent(intentResult, get().tasks, src, get().studyProjects, get().records);
       if (action) {
         set({ pendingAction: action });
         const previewText = action.affectedPreview.length > 0
@@ -1075,7 +1123,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set((s) => ({ pendingCandidatesVersion: s.pendingCandidatesVersion + 1 }));
         const chosenIds = selectedIndexes.map((index) => selection.taskIds[index]).filter(Boolean);
         const selectedIntent = buildIntentFromSelection(selection, chosenIds);
-        const action = buildPendingActionFromIntent(selectedIntent, get().tasks, "ai_workspace");
+        const action = buildPendingActionFromIntent(selectedIntent, get().tasks, "ai_workspace", get().studyProjects, get().records);
         const reply = action
           ? `${action.summary}\n\n影响任务（前 ${action.affectedPreview.length} 个）：\n${action.affectedPreview.map((title) => `• ${title}`).join("\n")}\n\n请回复「确认」执行，或「取消」放弃。`
           : "没有找到符合条件的任务。";
@@ -1093,9 +1141,23 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set((s) => ({ pendingCandidatesVersion: s.pendingCandidatesVersion + 1 }));
     }
 
+    if (intentResult.intent === "project_reschedule" && !intentResult.needsClarification) {
+      const action = buildPendingActionFromIntent(intentResult, get().tasks, "ai_workspace", get().studyProjects, get().records);
+      if (action) {
+        set({ pendingAction: action });
+        const previewText = action.affectedPreview.length > 0 ? `\n\n影响任务（前 ${action.affectedPreview.length} 个）：\n${action.affectedPreview.map((t) => `- ${t}`).join("\n")}` : "";
+        return { response: { intent: "project_reschedule", action: "pending_confirmation", data: action.params, needs_clarification: false, clarification: null, reply: `${action.summary}${previewText}\n\n请回复「确认」执行，或「取消」放弃。` }, handled: true };
+      }
+      return { response: { intent: "project_reschedule", action: "no_match", data: {}, needs_clarification: false, clarification: null, reply: intentResult.clarificationQuestion ?? "该学习项目下没有可重排的未完成已排期任务。" }, handled: true };
+    }
+    if (intentResult.intent === "project_reschedule" && intentResult.needsClarification) {
+      const reply = intentResult.clarificationQuestion ?? "请指定要调整的学习项目。";
+      return { response: { intent: "project_reschedule", action: "clarify", data: intentResult.params, needs_clarification: true, clarification: reply, reply }, handled: true };
+    }
+
     // Delete → pendingAction
     if (intentResult.intent === "move_tasks_to_trash" && !intentResult.needsClarification) {
-      const action = buildPendingActionFromIntent(intentResult, get().tasks, "ai_workspace");
+      const action = buildPendingActionFromIntent(intentResult, get().tasks, "ai_workspace", get().studyProjects, get().records);
       if (action) {
         set({ pendingAction: action });
         const previewText = action.affectedPreview.length > 0 ? `\n\n影响任务（前 ${action.affectedPreview.length} 个）：\n${action.affectedPreview.map((t: string) => `• ${t}`).join("\n")}` : "";
@@ -1109,7 +1171,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
     // Shift tasks date → pendingAction
     if (intentResult.intent === "shift_tasks_date" && !intentResult.needsClarification) {
-      const action = buildPendingActionFromIntent(intentResult, get().tasks, "ai_workspace");
+      const action = buildPendingActionFromIntent(intentResult, get().tasks, "ai_workspace", get().studyProjects, get().records);
       if (action) {
         set({ pendingAction: action });
         const previewText = action.affectedPreview.length > 0 ? `\n\n影响任务（前 ${action.affectedPreview.length} 个）：\n${action.affectedPreview.map((t: string) => `• ${t}`).join("\n")}` : "";
@@ -1123,7 +1185,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
     // Mark needs review → direct or pending
     if (intentResult.intent === "mark_needs_review" && !intentResult.needsClarification) {
-      const action = buildPendingActionFromIntent(intentResult, get().tasks, "ai_workspace");
+      const action = buildPendingActionFromIntent(intentResult, get().tasks, "ai_workspace", get().studyProjects, get().records);
       if (action) {
         set({ pendingAction: action });
         const previewText = action.affectedPreview.length > 0 ? `\n\n影响任务（前 ${action.affectedPreview.length} 个）：\n${action.affectedPreview.map((t: string) => `• ${t}`).join("\n")}` : "";

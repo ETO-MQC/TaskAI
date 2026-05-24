@@ -170,17 +170,56 @@ export interface AiResponse {
 
 export interface PendingAction {
   id: string;
-  type: "batch_delete" | "batch_update" | "dangerous_operation" | "shift_tasks_date" | "mark_needs_review";
+  type: "batch_delete" | "batch_update" | "dangerous_operation" | "shift_tasks_date" | "mark_needs_review" | "project_reschedule";
   toolName?: string;
   params: Record<string, unknown>;
   summary: string;
   affectedCount: number;
   affectedPreview: string[];
+  projectReschedule?: ProjectReschedulePreview;
   taskIds: string[];
   riskLevel: "low" | "medium" | "high";
   source: "workbench" | "ai_workspace";
   createdAt: number;
   expiresAt: number;
+}
+
+export interface ProjectRescheduleTaskPreview {
+  id: string;
+  title: string;
+  old_planned_date: string | null;
+  new_planned_date: string | null;
+  estimated_duration: number | null;
+  status: TaskStatus;
+}
+
+export interface ProjectRescheduleSkippedTask {
+  id: string;
+  title: string;
+  reason: string;
+}
+
+export interface ProjectDailyLoad {
+  date: string;
+  minutes: number;
+  taskCount: number;
+  overloaded?: boolean;
+}
+
+export interface ProjectReschedulePreview {
+  actionType: "project_reschedule";
+  projectId: string;
+  projectName: string;
+  strategy: "shift" | "pause" | "compress" | "redistribute" | "missed_today";
+  affectedTaskIds: string[];
+  affectedPreview: ProjectRescheduleTaskPreview[];
+  skipped: ProjectRescheduleSkippedTask[];
+  warnings: string[];
+  dailyLoadBefore: ProjectDailyLoad[];
+  dailyLoadAfter: ProjectDailyLoad[];
+  summary: string;
+  riskLevel: "low" | "medium" | "high";
+  requiresConfirmation: true;
 }
 
 export interface DashboardStats {

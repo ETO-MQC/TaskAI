@@ -1347,7 +1347,7 @@ function OperationPreviewCard({
   const pendingAction = useAppStore((s) => s.pendingAction);
   if (!pendingAction) return null;
 
-  const typeLabel: Record<PendingAction["type"], string> = {
+  const typeLabel: Partial<Record<PendingAction["type"], string>> = {
     batch_delete: "移动到回收站",
     shift_tasks_date: "顺延任务",
     mark_needs_review: "标记待整理",
@@ -1355,7 +1355,7 @@ function OperationPreviewCard({
     dangerous_operation: "危险操作",
   };
 
-  const riskText: Record<PendingAction["type"], string> = {
+  const riskText: Partial<Record<PendingAction["type"], string>> = {
     batch_delete: "任务将移入回收站，可随时恢复。",
     shift_tasks_date: `任务计划日期将顺延 ${((pendingAction.params.shiftDays as number) ?? 1)} 天。`,
     mark_needs_review: "将为任务追加「待整理」标签。",
@@ -1377,7 +1377,22 @@ function OperationPreviewCard({
           影响 {pendingAction.affectedCount} 个任务
         </p>
       )}
-      {pendingAction.affectedPreview.length > 0 && (
+      {pendingAction.projectReschedule && (
+        <div className="space-y-1 rounded-lg border border-white/10 p-2 text-xs text-[var(--muted-foreground)]">
+          <div className="font-medium text-[var(--foreground)]">{pendingAction.projectReschedule.projectName}</div>
+          <div>策略：{pendingAction.projectReschedule.strategy} · 跳过 {pendingAction.projectReschedule.skipped.length} 个任务</div>
+          {pendingAction.projectReschedule.affectedPreview.slice(0, 5).map((item) => (
+            <div key={item.id} className="flex flex-wrap gap-1">
+              <span className="truncate">{item.title}</span>
+              <span>{item.old_planned_date ?? "未排期"} → {item.new_planned_date ?? "未排期"}</span>
+            </div>
+          ))}
+          {pendingAction.projectReschedule.warnings.map((warning, index) => (
+            <div key={index} className="text-[var(--neon-amber)]">{warning}</div>
+          ))}
+        </div>
+      )}
+      {!pendingAction.projectReschedule && pendingAction.affectedPreview.length > 0 && (
         <ul className="text-xs text-[var(--muted-foreground)] space-y-0.5">
           {pendingAction.affectedPreview.map((title, i) => (
             <li key={i} className="flex items-center gap-1.5">
@@ -2970,7 +2985,7 @@ function ReminderDock() {
   );
 }
 function StudyProjectsDialog({ onClose }: { onClose: () => void }) {
-  const { studyProjects, studyProjectsLoading, studyProjectsError, loadStudyProjects, archiveStudyProject } = useAppStore();
+  const { studyProjects, studyProjectsLoading, studyProjectsError, loadStudyProjects, archiveStudyProject, setView, setAiWorkspaceInput } = useAppStore();
   const [confirmArchiveId, setConfirmArchiveId] = useState<string | null>(null);
   const [viewProjectId, setViewProjectId] = useState<string | null>(null);
 
@@ -3028,6 +3043,17 @@ function StudyProjectsDialog({ onClose }: { onClose: () => void }) {
                     </div>
                   </div>
                   <div className="flex shrink-0 gap-1">
+                    <button
+                      className="glass-inset px-2 py-1 text-xs"
+                      type="button"
+                      onClick={() => {
+                        setAiWorkspaceInput(`帮我调整「${project.name}」的后续计划。`);
+                        setView("ai");
+                        onClose();
+                      }}
+                    >
+                      调整计划
+                    </button>
                     {confirmArchiveId === project.id ? (
                       <div className="flex items-center gap-1">
                         <button className="glass-inset px-2 py-1 text-xs text-red-300" type="button" onClick={() => { void archiveStudyProject(project.id); setConfirmArchiveId(null); showToast("已归档"); }}>确认</button>

@@ -1,4 +1,42 @@
 # SmartFocus Phase 2 开发计划
+### Sprint 20E：学习项目级执行反馈与智能重排 v1
+
+状态：已完成。
+
+实现范围：
+- 新增 `src/lib/studyProjectReschedule.ts`，提供 Project Reschedule Context 构建与项目级重排预览生成。
+- 支持 `missed_today`：如“我今天没学发展经济学，后面帮我调整一下”，优先匹配学习项目，生成今天及以后未完成任务顺延 1 天的项目级预览。
+- 支持 `pause_project`：如“这个复习计划暂停两天”，上下文不明确时列出学习项目候选；明确项目后按暂停天数顺延暂停窗口内及之后任务。
+- 支持 `shift_project`：如“把发展经济学复习计划整体往后推两天”，仅调整该项目未完成、有 `planned_date` 的任务。
+- 支持 `compress / redistribute` 最小可用版：按项目 `daily_minutes` 或用户输入“每天最多 X 分钟”从明天到 `exam_date` 重新分配，保持任务原有顺序；估时缺失按 45 分钟并写入 warning；不拆分任务。
+- 新增 `project_reschedule` pendingAction，OperationPreviewCard 显示项目名称、策略、影响数量、前 5 个 old_date → new_date、跳过数量和 warnings。
+- 确认后真实逐条执行 `update_task({ id, planned_date })`，不修改 `deadline`、`urgency`、`importance`、`quadrant`。
+- 重排上下文和预览排除已完成任务、archived 任务和回收站任务；无 `planned_date` 的未完成任务默认跳过并提示。
+- 普通任务“正常”等任务名仍走普通任务候选/删除/顺延逻辑，不进入项目重排。
+- Workbench 与 AI Workspace 继续共用 `intentRouter`、`pendingAction` 和 `executePendingAction` 链路。
+- StudyProjectsDialog 轻量新增“调整计划”按钮，可跳转 AI 工作区并填入项目调整 prompt。
+
+验收结果：
+- Project Reschedule Context：已新增。
+- missed_today：已支持。
+- pause_project：已支持。
+- shift_project：已支持。
+- compress / redistribute：已支持最小可用版。
+- 项目级 OperationPreviewCard：已生成，包含 old_date → new_date。
+- 确认后 `updateTask`：已真实执行 `planned_date` 更新。
+- 已完成任务和回收站任务：已排除。
+- 普通任务影响：不影响普通任务“正常”。
+- `npm run build`：通过。
+- `cargo test`：通过。
+- `git diff --check`：通过（仅 LF/CRLF warning，无 whitespace error）。
+- `plan.md`：未修改。
+
+剩余 TODO：
+- 在真实 Tauri 窗口中手工回归：项目 missed_today、项目暂停、项目整体顺延、daily_minutes 重排、普通任务“正常”删除路径。
+- 后续可增强项目候选选择的多轮状态记忆，使用户回复编号后直接进入项目预览。
+
+下一阶段建议：
+- 当前 20E 完成后，可以进入下一阶段；不要自动进入 Sprint 21，进入前建议先完成真实窗口手工回归。
 ### Hotfix Sprint 20B.9：日期删除语义、AI 确认状态机与任务页回收站入口修复
 
 状态：已完成。
